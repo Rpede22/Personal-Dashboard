@@ -12,9 +12,9 @@
 
     "electron:dev": "concurrently -n next,electron -c blue,green \"next dev\" \"wait-on http://localhost:3000 && NODE_ENV=development electron .\"",
 
-    "electron:build": "next build && electron-builder --mac",
-    "electron:build:win": "next build && electron-builder --win",
-    "electron:build:linux": "next build && electron-builder --linux"
+    "electron:build": "next build && node scripts/prepare-build.js && electron-builder --mac --arm64",
+    "electron:build:win": "next build && node scripts/prepare-build.js && electron-builder --win",
+    "electron:build:linux": "next build && node scripts/prepare-build.js && electron-builder --linux"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -22,42 +22,38 @@
   "build": {
     "appId": "com.personal.dashboard",
     "productName": "Dashboard",
+    "asar": false,
     "directories": {
       "output": "dist"
     },
     "files": [
-      "electron/**/*",
-      ".next/standalone/**/*",
-      ".next/static/**/*",
-      "public/**/*",
-      "dev.db",
-      "node_modules/better-sqlite3/**/*",
-      "node_modules/@prisma/**/*"
+      "electron/**/*"
     ],
     "extraResources": [
       {
+        "from": ".next/standalone",
+        "to": "standalone"
+      },
+      {
         "from": ".next/static",
-        "to": ".next/static"
+        "to": "static"
       },
       {
         "from": "public",
         "to": "public"
       },
       {
-        "from": "dev.db",
-        "to": "dev.db",
-        "filter": ["**/*"]
+        "from": "build-resources/seed.db",
+        "to": "db/seed.db"
       }
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "electron/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        { "target": "dmg", "arch": ["arm64"] }
       ]
     },
     "win": {
-      "icon": "electron/icon.ico",
       "target": "nsis"
     },
     "linux": {
