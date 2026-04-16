@@ -21,7 +21,9 @@ interface Standing {
   divisionRank: number;
   conferenceRank: number;
   wildcardRank: number;
-  streakCode: string;
+  l10Wins: number;
+  l10Losses: number;
+  l10OtLosses: number;
 }
 
 interface ProbResult {
@@ -47,32 +49,50 @@ interface Game {
   periodType?: string | null;
 }
 
-interface PlayoffTeam {
-  seed: number;
-  teamAbbrev: string;
-  teamName: string;
+// ── Playoffs types ─────────────────────────────────────────────────────────────
+
+interface PlayoffTeamInfo {
+  role: string;
+  abbrev: string;
+  name: string;
   points: number;
-  division: string;
-  type: "division-winner" | "2nd" | "3rd" | "wildcard";
+  gamesPlayed: number;
+  l10Wins: number;
+  l10Losses: number;
+  l10OtLosses: number;
+  ptsPct: number;
+  l10Pct: number;
 }
 
-interface Matchup {
-  seed1: number;
-  team1: string;
-  team1Name: string;
-  pts1: number;
-  seed2: number;
-  team2: string;
-  team2Name: string;
-  pts2: number;
-  homeWinProbability: number;
-  division: string;
+interface H2HRecord { wins: number; losses: number; total: number; }
+
+interface MatchupResult {
+  round: number;
+  team1: PlayoffTeamInfo;
+  team2: PlayoffTeamInfo;
+  seriesWinProb: number;
+  predictedWinner: PlayoffTeamInfo;
+  h2h: H2HRecord;
+  factors: {
+    ptsPctAdj: number;
+    formAdj: number;
+    homeAdj: number;
+    h2hAdj: number;
+  };
+}
+
+interface ConferenceData {
+  playoffTeams: PlayoffTeamInfo[];
+  rounds: MatchupResult[][];
+  champion: PlayoffTeamInfo;
 }
 
 interface PlayoffsData {
-  western: { matchups: Matchup[]; playoffTeams: PlayoffTeam[] };
-  eastern: { matchups: Matchup[]; playoffTeams: PlayoffTeam[] };
+  western: ConferenceData;
+  eastern: ConferenceData;
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
 
 const DIVISION_COLORS: Record<Division, string> = {
   pacific: "var(--accent-blue)",
@@ -90,8 +110,10 @@ const STANDINGS_HEADERS: { label: string; title: string }[] = [
   { label: "OTL", title: "Overtime/Shootout Loss" },
   { label: "PTS", title: "Points" },
   { label: "RW", title: "Regulation Wins" },
-  { label: "Streak", title: "Current win/loss streak" },
+  { label: "L10", title: "Last 10 games: W-L-OTL" },
 ];
+
+const ROUND_LABELS = ["First Round", "Second Round", "Conference Final"];
 
 const PROB_HEADERS: (gamesAhead: number) => { label: string; title: string }[] = (n) => [
   { label: "#", title: "Rank" },
@@ -109,10 +131,7 @@ const PROB_HEADERS: (gamesAhead: number) => { label: string; title: string }[] =
 export default function NHLHub() {
   const [standings, setStandings] = useState<Standing[]>([]);
   const [probResults, setProbResults] = useState<ProbResult[]>([]);
-  const [schedule, setSchedule] = useState<{ recent: Game[]; next5: Game[] }>({
-    recent: [],
-    next5: [],
-  });
+  const [schedule, setSchedule] = useState<{ recent: Game[]; next5: Game[] }>({ recent: [], next5: [] });
   const [playoffs, setPlayoffs] = useState<PlayoffsData | null>(null);
   const [scopeType, setScopeType] = useState<ScopeType>("division");
   const [division, setDivision] = useState<Division>("pacific");
@@ -121,29 +140,17 @@ export default function NHLHub() {
   const [loadingStandings, setLoadingStandings] = useState(true);
   const [loadingProb, setLoadingProb] = useState(false);
   const [loadingPlayoffs, setLoadingPlayoffs] = useState(false);
-  const [tab, setTab] = useState<"standings" | "probability" | "schedule" | "playoffs">(
-    "standings"
-  );
+  const [tab, setTab] = useState<"standings" | "probability" | "schedule" | "playoffs">("standings");
 
   const scopeParam =
-    scopeType === "division"
-      ? `division:${division}`
-      : scopeType === "conference"
-      ? `conference:${conference}`
-      : "league";
+    scopeType === "division" ? `division:${division}` :
+    scopeType === "conference" ? `conference:${conference}` : "league";
 
   const loadStandings = useCallback(async () => {
     setLoadingStandings(true);
     try {
-      const filter =
-        scopeType === "division"
-          ? division
-          : scopeType === "conference"
-          ? conference
-          : undefined;
-      const url = filter
-        ? `/api/nhl/standings?filter=${filter}`
-        : "/api/nhl/standings";
+      const filter = scopeType === "division" ? division : scopeType === "conference" ? conference : undefined;
+      const url = filter ? `/api/nhl/standings?filter=${filter}` : "/api/nhl/standings";
       const res = await fetch(url);
       const data = await res.json();
       setStandings(data.standings ?? []);
@@ -155,9 +162,7 @@ export default function NHLHub() {
   const loadProbability = useCallback(async () => {
     setLoadingProb(true);
     try {
-      const res = await fetch(
-        `/api/nhl/probability?scope=${scopeParam}&games=${gamesAhead}`
-      );
+      const res = await fetch(`/api/nhl/probability?scope=${scopeParam}&games=${gamesAhead}`);
       const data = await res.json();
       setProbResults(data.results ?? []);
     } finally {
@@ -176,38 +181,115 @@ export default function NHLHub() {
     }
   }, []);
 
-  useEffect(() => {
-    loadStandings();
-  }, [loadStandings]);
+  useEffect(() => { loadStandings(); }, [loadStandings]);
 
   useEffect(() => {
     fetch("/api/nhl/schedule?team=EDM")
       .then((r) => r.json())
-      .then((d) =>
-        setSchedule({ recent: d.recent ?? [], next5: d.next5 ?? [] })
-      )
+      .then((d) => setSchedule({ recent: d.recent ?? [], next5: d.next5 ?? [] }))
       .catch(() => {});
   }, []);
 
   function gameResult(game: Game, team = "EDM"): "W" | "L" | "OTL" | "?" {
     if (game.gameState !== "OFF" && game.gameState !== "FINAL") return "?";
-    const myScore =
-      game.homeTeam.abbrev === team ? game.homeTeam.score : game.awayTeam.score;
-    const oppScore =
-      game.homeTeam.abbrev === team ? game.awayTeam.score : game.homeTeam.score;
+    const myScore = game.homeTeam.abbrev === team ? game.homeTeam.score : game.awayTeam.score;
+    const oppScore = game.homeTeam.abbrev === team ? game.awayTeam.score : game.homeTeam.score;
     if (myScore === undefined || oppScore === undefined) return "?";
     if (myScore > oppScore) return "W";
-    const isOT = game.periodType === "OT" || game.periodType === "SO";
-    return isOT ? "OTL" : "L";
+    return (game.periodType === "OT" || game.periodType === "SO") ? "OTL" : "L";
   }
 
-  const topRankProb = (result: ProbResult) => {
-    const top3 = [1, 2, 3].reduce(
-      (sum, r) => sum + (result.divisionRankDistribution[r] ?? 0),
-      0
+  const topRankProb = (result: ProbResult) =>
+    Math.round([1, 2, 3].reduce((sum, r) => sum + (result.divisionRankDistribution[r] ?? 0), 0) * 100);
+
+  // ── Playoffs helpers ──────────────────────────────────────────────────────
+
+  function MatchupCard({ m }: { m: MatchupResult }) {
+    const isEdm = m.team1.abbrev === "EDM" || m.team2.abbrev === "EDM";
+    const winnerIsT1 = m.seriesWinProb >= 0.5;
+    const displayProb = Math.round((winnerIsT1 ? m.seriesWinProb : 1 - m.seriesWinProb) * 100);
+    const winner = m.predictedWinner;
+    const loser = winnerIsT1 ? m.team2 : m.team1;
+    const isPredicted = m.round > 1;
+
+    return (
+      <div
+        className="rounded-xl p-3 space-y-2"
+        style={{
+          background: isEdm ? "var(--accent-blue)11" : "var(--surface-2)",
+          border: isEdm ? "1px solid var(--accent-blue)44" : "1px solid var(--border)",
+        }}
+      >
+        {/* Teams */}
+        <div className="flex items-start gap-2">
+          {/* Winner side */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span
+                className="font-bold text-base"
+                style={{ color: winner.abbrev === "EDM" ? "var(--accent-blue)" : "var(--accent-green)" }}
+              >
+                {winner.abbrev}
+              </span>
+              <span
+                className="text-xs px-1.5 py-0.5 rounded font-bold"
+                style={{ background: "var(--accent-green)22", color: "var(--accent-green)" }}
+              >
+                {displayProb}%
+              </span>
+            </div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>{winner.role}</div>
+          </div>
+
+          <span className="text-sm mt-0.5 font-bold" style={{ color: "var(--text-muted)" }}>vs</span>
+
+          {/* Loser side */}
+          <div className="flex-1 min-w-0 text-right">
+            <div className="flex items-center justify-end gap-1.5">
+              <span
+                className="text-xs px-1.5 py-0.5 rounded"
+                style={{ background: "var(--surface)", color: "var(--text-muted)" }}
+              >
+                {100 - displayProb}%
+              </span>
+              <span
+                className="font-bold text-base"
+                style={{ color: loser.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text-muted)" }}
+              >
+                {loser.abbrev}
+              </span>
+            </div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>{loser.role}</div>
+          </div>
+        </div>
+
+        {/* Stats row */}
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--text-muted)" }}>
+          <span title="Regular season points">
+            {m.team1.abbrev} {m.team1.points} — {m.team2.points} {m.team2.abbrev} pts
+          </span>
+          <span title="Last 10 games (W-L-OTL)">
+            L10: {m.team1.abbrev} {m.team1.l10Wins}-{m.team1.l10Losses}-{m.team1.l10OtLosses}
+            {" / "}{m.team2.abbrev} {m.team2.l10Wins}-{m.team2.l10Losses}-{m.team2.l10OtLosses}
+          </span>
+          {m.h2h.total > 0 ? (
+            <span
+              title="Head-to-head record this season"
+              style={{ color: m.h2h.wins > m.h2h.losses ? "var(--accent-green)" : m.h2h.wins < m.h2h.losses ? "var(--accent-red)" : "var(--text-muted)" }}
+            >
+              H2H: {m.team1.abbrev} {m.h2h.wins}–{m.h2h.losses}
+            </span>
+          ) : (
+            <span>H2H: no meetings yet</span>
+          )}
+          <span title={`${m.team1.abbrev} has home ice advantage`}>🏠 {m.team1.abbrev}</span>
+          {isPredicted && (
+            <span className="italic" style={{ color: "var(--border)" }}>projected matchup</span>
+          )}
+        </div>
+      </div>
     );
-    return Math.round(top3 * 100);
-  };
+  }
 
   return (
     <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
@@ -227,9 +309,7 @@ export default function NHLHub() {
         style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
       >
         <div>
-          <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
-            View
-          </label>
+          <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>View</label>
           <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid var(--border)" }}>
             {(["division", "conference", "league"] as ScopeType[]).map((s) => (
               <button
@@ -249,18 +329,12 @@ export default function NHLHub() {
 
         {scopeType === "division" && (
           <div>
-            <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
-              Division
-            </label>
+            <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Division</label>
             <select
               value={division}
               onChange={(e) => setDivision(e.target.value as Division)}
               className="rounded-lg px-3 py-1.5 text-sm"
-              style={{
-                background: "var(--surface-2)",
-                color: "var(--text)",
-                border: "1px solid var(--border)",
-              }}
+              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
             >
               <option value="pacific">Pacific</option>
               <option value="central">Central</option>
@@ -272,18 +346,12 @@ export default function NHLHub() {
 
         {scopeType === "conference" && (
           <div>
-            <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
-              Conference
-            </label>
+            <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Conference</label>
             <select
               value={conference}
               onChange={(e) => setConference(e.target.value as Conference)}
               className="rounded-lg px-3 py-1.5 text-sm"
-              style={{
-                background: "var(--surface-2)",
-                color: "var(--text)",
-                border: "1px solid var(--border)",
-              }}
+              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
             >
               <option value="western">Western</option>
               <option value="eastern">Eastern</option>
@@ -322,16 +390,14 @@ export default function NHLHub() {
         ))}
       </div>
 
-      {/* Standings Table */}
+      {/* ── Standings ── */}
       {tab === "standings" && (
         <div
           className="rounded-2xl overflow-hidden"
           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
         >
           {loadingStandings ? (
-            <div className="p-8 text-center" style={{ color: "var(--text-muted)" }}>
-              Loading standings…
-            </div>
+            <div className="p-8 text-center" style={{ color: "var(--text-muted)" }}>Loading standings…</div>
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -351,9 +417,9 @@ export default function NHLHub() {
               <tbody>
                 {standings.map((s, i) => {
                   const isEDM = s.teamAbbrev === "EDM";
-                  const divColor =
-                    DIVISION_COLORS[s.division?.toLowerCase() as Division] ??
-                    "var(--accent-blue)";
+                  const divColor = DIVISION_COLORS[s.division?.toLowerCase() as Division] ?? "var(--accent-blue)";
+                  const l10 = `${s.l10Wins ?? 0}-${s.l10Losses ?? 0}-${s.l10OtLosses ?? 0}`;
+                  const l10Pts = (s.l10Wins ?? 0) * 2 + (s.l10OtLosses ?? 0);
                   return (
                     <tr
                       key={s.teamAbbrev}
@@ -362,23 +428,12 @@ export default function NHLHub() {
                         background: isEDM ? `${divColor}11` : "transparent",
                       }}
                     >
-                      <td
-                        className="px-4 py-3 font-bold"
-                        style={{ color: "var(--text-muted)" }}
-                      >
-                        {i + 1}
-                      </td>
+                      <td className="px-4 py-3 font-bold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
                       <td className="px-4 py-3">
-                        <span
-                          className="font-semibold"
-                          style={{ color: isEDM ? divColor : "var(--text)" }}
-                        >
+                        <span className="font-semibold" style={{ color: isEDM ? divColor : "var(--text)" }}>
                           {s.teamAbbrev}
                         </span>
-                        <span
-                          className="ml-2 text-xs hidden sm:inline"
-                          style={{ color: "var(--text-muted)" }}
-                        >
+                        <span className="ml-2 text-xs hidden sm:inline" style={{ color: "var(--text-muted)" }}>
                           {s.teamName}
                         </span>
                       </td>
@@ -386,24 +441,19 @@ export default function NHLHub() {
                       <td className="px-4 py-3">{s.wins}</td>
                       <td className="px-4 py-3">{s.losses}</td>
                       <td className="px-4 py-3">{s.otLosses}</td>
-                      <td
-                        className="px-4 py-3 font-bold"
-                        style={{ color: isEDM ? divColor : "var(--text)" }}
-                      >
+                      <td className="px-4 py-3 font-bold" style={{ color: isEDM ? divColor : "var(--text)" }}>
                         {s.points}
                       </td>
                       <td className="px-4 py-3">{s.regulationWins}</td>
                       <td
                         className="px-4 py-3 font-medium"
                         style={{
-                          color: s.streakCode?.startsWith("W")
-                            ? "var(--accent-green)"
-                            : s.streakCode?.startsWith("L")
-                            ? "var(--accent-red)"
-                            : "var(--text-muted)",
+                          color: l10Pts >= 14 ? "var(--accent-green)" :
+                                 l10Pts >= 10 ? "var(--text)" :
+                                 "var(--accent-red)",
                         }}
                       >
-                        {s.streakCode ?? "—"}
+                        {l10}
                       </td>
                     </tr>
                   );
@@ -414,25 +464,20 @@ export default function NHLHub() {
         </div>
       )}
 
-      {/* Probability Tab */}
+      {/* ── Probability ── */}
       {tab === "probability" && (
         <div className="space-y-4">
           <div className="flex items-center gap-4">
             <div>
-              <label className="text-xs" style={{ color: "var(--text-muted)" }}>
-                Games ahead
-              </label>
+              <label className="text-xs" style={{ color: "var(--text-muted)" }}>Games ahead</label>
               <div className="flex gap-1 mt-1">
                 {[3, 5, 8, 10].map((n) => (
                   <button
                     key={n}
-                    onClick={() => {
-                      setGamesAhead(n);
-                    }}
+                    onClick={() => setGamesAhead(n)}
                     className="px-3 py-1 rounded-lg text-sm"
                     style={{
-                      background:
-                        gamesAhead === n ? "var(--accent-blue)" : "var(--surface-2)",
+                      background: gamesAhead === n ? "var(--accent-blue)" : "var(--surface-2)",
                       color: gamesAhead === n ? "#fff" : "var(--text-muted)",
                       border: "1px solid var(--border)",
                     }}
@@ -452,32 +497,18 @@ export default function NHLHub() {
           </div>
 
           {loadingProb ? (
-            <div
-              className="rounded-2xl p-8 text-center"
-              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-            >
-              <div style={{ color: "var(--text-muted)" }}>
-                Running Monte Carlo simulation ({(20000).toLocaleString()} iterations)…
-              </div>
+            <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <div style={{ color: "var(--text-muted)" }}>Running Monte Carlo simulation ({(20000).toLocaleString()} iterations)…</div>
             </div>
           ) : probResults.length === 0 ? (
-            <div
-              className="rounded-2xl p-8 text-center"
-              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-            >
-              <p style={{ color: "var(--text-muted)" }}>
-                Click &quot;Run Simulation&quot; to calculate probabilities
-              </p>
+            <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <p style={{ color: "var(--text-muted)" }}>Click &quot;Run Simulation&quot; to calculate probabilities</p>
             </div>
           ) : (
-            <div
-              className="rounded-2xl overflow-hidden"
-              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-            >
+            <div className="rounded-2xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <div className="p-4 border-b" style={{ borderColor: "var(--border)" }}>
                 <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-                  Weighted Monte Carlo after next {gamesAhead} games per team.
-                  Home ice base 54%, adjusted by pts% and regulation win rate.
+                  Weighted Monte Carlo after next {gamesAhead} games. Home ice base 54%, adjusted by pts% and regulation win rate.
                   {(20000).toLocaleString()} simulations.
                 </p>
               </div>
@@ -485,12 +516,7 @@ export default function NHLHub() {
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border)" }}>
                     {PROB_HEADERS(gamesAhead).map(({ label, title }) => (
-                      <th
-                        key={label}
-                        title={title}
-                        className="px-4 py-3 text-left font-medium cursor-help"
-                        style={{ color: "var(--text-muted)" }}
-                      >
+                      <th key={label} title={title} className="px-4 py-3 text-left font-medium cursor-help" style={{ color: "var(--text-muted)" }}>
                         {label}
                       </th>
                     ))}
@@ -500,67 +526,31 @@ export default function NHLHub() {
                   {probResults.map((r, i) => {
                     const isEDM = r.teamAbbrev === "EDM";
                     const gain = r.expectedPoints - r.currentPoints;
-                    const p1 = Math.round(
-                      (r.divisionRankDistribution["1"] ?? 0) * 100
-                    );
-                    const p2 = Math.round(
-                      (r.divisionRankDistribution["2"] ?? 0) * 100
-                    );
-                    const p3 = Math.round(
-                      (r.divisionRankDistribution["3"] ?? 0) * 100
-                    );
+                    const p1 = Math.round((r.divisionRankDistribution["1"] ?? 0) * 100);
+                    const p2 = Math.round((r.divisionRankDistribution["2"] ?? 0) * 100);
+                    const p3 = Math.round((r.divisionRankDistribution["3"] ?? 0) * 100);
                     return (
                       <tr
                         key={r.teamAbbrev}
-                        style={{
-                          borderBottom: "1px solid var(--border)",
-                          background: isEDM
-                            ? "var(--accent-blue)11"
-                            : "transparent",
-                        }}
+                        style={{ borderBottom: "1px solid var(--border)", background: isEDM ? "var(--accent-blue)11" : "transparent" }}
                       >
-                        <td
-                          className="px-4 py-3 font-bold"
-                          style={{ color: "var(--text-muted)" }}
-                        >
-                          {i + 1}
-                        </td>
+                        <td className="px-4 py-3 font-bold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
                         <td className="px-4 py-3 font-semibold">
-                          <span
-                            style={{ color: isEDM ? "var(--accent-blue)" : "var(--text)" }}
-                          >
-                            {r.teamAbbrev}
-                          </span>
+                          <span style={{ color: isEDM ? "var(--accent-blue)" : "var(--text)" }}>{r.teamAbbrev}</span>
                         </td>
                         <td className="px-4 py-3">{r.currentPoints}</td>
-                        <td className="px-4 py-3 font-bold" style={{ color: "var(--accent-green)" }}>
-                          {r.expectedPoints.toFixed(1)}
-                        </td>
-                        <td className="px-4 py-3" style={{ color: "var(--accent-orange)" }}>
-                          +{gain.toFixed(1)}
-                        </td>
+                        <td className="px-4 py-3 font-bold" style={{ color: "var(--accent-green)" }}>{r.expectedPoints.toFixed(1)}</td>
+                        <td className="px-4 py-3" style={{ color: "var(--accent-orange)" }}>+{gain.toFixed(1)}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
-                            <div
-                              className="h-2 rounded-full"
-                              style={{
-                                width: `${topRankProb(r)}px`,
-                                maxWidth: "60px",
-                                background: "var(--accent-blue)",
-                                opacity: 0.7,
-                              }}
-                            />
-                            <span style={{ color: isEDM ? "var(--accent-blue)" : "var(--text)" }}>
-                              {topRankProb(r)}%
-                            </span>
+                            <div className="h-2 rounded-full" style={{ width: `${topRankProb(r)}px`, maxWidth: "60px", background: "var(--accent-blue)", opacity: 0.7 }} />
+                            <span style={{ color: isEDM ? "var(--accent-blue)" : "var(--text)" }}>{topRankProb(r)}%</span>
                           </div>
                         </td>
                         <td className="px-4 py-3">{p1}%</td>
                         <td className="px-4 py-3">{p2}%</td>
                         <td className="px-4 py-3">{p3}%</td>
-                        <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
-                          {r.gamesAhead}
-                        </td>
+                        <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>{r.gamesAhead}</td>
                       </tr>
                     );
                   })}
@@ -571,7 +561,7 @@ export default function NHLHub() {
         </div>
       )}
 
-      {/* Schedule Tab */}
+      {/* ── Schedule ── */}
       {tab === "schedule" && (
         <div className="space-y-6">
           <div>
@@ -583,39 +573,20 @@ export default function NHLHub() {
                 schedule.recent.map((g, i) => {
                   const res = gameResult(g);
                   return (
-                    <div
-                      key={i}
-                      className="flex items-center gap-4 rounded-xl p-3"
-                      style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-                    >
+                    <div key={i} className="flex items-center gap-4 rounded-xl p-3" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
                       <span
                         className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold"
                         style={{
-                          background:
-                            res === "W"
-                              ? "var(--accent-green)"
-                              : res === "OTL"
-                              ? "var(--accent-orange)"
-                              : res === "L"
-                              ? "var(--surface-2)"
-                              : "var(--border)",
+                          background: res === "W" ? "var(--accent-green)" : res === "OTL" ? "var(--accent-orange)" : res === "L" ? "var(--surface-2)" : "var(--border)",
                           color: res === "W" || res === "OTL" ? "#fff" : "var(--text)",
                         }}
                       >
                         {res}
                       </span>
-                      <span className="font-medium">
-                        {g.awayTeam.abbrev} @ {g.homeTeam.abbrev}
-                      </span>
-                      <span className="font-bold">
-                        {g.awayTeam.score ?? "—"} – {g.homeTeam.score ?? "—"}
-                      </span>
+                      <span className="font-medium">{g.awayTeam.abbrev} @ {g.homeTeam.abbrev}</span>
+                      <span className="font-bold">{g.awayTeam.score ?? "—"} – {g.homeTeam.score ?? "—"}</span>
                       <span className="ml-auto text-sm" style={{ color: "var(--text-muted)" }}>
-                        {new Date(g.gameDate).toLocaleDateString("en-GB", {
-                          weekday: "short",
-                          month: "short",
-                          day: "numeric",
-                        })}
+                        {new Date(g.gameDate).toLocaleDateString("en-GB", { weekday: "short", month: "short", day: "numeric" })}
                       </span>
                     </div>
                   );
@@ -631,28 +602,12 @@ export default function NHLHub() {
                 <p style={{ color: "var(--text-muted)" }}>No upcoming games found</p>
               ) : (
                 schedule.next5.map((g, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-4 rounded-xl p-3"
-                    style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-                  >
-                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                      #{i + 1}
-                    </span>
-                    <span className="font-medium">
-                      {g.awayTeam.abbrev} @ {g.homeTeam.abbrev}
-                    </span>
-                    {g.venue && (
-                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        {g.venue}
-                      </span>
-                    )}
+                  <div key={i} className="flex items-center gap-4 rounded-xl p-3" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>#{i + 1}</span>
+                    <span className="font-medium">{g.awayTeam.abbrev} @ {g.homeTeam.abbrev}</span>
+                    {g.venue && <span className="text-xs" style={{ color: "var(--text-muted)" }}>{g.venue}</span>}
                     <span className="ml-auto text-sm" style={{ color: "var(--text-muted)" }}>
-                      {new Date(g.gameDate).toLocaleDateString("en-GB", {
-                        weekday: "short",
-                        month: "short",
-                        day: "numeric",
-                      })}
+                      {new Date(g.gameDate).toLocaleDateString("en-GB", { weekday: "short", month: "short", day: "numeric" })}
                     </span>
                   </div>
                 ))
@@ -662,21 +617,15 @@ export default function NHLHub() {
         </div>
       )}
 
-      {/* Playoffs Tab */}
+      {/* ── Playoffs ── */}
       {tab === "playoffs" && (
         <div>
           {loadingPlayoffs ? (
-            <div
-              className="rounded-2xl p-8 text-center"
-              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-            >
-              <div style={{ color: "var(--text-muted)" }}>Loading playoff picture…</div>
+            <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <div style={{ color: "var(--text-muted)" }}>Calculating bracket… (fetching live data)</div>
             </div>
           ) : playoffs === null ? (
-            <div
-              className="rounded-2xl p-8 text-center"
-              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-            >
+            <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <p style={{ color: "var(--text-muted)" }}>No playoff data available</p>
               <button
                 onClick={loadPlayoffs}
@@ -687,129 +636,78 @@ export default function NHLHub() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {(["western", "eastern"] as const).map((conf) => {
-                const data = playoffs[conf];
+            <div className="space-y-8">
+              {/* Explanation */}
+              <div className="rounded-xl p-3 text-xs" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+                Probabilities weighted by: regular season pts% (45%) · last 10 games form (25%) · home ice (10%) · head-to-head this season (8%).
+                Round 2+ matchups are predicted from most likely Round 1 winners.
+              </div>
+
+              {/* Rounds */}
+              {ROUND_LABELS.map((roundLabel, roundIdx) => (
+                <div key={roundLabel}>
+                  <h3 className="font-semibold text-sm mb-3 uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                    {roundLabel}
+                  </h3>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {(["western", "eastern"] as const).map((conf) => {
+                      const confData = playoffs[conf];
+                      const roundMatchups = confData?.rounds?.[roundIdx] ?? [];
+                      if (roundMatchups.length === 0) return null;
+                      return (
+                        <div key={conf} className="space-y-2">
+                          <div className="text-xs font-bold uppercase" style={{ color: conf === "western" ? "var(--accent-orange)" : "var(--accent-purple)" }}>
+                            {conf} Conference
+                          </div>
+                          {roundMatchups.map((m, mi) => (
+                            <MatchupCard key={mi} m={m} />
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              {/* Cup Final */}
+              {playoffs.western?.champion && playoffs.eastern?.champion && (() => {
+                const west = playoffs.western.champion;
+                const east = playoffs.eastern.champion;
+                const isEdmFinal = west.abbrev === "EDM" || east.abbrev === "EDM";
                 return (
-                  <div
-                    key={conf}
-                    className="rounded-2xl overflow-hidden"
-                    style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-                  >
+                  <div>
+                    <h3 className="font-semibold text-sm mb-3 uppercase tracking-wide" style={{ color: "var(--accent-orange)" }}>
+                      🏆 Stanley Cup Final (Predicted)
+                    </h3>
                     <div
-                      className="px-5 py-3 font-bold text-base capitalize"
+                      className="rounded-2xl p-5"
                       style={{
-                        background: "var(--surface-2)",
-                        borderBottom: "1px solid var(--border)",
-                        color: "var(--accent-blue)",
+                        background: isEdmFinal ? "var(--accent-blue)11" : "var(--surface)",
+                        border: `1px solid ${isEdmFinal ? "var(--accent-blue)44" : "var(--accent-orange)44"}`,
                       }}
                     >
-                      {conf} Conference
-                    </div>
-                    <div className="p-4 space-y-3">
-                      {data.matchups.map((m) => {
-                        const edmIn = m.team1 === "EDM" || m.team2 === "EDM";
-                        return (
-                          <div
-                            key={`${m.seed1}-${m.seed2}`}
-                            className="rounded-xl p-3"
-                            style={{
-                              background: edmIn
-                                ? "var(--accent-blue)11"
-                                : "var(--surface-2)",
-                              border: edmIn
-                                ? "1px solid var(--accent-blue)44"
-                                : "1px solid var(--border)",
-                            }}
-                          >
-                            {/* Matchup header */}
-                            <div className="flex items-center justify-between mb-1.5">
-                              <div className="flex items-center gap-2 text-sm font-semibold">
-                                <span
-                                  className="text-xs px-1.5 py-0.5 rounded"
-                                  style={{
-                                    background: "var(--accent-blue)22",
-                                    color: "var(--accent-blue)",
-                                  }}
-                                >
-                                  ({m.seed1})
-                                </span>
-                                <span
-                                  style={{
-                                    color:
-                                      m.team1 === "EDM"
-                                        ? "var(--accent-blue)"
-                                        : "var(--text)",
-                                  }}
-                                >
-                                  {m.team1}
-                                </span>
-                                <span style={{ color: "var(--text-muted)" }}>vs</span>
-                                <span
-                                  className="text-xs px-1.5 py-0.5 rounded"
-                                  style={{
-                                    background: "var(--surface)",
-                                    color: "var(--text-muted)",
-                                  }}
-                                >
-                                  ({m.seed2})
-                                </span>
-                                <span
-                                  style={{
-                                    color:
-                                      m.team2 === "EDM"
-                                        ? "var(--accent-blue)"
-                                        : "var(--text)",
-                                  }}
-                                >
-                                  {m.team2}
-                                </span>
-                              </div>
-                              {/* Win probability for seed 1 */}
-                              <span
-                                className="text-xs font-medium px-2 py-0.5 rounded-full"
-                                style={{
-                                  background: "var(--accent-green)22",
-                                  color: "var(--accent-green)",
-                                }}
-                              >
-                                ({m.seed1}) {Math.round(m.homeWinProbability * 100)}%
-                              </span>
-                            </div>
-                            {/* Points row */}
-                            <div
-                              className="flex gap-4 text-xs"
-                              style={{ color: "var(--text-muted)" }}
-                            >
-                              <span
-                                style={{
-                                  color:
-                                    m.team1 === "EDM"
-                                      ? "var(--accent-blue)"
-                                      : "var(--text-muted)",
-                                }}
-                              >
-                                {m.team1Name} — {m.pts1} pts
-                              </span>
-                              <span>·</span>
-                              <span
-                                style={{
-                                  color:
-                                    m.team2 === "EDM"
-                                      ? "var(--accent-blue)"
-                                      : "var(--text-muted)",
-                                }}
-                              >
-                                {m.team2Name} — {m.pts2} pts
-                              </span>
-                            </div>
+                      <div className="flex items-center justify-center gap-6 mb-3">
+                        <div className="text-center">
+                          <div className="text-3xl font-bold" style={{ color: west.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>
+                            {west.abbrev}
                           </div>
-                        );
-                      })}
+                          <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>West · {west.points} pts</div>
+                        </div>
+                        <div className="text-2xl font-bold" style={{ color: "var(--accent-orange)" }}>vs</div>
+                        <div className="text-center">
+                          <div className="text-3xl font-bold" style={{ color: east.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>
+                            {east.abbrev}
+                          </div>
+                          <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>East · {east.points} pts</div>
+                        </div>
+                      </div>
+                      <p className="text-xs text-center" style={{ color: "var(--text-muted)" }}>
+                        Based on current standings — predictions update every 15 minutes
+                      </p>
                     </div>
                   </div>
                 );
-              })}
+              })()}
             </div>
           )}
         </div>

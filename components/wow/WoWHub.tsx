@@ -38,6 +38,8 @@ export default function WoWHub() {
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [stats, setStats] = useState<CharacterStats | null>(null);
   const [charStats, setCharStats] = useState<Map<number, CharacterStats>>(new Map());
+  const [loadingChars, setLoadingChars] = useState(true);
+  const [charsError, setCharsError] = useState<string | null>(null);
   const [loadingChecklist, setLoadingChecklist] = useState(false);
   const [loadingStats, setLoadingStats] = useState(false);
   const [newTask, setNewTask] = useState("");
@@ -47,12 +49,21 @@ export default function WoWHub() {
   const [lookupResult, setLookupResult] = useState<(CharacterStats & { name: string }) | null>(null);
 
   async function loadCharacters() {
-    const res = await fetch("/api/wow/character");
-    const data = await res.json();
-    const chars: WowCharacter[] = data.characters ?? [];
-    setCharacters(chars);
-    // Load stats for each character in the background
-    chars.forEach((char) => fetchCharStats(char));
+    setLoadingChars(true);
+    setCharsError(null);
+    try {
+      const res = await fetch("/api/wow/character");
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      const data = await res.json();
+      const chars: WowCharacter[] = data.characters ?? [];
+      setCharacters(chars);
+      // Load stats for each character in the background
+      chars.forEach((char) => fetchCharStats(char));
+    } catch (err) {
+      setCharsError(String(err));
+    } finally {
+      setLoadingChars(false);
+    }
   }
 
   async function fetchCharStats(char: WowCharacter): Promise<CharacterStats | null> {
@@ -85,8 +96,12 @@ export default function WoWHub() {
     setStats(null);
     try {
       const res = await fetch(`/api/wow/checklist?characterId=${char.id}`);
+      if (!res.ok) throw new Error(`Checklist fetch failed: ${res.status}`);
       const data = await res.json();
       setChecklist(data.checklist ?? []);
+    } catch (err) {
+      console.error("Failed to load checklist:", err);
+      setChecklist([]);
     } finally {
       setLoadingChecklist(false);
     }
@@ -286,6 +301,21 @@ export default function WoWHub() {
               </button>
             </form>
           )}
+
+          {loadingChars ? (
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading characters…</p>
+          ) : charsError ? (
+            <div className="space-y-2">
+              <p className="text-sm" style={{ color: "var(--accent-red)" }}>{charsError}</p>
+              <button
+                onClick={loadCharacters}
+                className="text-xs px-3 py-1 rounded-lg"
+                style={{ background: "var(--accent-purple)", color: "#fff" }}
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             {sortedCharacters.map((char, idx) => {

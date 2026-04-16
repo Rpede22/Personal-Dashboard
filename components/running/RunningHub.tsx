@@ -45,10 +45,19 @@ function pace(distKm: number, durationSec: number): string {
   return `${m}:${String(s).padStart(2, "0")}/km`;
 }
 
+// Use local time for user-facing calendar dates (form inputs, week navigation)
 function toLocalDateStr(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// Use UTC when converting API-returned DateTime fields (stored as UTC midnight)
+function toUTCDateStr(date: Date): string {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
 
@@ -217,11 +226,12 @@ export default function RunningHub() {
     ? Math.ceil((new Date(raceDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
     : null;
 
-  // Weekly mileage
+  // Weekly mileage — compare UTC dates to avoid timezone issues
   const now = new Date();
   const monday = getMondayOf(now);
+  const mondayStr = toLocalDateStr(monday);
   const weeklyKm = runs
-    .filter((r) => new Date(r.date) >= monday)
+    .filter((r) => toUTCDateStr(new Date(r.date)) >= mondayStr)
     .reduce((sum, r) => sum + r.distance, 0);
   const totalKm = runs.reduce((sum, r) => sum + r.distance, 0);
 
@@ -229,15 +239,16 @@ export default function RunningHub() {
   const weekEnd = weekDays[6];
 
   // Build a map of dateStr -> RunLog for the planner
+  // API dates are stored as UTC midnight — use UTC extraction to avoid timezone shift
   const runsByDate = new Map<string, RunLog>();
   runs.forEach((r) => {
-    runsByDate.set(toLocalDateStr(new Date(r.date)), r);
+    runsByDate.set(toUTCDateStr(new Date(r.date)), r);
   });
 
   // Build a map of dateStr -> RunPlan[]
   const plansByDate = new Map<string, RunPlan[]>();
   plans.forEach((p) => {
-    const key = toLocalDateStr(new Date(p.date));
+    const key = toUTCDateStr(new Date(p.date));
     if (!plansByDate.has(key)) plansByDate.set(key, []);
     plansByDate.get(key)!.push(p);
   });

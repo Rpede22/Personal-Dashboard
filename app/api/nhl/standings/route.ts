@@ -36,6 +36,9 @@ export async function GET(request: Request) {
       leagueRank: s.leagueSequence,
       wildcardRank: s.wildcardSequence,
       streakCode: s.streakCode,
+      l10Wins: s.l10Wins ?? 0,
+      l10Losses: s.l10Losses ?? 0,
+      l10OtLosses: s.l10OtLosses ?? 0,
     }));
 
     cache = { data: { standings }, ts: Date.now() };

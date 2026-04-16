@@ -13,7 +13,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {/* Electron drag region — allows window to be dragged by the top strip */}
+        <div className="titlebar-drag" />
+        {children}
+      </body>
     </html>
   );
 }

@@ -41,3 +41,48 @@ body {
   background: var(--border);
   border-radius: 3px;
 }
+
+/* ── Electron title bar drag region ── */
+.titlebar-drag {
+  -webkit-app-region: drag;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  z-index: 1000;
+  pointer-events: all;
+}
+
+/* Interactive elements inside the drag bar must NOT be draggable */
+.titlebar-drag button,
+.titlebar-drag a,
+.titlebar-drag input,
+.titlebar-drag select {
+  -webkit-app-region: no-drag;
+}
+
+/* Push page content below the title bar */
+body {
+  padding-top: 28px;
+}
+
+/* ── Button interactions ── */
+button {
+  cursor: pointer;
+  transition: filter 0.15s ease, box-shadow 0.15s ease;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+button:not(:disabled):hover {
+  filter: brightness(1.22);
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.11);
+}
+
+button:not(:disabled):active {
+  filter: brightness(0.9);
+}

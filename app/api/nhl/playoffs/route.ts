@@ -1,205 +1,275 @@
 import { NextResponse } from "next/server";
 
-const cache = new Map<string, { data: unknown; ts: number }>();
-const TTL = 15 * 60 * 1000; // 15 minutes
+const resultCache = new Map<string, { data: unknown; ts: number }>();
+const scheduleCache = new Map<string, unknown[]>();
+const TTL = 15 * 60 * 1000;
 
-interface PlayoffTeam {
-  seed: number;
-  teamAbbrev: string;
-  teamName: string;
-  points: number;
-  division: string;
-  type: "division-winner" | "2nd" | "3rd" | "wildcard";
-}
-
-interface Matchup {
-  seed1: number;
-  team1: string;
-  team1Name: string;
-  pts1: number;
-  seed2: number;
-  team2: string;
-  team2Name: string;
-  pts2: number;
-  homeWinProbability: number; // probability seed1 wins
-  division: string;
-}
-
-interface ConferenceResult {
-  matchups: Matchup[];
-  playoffTeams: PlayoffTeam[];
-}
-
-function clamp(val: number, min: number, max: number): number {
+function clamp(val: number, min: number, max: number) {
   return Math.min(max, Math.max(min, val));
 }
 
-function computeHomeWinProb(
-  home: { ptsPct: number; regWinRate: number },
-  away: { ptsPct: number; regWinRate: number }
-): number {
-  return clamp(
-    0.54 +
-      (home.ptsPct - away.ptsPct) * 0.3 +
-      (home.regWinRate - away.regWinRate) * 0.2,
-    0.3,
-    0.75
-  );
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface PlayoffTeamInfo {
+  role: string;       // e.g. "Pacific 1st", "Wildcard 1", "Central 2nd"
+  abbrev: string;
+  name: string;
+  points: number;
+  gamesPlayed: number;
+  l10Wins: number;
+  l10Losses: number;
+  l10OtLosses: number;
+  ptsPct: number;
+  l10Pct: number;
 }
 
-function buildConference(
+export interface H2HRecord {
+  wins: number;
+  losses: number;
+  total: number;
+}
+
+export interface MatchupResult {
+  round: number;
+  team1: PlayoffTeamInfo;   // home ice advantage (better seed)
+  team2: PlayoffTeamInfo;
+  seriesWinProb: number;    // probability team1 wins series
+  predictedWinner: PlayoffTeamInfo;
+  h2h: H2HRecord;           // team1's record vs team2 this season
+  factors: {
+    ptsPctAdj: number;
+    formAdj: number;
+    homeAdj: number;
+    h2hAdj: number;
+  };
+}
+
+export interface ConferenceResult {
+  playoffTeams: PlayoffTeamInfo[];
+  rounds: MatchupResult[][];   // rounds[0]=R1, rounds[1]=R2, rounds[2]=ConfFinal
+  champion: PlayoffTeamInfo;
+}
+
+// ── H2H helpers ───────────────────────────────────────────────────────────────
+
+async function getTeamSchedule(abbrev: string): Promise<unknown[]> {
+  if (scheduleCache.has(abbrev)) return scheduleCache.get(abbrev)!;
+  try {
+    const res = await fetch(
+      `https://api-web.nhle.com/v1/club-schedule-season/${abbrev}/now`,
+      { next: { revalidate: 3600 } }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    const games = (data.games ?? []) as unknown[];
+    scheduleCache.set(abbrev, games);
+    return games;
+  } catch {
+    return [];
+  }
+}
+
+async function computeH2H(team1: string, team2: string): Promise<H2HRecord & { adj: number }> {
+  try {
+    const games = await getTeamSchedule(team1);
+    let wins = 0, losses = 0;
+    for (const g of games as Record<string, any>[]) {
+      const homeAbbrev = g.homeTeam?.abbrev ?? "";
+      const awayAbbrev = g.awayTeam?.abbrev ?? "";
+      if (homeAbbrev !== team2 && awayAbbrev !== team2) continue;
+      if (g.gameState !== "OFF" && g.gameState !== "FINAL") continue;
+      const t1Score = homeAbbrev === team1 ? g.homeTeam.score : g.awayTeam.score;
+      const t2Score = homeAbbrev === team2 ? g.homeTeam.score : g.awayTeam.score;
+      if (typeof t1Score !== "number" || typeof t2Score !== "number") continue;
+      if (t1Score > t2Score) wins++;
+      else losses++;
+    }
+    const total = wins + losses;
+    const adj = total === 0 ? 0 : clamp(((wins - losses) / total) * 0.08, -0.08, 0.08);
+    return { wins, losses, total, adj };
+  } catch {
+    return { wins: 0, losses: 0, total: 0, adj: 0 };
+  }
+}
+
+// ── Win probability ───────────────────────────────────────────────────────────
+
+async function computeMatchup(
+  t1: PlayoffTeamInfo,  // higher seed — home ice
+  t2: PlayoffTeamInfo,
+  round: number
+): Promise<MatchupResult> {
+  const h2hData = await computeH2H(t1.abbrev, t2.abbrev);
+
+  const ptsPctAdj = clamp((t1.ptsPct - t2.ptsPct) * 0.9, -0.35, 0.35);
+  const formAdj   = clamp((t1.l10Pct - t2.l10Pct) * 0.5, -0.2, 0.2);
+  const homeAdj   = 0.07;
+  const h2hAdj    = h2hData.adj;
+
+  const seriesWinProb = clamp(0.5 + ptsPctAdj + formAdj + homeAdj + h2hAdj, 0.15, 0.85);
+  const predictedWinner = seriesWinProb >= 0.5 ? t1 : t2;
+
+  return {
+    round,
+    team1: t1,
+    team2: t2,
+    seriesWinProb,
+    predictedWinner,
+    h2h: { wins: h2hData.wins, losses: h2hData.losses, total: h2hData.total },
+    factors: { ptsPctAdj, formAdj, homeAdj, h2hAdj },
+  };
+}
+
+// ── Team builder ──────────────────────────────────────────────────────────────
+
+function buildTeamInfo(s: Record<string, any>, role: string): PlayoffTeamInfo {
+  const l10Wins = s.l10Wins ?? 0;
+  const l10Losses = s.l10Losses ?? 0;
+  const l10OtLosses = s.l10OtLosses ?? 0;
+  return {
+    role,
+    abbrev: s.teamAbbrev ?? "",
+    name: s.teamName ?? "",
+    points: s.points ?? 0,
+    gamesPlayed: s.gamesPlayed ?? 0,
+    l10Wins,
+    l10Losses,
+    l10OtLosses,
+    ptsPct: s.gamesPlayed > 0 ? s.points / (s.gamesPlayed * 2) : 0.5,
+    l10Pct: (l10Wins + l10OtLosses * 0.5) / 10,
+  };
+}
+
+// Home ice: lower seed number (better regular season team) goes first
+function homeFirst(a: PlayoffTeamInfo, b: PlayoffTeamInfo): [PlayoffTeamInfo, PlayoffTeamInfo] {
+  // "div1" roles sort first; otherwise sort by points
+  const rank = (t: PlayoffTeamInfo) => {
+    if (t.role.includes("1st")) return 1;
+    if (t.role.includes("2nd")) return 2;
+    if (t.role.includes("3rd")) return 3;
+    if (t.role.includes("Wildcard 1")) return 4;
+    if (t.role.includes("Wildcard 2")) return 5;
+    return 6;
+  };
+  const ra = rank(a), rb = rank(b);
+  if (ra !== rb) return ra < rb ? [a, b] : [b, a];
+  return a.points >= b.points ? [a, b] : [b, a];
+}
+
+// ── Conference bracket builder ────────────────────────────────────────────────
+
+async function buildConference(
   conference: string,
-  standings: any[]
-): ConferenceResult {
+  standings: Record<string, any>[]
+): Promise<ConferenceResult | null> {
   const confTeams = standings.filter(
     (s) => s.conference?.toLowerCase() === conference.toLowerCase()
   );
 
-  // Group by division
-  const byDivision = new Map<string, any[]>();
+  // Group by division, sort by divisionRank within each division
+  const byDivision = new Map<string, Record<string, any>[]>();
   for (const team of confTeams) {
     const div = team.division ?? "Unknown";
     if (!byDivision.has(div)) byDivision.set(div, []);
     byDivision.get(div)!.push(team);
   }
-
-  // Sort each division by divisionRank (or points desc as fallback)
   for (const [div, teams] of byDivision) {
     byDivision.set(
       div,
-      teams.sort((a, b) => {
-        if (a.divisionRank != null && b.divisionRank != null) {
-          return a.divisionRank - b.divisionRank;
-        }
-        return b.points - a.points;
-      })
+      teams.sort((a, b) =>
+        a.divisionRank != null ? a.divisionRank - b.divisionRank : b.points - a.points
+      )
     );
   }
 
   const divisions = Array.from(byDivision.keys());
-  if (divisions.length < 2) {
-    // Fallback: not enough divisions — return empty
-    return { matchups: [], playoffTeams: [] };
-  }
+  if (divisions.length < 2) return null;
 
-  // Identify division 1 and division 2 (div with more pts in 1st place = "div1")
   const [divA, divB] = divisions;
   const divATeams = byDivision.get(divA)!;
   const divBTeams = byDivision.get(divB)!;
 
-  const divAWinnerPts = divATeams[0]?.points ?? 0;
-  const divBWinnerPts = divBTeams[0]?.points ?? 0;
+  // NHL: the division whose winner has MORE points is "div1" (gets home ice in conf final)
+  const [div1, div1Name, div2, div2Name] =
+    (divATeams[0]?.points ?? 0) >= (divBTeams[0]?.points ?? 0)
+      ? [divATeams, divA, divBTeams, divB]
+      : [divBTeams, divB, divATeams, divA];
 
-  // div1 = division winner with MORE points (seed 1's division)
-  const [div1Teams, div2Teams, div1Name, div2Name] =
-    divAWinnerPts >= divBWinnerPts
-      ? [divATeams, divBTeams, divA, divB]
-      : [divBTeams, divATeams, divB, divA];
+  const top3A = div1.slice(0, 3);
+  const top3B = div2.slice(0, 3);
 
-  // Top 3 from each division
-  const div1Top3 = div1Teams.slice(0, 3);
-  const div2Top3 = div2Teams.slice(0, 3);
+  // Wildcards: best non-top-3 teams by pts
+  const nonTop3 = confTeams
+    .filter(
+      (t) =>
+        !top3A.some((d) => d.teamAbbrev === t.teamAbbrev) &&
+        !top3B.some((d) => d.teamAbbrev === t.teamAbbrev)
+    )
+    .sort((a, b) => b.points - a.points)
+    .slice(0, 2);
 
-  // Wildcards: best non-top-3 teams from the conference by points
-  const nonTop3 = confTeams.filter(
-    (t) =>
-      !div1Top3.some((d) => d.teamAbbrev === t.teamAbbrev) &&
-      !div2Top3.some((d) => d.teamAbbrev === t.teamAbbrev)
-  );
-  nonTop3.sort((a, b) => b.points - a.points);
-  const wildcards = nonTop3.slice(0, 2);
+  if (top3A.length < 3 || top3B.length < 3 || nonTop3.length < 2) return null;
 
-  // NHL seeding per conference:
-  // Seed 1 = div1 winner (more pts), Seed 2 = div2 winner
-  // Seed 3 = div1 2nd place, Seed 4 = div2 2nd place
-  // Seed 5 = div2 3rd place, Seed 6 = div1 3rd place
-  // Seed 7 = wildcard with more pts, Seed 8 = wildcard with fewer pts
-  const playoffTeams: PlayoffTeam[] = ([
-    { seed: 1, ...toTeam(div1Top3[0]), division: div1Name, type: "division-winner" as const },
-    { seed: 2, ...toTeam(div2Top3[0]), division: div2Name, type: "division-winner" as const },
-    { seed: 3, ...toTeam(div1Top3[1]), division: div1Name, type: "2nd" as const },
-    { seed: 4, ...toTeam(div2Top3[1]), division: div2Name, type: "2nd" as const },
-    { seed: 5, ...toTeam(div2Top3[2]), division: div2Name, type: "3rd" as const },
-    { seed: 6, ...toTeam(div1Top3[2]), division: div1Name, type: "3rd" as const },
-    { seed: 7, ...toTeam(wildcards[0]), division: "Wildcard", type: "wildcard" as const },
-    { seed: 8, ...toTeam(wildcards[1]), division: "Wildcard", type: "wildcard" as const },
-  ] as PlayoffTeam[]).filter((t) => t.teamAbbrev); // drop any undefined slots
+  // Build team info with human-readable roles
+  const d1 = (n: number) => buildTeamInfo(top3A[n - 1], `${div1Name} ${["1st","2nd","3rd"][n-1]}`);
+  const d2 = (n: number) => buildTeamInfo(top3B[n - 1], `${div2Name} ${["1st","2nd","3rd"][n-1]}`);
+  const wc1 = buildTeamInfo(nonTop3[0], "Wildcard 1");
+  const wc2 = buildTeamInfo(nonTop3[1], "Wildcard 2");
 
-  // Build teamStats for probability calculations
-  const teamStatsMap = new Map(
-    confTeams.map((s) => [
-      s.teamAbbrev,
-      {
-        ptsPct: s.gamesPlayed > 0 ? s.points / (s.gamesPlayed * 2) : 0.5,
-        regWinRate: s.gamesPlayed > 0 ? s.regulationWins / s.gamesPlayed : 0.4,
-      },
-    ])
-  );
+  const playoffTeams = [d1(1), d1(2), d1(3), d2(1), d2(2), d2(3), wc1, wc2];
 
-  // First round: (1)v(8), (2)v(7), (3)v(6), (4)v(5)
-  const pairs: [number, number][] = [
-    [1, 8],
-    [2, 7],
-    [3, 6],
-    [4, 5],
+  // ── Round 1 (NHL format):
+  // Div1 1st  vs Wildcard 2   (Wildcard 2 has fewer pts → div winner gets home ice)
+  // Div2 1st  vs Wildcard 1   (Wildcard 1 has more pts)
+  // Div1 2nd  vs Div1 3rd     (intra-division)
+  // Div2 2nd  vs Div2 3rd     (intra-division)
+  const r1 = await Promise.all([
+    computeMatchup(...homeFirst(d1(1), wc2), 1),
+    computeMatchup(...homeFirst(d2(1), wc1), 1),
+    computeMatchup(...homeFirst(d1(2), d1(3)), 1),
+    computeMatchup(...homeFirst(d2(2), d2(3)), 1),
+  ]);
+
+  // ── Round 2: Div1 side vs Div2 side crossover within conference
+  // Top div (div1) matchup winners play each other; div2 same
+  const r2 = await Promise.all([
+    computeMatchup(...homeFirst(r1[0].predictedWinner, r1[2].predictedWinner), 2),
+    computeMatchup(...homeFirst(r1[1].predictedWinner, r1[3].predictedWinner), 2),
+  ]);
+
+  // ── Round 3: Conference Final
+  const r3 = [
+    await computeMatchup(...homeFirst(r2[0].predictedWinner, r2[1].predictedWinner), 3),
   ];
 
-  const matchups: Matchup[] = [];
-  for (const [s1, s2] of pairs) {
-    const t1 = playoffTeams.find((t) => t.seed === s1);
-    const t2 = playoffTeams.find((t) => t.seed === s2);
-    if (!t1 || !t2) continue;
-
-    const homeStats = teamStatsMap.get(t1.teamAbbrev) ?? { ptsPct: 0.5, regWinRate: 0.4 };
-    const awayStats = teamStatsMap.get(t2.teamAbbrev) ?? { ptsPct: 0.5, regWinRate: 0.4 };
-
-    matchups.push({
-      seed1: s1,
-      team1: t1.teamAbbrev,
-      team1Name: t1.teamName,
-      pts1: t1.points,
-      seed2: s2,
-      team2: t2.teamAbbrev,
-      team2Name: t2.teamName,
-      pts2: t2.points,
-      homeWinProbability: computeHomeWinProb(homeStats, awayStats),
-      division: s1 <= 2 ? "Division Finals" : `${t1.division} vs ${t2.division}`,
-    });
-  }
-
-  return { matchups, playoffTeams };
+  return { playoffTeams, rounds: [r1, r2, r3], champion: r3[0].predictedWinner };
 }
 
-function toTeam(
-  s: any
-): { teamAbbrev: string; teamName: string; points: number } {
-  return {
-    teamAbbrev: s?.teamAbbrev ?? "",
-    teamName: s?.teamName ?? "",
-    points: s?.points ?? 0,
-  };
-}
+// ── Route handler ─────────────────────────────────────────────────────────────
 
 export async function GET() {
-  const cacheKey = "playoffs";
-  const cached = cache.get(cacheKey);
+  const cacheKey = "playoffs-v4";
+  const cached = resultCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < TTL) {
     return NextResponse.json(cached.data);
   }
 
   try {
     const standingsRes = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}/api/nhl/standings`
+      `${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}/api/nhl/standings`,
+      { cache: "no-store" }
     );
     if (!standingsRes.ok) throw new Error(`Standings fetch failed: ${standingsRes.status}`);
     const standingsData = await standingsRes.json();
-    const standings: any[] = standingsData.standings ?? [];
+    const standings: Record<string, any>[] = standingsData.standings ?? [];
 
-    const western = buildConference("Western", standings);
-    const eastern = buildConference("Eastern", standings);
+    const [western, eastern] = await Promise.all([
+      buildConference("Western", standings),
+      buildConference("Eastern", standings),
+    ]);
 
     const payload = { western, eastern };
-    cache.set(cacheKey, { data: payload, ts: Date.now() });
+    resultCache.set(cacheKey, { data: payload, ts: Date.now() });
     return NextResponse.json(payload);
   } catch (err) {
     console.error("Playoffs route error:", err);

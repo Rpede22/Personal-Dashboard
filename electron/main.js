@@ -123,9 +123,13 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: 720,
+    minHeight: 500,
+    resizable: true,
+    maximizable: true,
+    fullscreenable: true,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    trafficLightPosition: process.platform === "darwin" ? { x: 12, y: 8 } : undefined,
     backgroundColor: "#0f1117",
     show: false,
     webPreferences: {

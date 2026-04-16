@@ -114,7 +114,7 @@ export default function SchoolWidget() {
                 }}
                 title="Mark as done"
               >
-                ✓
+                DONE
               </button>
             </div>
           ))}
