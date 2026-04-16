@@ -61,6 +61,8 @@ function mapGame(g: Record<string, unknown>) {
     gameDate: g.gameDate,
     gameState: g.gameState,
     venue: (g.venue as Record<string, string>)?.default,
+    periodType: (g.periodDescriptor as any)?.periodType ?? null,
+    gameOutcome: g.gameOutcome,
     homeTeam: {
       abbrev: home?.abbrev,
       name: (home?.name as Record<string, string>)?.default,

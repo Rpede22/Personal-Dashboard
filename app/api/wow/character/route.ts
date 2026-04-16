@@ -56,19 +56,29 @@ async function lookupCharacter(name: string, realm: string, region: string) {
     blizzardError = "Blizzard API credentials not configured";
   }
 
-  // Raider.IO
+  // Raider.IO — fetch with raid_progression included
   const rioRes = await fetch(
-    `https://raider.io/api/v1/characters/profile?region=${regionLower}&realm=${encodeURIComponent(realm)}&name=${encodeURIComponent(name)}&fields=mythic_plus_scores_by_season:current`,
+    `https://raider.io/api/v1/characters/profile?region=${regionLower}&realm=${encodeURIComponent(realm)}&name=${encodeURIComponent(name)}&fields=mythic_plus_scores_by_season:current,raid_progression`,
     { next: { revalidate: 3600 } }
   );
 
   let rioScore: number | null = null;
   let rioError: string | null = null;
+  let raidProgress: string | null = null;
 
   if (rioRes.ok) {
     const rioData = await rioRes.json();
     rioScore =
       rioData.mythic_plus_scores_by_season?.[0]?.scores?.all ?? null;
+
+    // Parse raid progression — take the first entry's summary
+    const raidProg = rioData.raid_progression;
+    if (raidProg && typeof raidProg === "object") {
+      const firstKey = Object.keys(raidProg)[0];
+      if (firstKey) {
+        raidProgress = raidProg[firstKey]?.summary ?? null;
+      }
+    }
   } else {
     rioError = `Raider.IO ${rioRes.status}`;
   }
@@ -79,6 +89,7 @@ async function lookupCharacter(name: string, realm: string, region: string) {
     region,
     ilvl,
     rioScore,
+    raidProgress,
     errors: [blizzardError, rioError].filter(Boolean),
   };
 
@@ -94,9 +105,9 @@ export async function GET(request: Request) {
   const region = searchParams.get("region") ?? "eu";
 
   if (!name || !realm) {
-    // Return list of saved characters
+    // Return list of saved characters, ordered by sortOrder
     const characters = await prisma.wowCharacter.findMany({
-      orderBy: { createdAt: "asc" },
+      orderBy: { sortOrder: "asc" },
     });
     return NextResponse.json({ characters });
   }
@@ -131,6 +142,24 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json({ character }, { status: 201 });
+}
+
+// PATCH /api/wow/character — update sortOrder for reordering
+// Body: { id: number, sortOrder: number }
+export async function PATCH(request: Request) {
+  const body = await request.json();
+  const { id, sortOrder } = body;
+
+  if (id === undefined || sortOrder === undefined) {
+    return NextResponse.json({ error: "id and sortOrder required" }, { status: 400 });
+  }
+
+  const character = await prisma.wowCharacter.update({
+    where: { id: parseInt(id) },
+    data: { sortOrder: parseInt(sortOrder) },
+  });
+
+  return NextResponse.json({ character });
 }
 
 // DELETE /api/wow/character?id=X

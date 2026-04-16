@@ -6,25 +6,19 @@ const DB_URL = `file:${path.join(process.cwd(), "dev.db")}`;
 const adapter = new PrismaBetterSqlite3({ url: DB_URL });
 const prisma = new PrismaClient({ adapter });
 
-const DEFAULT_WOW_TASKS = [
-  { task: "Great Vault", isDefault: true },
-  { task: "Mythic+ Key (x8)", isDefault: true },
-  { task: "Raid — Normal", isDefault: true },
-  { task: "Raid — Heroic", isDefault: true },
-  { task: "World Bosses", isDefault: true },
-  { task: "Delves (Tier 8+)", isDefault: true },
-  { task: "Conquest Cap", isDefault: true },
-];
+// 8 individual M+ dungeon run slots — displayed as a grid of 8 tick-boxes in the UI
+const DEFAULT_WOW_TASKS = Array.from({ length: 8 }, (_, i) => ({
+  task: `M+ Run ${i + 1}`,
+  isDefault: true,
+}));
 
 async function main() {
+  // Clear old templates and re-seed fresh
+  await prisma.wowChecklistTemplate.deleteMany();
   for (const template of DEFAULT_WOW_TASKS) {
-    await prisma.wowChecklistTemplate.upsert({
-      where: { task: template.task },
-      update: {},
-      create: template,
-    });
+    await prisma.wowChecklistTemplate.create({ data: template });
   }
-  console.log("Seeded WoW checklist templates.");
+  console.log("Seeded WoW checklist templates (8 M+ runs).");
 }
 
 main()

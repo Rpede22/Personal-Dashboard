@@ -1,16 +1,19 @@
 /**
  * NHL Standings Probability Engine
  *
- * Uses Monte Carlo simulation to calculate the probability distribution
- * of standings positions after N upcoming games.
+ * Uses Monte Carlo simulation with weighted per-game probabilities to calculate
+ * the probability distribution of standings positions after N upcoming games.
  *
- * Each game has 3 outcomes:
- *   - Regulation win: winner +2pts, loser +0pts
- *   - OT/SO win:      winner +2pts, loser +1pt
- *   - Regulation loss: same as win for the other team
+ * Per-game win probability (from home team's perspective):
+ *   homeWinProb = clamp(0.54 + ptsPctAdjust + regWinAdjust, 0.28, 0.78)
+ *   ptsPctAdjust  = (homePtsPct - awayPtsPct) * 0.3
+ *   regWinAdjust  = (homeRegWinRate - awayRegWinRate) * 0.2
  *
- * Weights: W=1/3, OTL=1/3, L=1/3 (equal probability)
- * We model each game as having outcomes from BOTH teams' perspectives.
+ * Outcome probabilities from home team perspective:
+ *   regWin  = homeWinProb * 0.76
+ *   otWin   = homeWinProb * 0.24
+ *   otLoss  = (1 - homeWinProb) * 0.24
+ *   regLoss = (1 - homeWinProb) * 0.76
  */
 
 export interface TeamStanding {
@@ -52,6 +55,8 @@ export interface ProbabilityResult {
 }
 
 const SIMULATIONS = 20000;
+
+// Outcomes from home team perspective: [homeGain, awayGain]
 const OUTCOMES = [
   { homeGain: 2, awayGain: 0 },  // Home wins regulation
   { homeGain: 2, awayGain: 1 },  // Home wins OT/SO
@@ -59,48 +64,110 @@ const OUTCOMES = [
   { homeGain: 0, awayGain: 2 },  // Away wins regulation
 ] as const;
 
-// Equal weight: reg-W, OTL-W, OTL-L, reg-L = 25% each
-// But to match real NHL distribution (roughly): reg-W 42%, OTW 8%, OTL 8%, reg-L 42%
-// Simplified to 3 types: regW, OT (either), regL = 1/3 each
-// OT splits 50/50 for who wins OT
-const OUTCOME_WEIGHTS = [0.375, 0.125, 0.125, 0.375]; // sum = 1.0
+function clamp(val: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, val));
+}
 
-function pickOutcome(): (typeof OUTCOMES)[number] {
+function pickOutcomeWeighted(homeWinProb: number): (typeof OUTCOMES)[number] {
+  // regWin  = homeWinProb * 0.76
+  // otWin   = homeWinProb * 0.24
+  // otLoss  = (1 - homeWinProb) * 0.24
+  // regLoss = (1 - homeWinProb) * 0.76
+  const weights = [
+    homeWinProb * 0.76,
+    homeWinProb * 0.24,
+    (1 - homeWinProb) * 0.24,
+    (1 - homeWinProb) * 0.76,
+  ];
   const r = Math.random();
   let cumulative = 0;
   for (let i = 0; i < OUTCOMES.length; i++) {
-    cumulative += OUTCOME_WEIGHTS[i];
+    cumulative += weights[i];
     if (r < cumulative) return OUTCOMES[i];
   }
   return OUTCOMES[3];
 }
 
+function computeHomeWinProb(
+  homeAbbrev: string,
+  awayAbbrev: string,
+  teamStats: Map<string, { ptsPct: number; regWinRate: number }>
+): number {
+  const homeStats = teamStats.get(homeAbbrev);
+  const awayStats = teamStats.get(awayAbbrev);
+  const homePtsPct = homeStats?.ptsPct ?? 0.5;
+  const awayPtsPct = awayStats?.ptsPct ?? 0.5;
+  const homeRegWinRate = homeStats?.regWinRate ?? 0.4;
+  const awayRegWinRate = awayStats?.regWinRate ?? 0.4;
+
+  const ptsPctAdjust = (homePtsPct - awayPtsPct) * 0.3;
+  const regWinAdjust = (homeRegWinRate - awayRegWinRate) * 0.2;
+
+  return clamp(0.54 + ptsPctAdjust + regWinAdjust, 0.28, 0.78);
+}
+
 export function runProbabilityEngine(
   currentStandings: TeamStanding[],
   upcomingGames: ScheduledGame[],
-  targetTeams?: string[] // if provided, only return results for these teams
+  targetTeams?: string[], // if provided, only return results for these teams
+  teamStats?: Map<string, { ptsPct: number; regWinRate: number }>
 ): ProbabilityResult[] {
   const teams = new Map<string, TeamStanding>(
     currentStandings.map((s) => [s.teamAbbrev, { ...s }])
   );
+
+  // Build default teamStats from standings if not provided
+  const stats: Map<string, { ptsPct: number; regWinRate: number }> =
+    teamStats ??
+    new Map(
+      currentStandings.map((s) => [
+        s.teamAbbrev,
+        {
+          ptsPct: s.gamesPlayed > 0 ? s.points / (s.gamesPlayed * 2) : 0.5,
+          regWinRate: s.gamesPlayed > 0 ? s.regulationWins / s.gamesPlayed : 0.4,
+        },
+      ])
+    );
 
   // Only simulate games where at least one team is in our standings
   const relevantGames = upcomingGames.filter(
     (g) => teams.has(g.homeTeam.abbrev) || teams.has(g.awayTeam.abbrev)
   );
 
+  // Pre-compute per-game home win probabilities
+  const gameProbs = relevantGames.map((g) =>
+    computeHomeWinProb(g.homeTeam.abbrev, g.awayTeam.abbrev, stats)
+  );
+
   // Track results per team across simulations
-  const pointsAccumulator = new Map<string, number[]>(); // abbrev -> array of final points per sim
+  const pointsAccumulator = new Map<string, number[]>();
   teams.forEach((_, abbrev) => pointsAccumulator.set(abbrev, []));
+
+  // Group teams by division and conference for rank computation
+  const divisionTeams = new Map<string, string[]>();
+  const conferenceTeams = new Map<string, string[]>();
+  teams.forEach((t, abbrev) => {
+    if (!divisionTeams.has(t.division)) divisionTeams.set(t.division, []);
+    divisionTeams.get(t.division)!.push(abbrev);
+    if (!conferenceTeams.has(t.conference)) conferenceTeams.set(t.conference, []);
+    conferenceTeams.get(t.conference)!.push(abbrev);
+  });
+
+  const divRankAccumulator = new Map<string, number[]>();
+  const confRankAccumulator = new Map<string, number[]>();
+  teams.forEach((_, abbrev) => {
+    divRankAccumulator.set(abbrev, []);
+    confRankAccumulator.set(abbrev, []);
+  });
 
   // Run simulations
   for (let sim = 0; sim < SIMULATIONS; sim++) {
-    // Start from current points
     const simPoints = new Map<string, number>();
     teams.forEach((s, abbrev) => simPoints.set(abbrev, s.points));
 
-    for (const game of relevantGames) {
-      const outcome = pickOutcome();
+    for (let gi = 0; gi < relevantGames.length; gi++) {
+      const game = relevantGames[gi];
+      const outcome = pickOutcomeWeighted(gameProbs[gi]);
       const home = game.homeTeam.abbrev;
       const away = game.awayTeam.abbrev;
 
@@ -112,53 +179,13 @@ export function runProbabilityEngine(
       }
     }
 
-    // Record final points for each team
+    // Record final points
     simPoints.forEach((pts, abbrev) => {
       pointsAccumulator.get(abbrev)?.push(pts);
     });
-  }
-
-  // Build results
-  const results: ProbabilityResult[] = [];
-  const teamList = targetTeams
-    ? Array.from(teams.values()).filter((t) => targetTeams.includes(t.teamAbbrev))
-    : Array.from(teams.values());
-
-  // For division/conference rank, we need to compute rank distributions
-  // Group teams by division and conference
-  const divisionTeams = new Map<string, string[]>();
-  const conferenceTeams = new Map<string, string[]>();
-  teams.forEach((t, abbrev) => {
-    if (!divisionTeams.has(t.division)) divisionTeams.set(t.division, []);
-    divisionTeams.get(t.division)!.push(abbrev);
-    if (!conferenceTeams.has(t.conference)) conferenceTeams.set(t.conference, []);
-    conferenceTeams.get(t.conference)!.push(abbrev);
-  });
-
-  // Compute rank distributions (expensive but worth it)
-  // Build per-simulation rank data
-  const divRankAccumulator = new Map<string, number[]>();
-  const confRankAccumulator = new Map<string, number[]>();
-  teams.forEach((_, abbrev) => {
-    divRankAccumulator.set(abbrev, []);
-    confRankAccumulator.set(abbrev, []);
-  });
-
-  // Rebuild simulation results for ranking
-  for (let sim = 0; sim < SIMULATIONS; sim++) {
-    const simPoints = new Map<string, number>();
-    teams.forEach((s, abbrev) => simPoints.set(abbrev, s.points));
-
-    for (const game of relevantGames) {
-      const outcome = pickOutcome();
-      const home = game.homeTeam.abbrev;
-      const away = game.awayTeam.abbrev;
-      if (simPoints.has(home)) simPoints.set(home, simPoints.get(home)! + outcome.homeGain);
-      if (simPoints.has(away)) simPoints.set(away, simPoints.get(away)! + outcome.awayGain);
-    }
 
     // Compute division ranks
-    divisionTeams.forEach((divAbbrevs, _div) => {
+    divisionTeams.forEach((divAbbrevs) => {
       const sorted = [...divAbbrevs].sort(
         (a, b) => (simPoints.get(b) ?? 0) - (simPoints.get(a) ?? 0)
       );
@@ -168,7 +195,7 @@ export function runProbabilityEngine(
     });
 
     // Compute conference ranks
-    conferenceTeams.forEach((confAbbrevs, _conf) => {
+    conferenceTeams.forEach((confAbbrevs) => {
       const sorted = [...confAbbrevs].sort(
         (a, b) => (simPoints.get(b) ?? 0) - (simPoints.get(a) ?? 0)
       );
@@ -178,25 +205,29 @@ export function runProbabilityEngine(
     });
   }
 
+  // Build results
+  const teamList = targetTeams
+    ? Array.from(teams.values()).filter((t) => targetTeams.includes(t.teamAbbrev))
+    : Array.from(teams.values());
+
+  const results: ProbabilityResult[] = [];
+
   for (const team of teamList) {
     const abbrev = team.teamAbbrev;
     const simPts = pointsAccumulator.get(abbrev) ?? [];
     const divRanks = divRankAccumulator.get(abbrev) ?? [];
     const confRanks = confRankAccumulator.get(abbrev) ?? [];
 
-    // Points distribution
     const pointsDist: Record<number, number> = {};
     simPts.forEach((p) => {
       pointsDist[p] = (pointsDist[p] ?? 0) + 1 / SIMULATIONS;
     });
 
-    // Division rank distribution
     const divDist: Record<number, number> = {};
     divRanks.forEach((r) => {
       divDist[r] = (divDist[r] ?? 0) + 1 / SIMULATIONS;
     });
 
-    // Conference rank distribution
     const confDist: Record<number, number> = {};
     confRanks.forEach((r) => {
       confDist[r] = (confDist[r] ?? 0) + 1 / SIMULATIONS;

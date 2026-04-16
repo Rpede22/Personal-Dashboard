@@ -15,7 +15,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { date, distance, duration, feel, notes } = body;
+  const { date, distance, duration, notes } = body;
 
   if (!date || !distance || !duration) {
     return NextResponse.json(
@@ -29,7 +29,6 @@ export async function POST(request: Request) {
       date: new Date(date),
       distance: parseFloat(distance),
       duration: parseInt(duration),
-      feel: feel ?? null,
       notes: notes ?? null,
     },
   });

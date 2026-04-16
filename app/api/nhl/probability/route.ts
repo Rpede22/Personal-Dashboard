@@ -92,7 +92,18 @@ export async function GET(request: Request) {
 
     const targetTeams = teams ? teams.split(",").map((t) => t.trim().toUpperCase()) : undefined;
 
-    const results = runProbabilityEngine(standings, limitedGames, targetTeams);
+    // Build teamStats map from standings for weighted simulation
+    const teamStats = new Map<string, { ptsPct: number; regWinRate: number }>(
+      standings.map((s: any) => [
+        s.teamAbbrev as string,
+        {
+          ptsPct: s.gamesPlayed > 0 ? s.points / (s.gamesPlayed * 2) : 0.5,
+          regWinRate: s.gamesPlayed > 0 ? s.regulationWins / s.gamesPlayed : 0.4,
+        },
+      ])
+    );
+
+    const results = runProbabilityEngine(standings, limitedGames, targetTeams, teamStats);
 
     const payload = { scope, gamesAhead, results };
     cache.set(cacheKey, { data: payload, ts: Date.now() });

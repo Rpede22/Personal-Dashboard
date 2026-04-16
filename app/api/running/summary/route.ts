@@ -41,7 +41,7 @@ export async function GET() {
 
   return NextResponse.json({
     lastRun: lastRun
-      ? { date: lastRun.date, distance: lastRun.distance, feel: lastRun.feel }
+      ? { date: lastRun.date, distance: lastRun.distance }
       : null,
     weeklyKm,
     raceDate,

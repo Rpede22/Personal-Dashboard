@@ -8,6 +8,7 @@ interface WowCharacter {
   name: string;
   realm: string;
   region: string;
+  sortOrder: number;
 }
 
 interface ChecklistItem {
@@ -19,7 +20,16 @@ interface ChecklistItem {
 interface CharacterStats {
   ilvl: number | null;
   rioScore: number | null;
+  raidProgress: string | null;
   errors: string[];
+}
+
+// Cache stats per character key to avoid re-fetching
+const statsCache = new Map<string, CharacterStats>();
+
+function getMPlusNumber(task: string): number | null {
+  const m = task.match(/^M\+\s+Run\s+(\d+)$/i);
+  return m ? parseInt(m[1]) : null;
 }
 
 export default function WoWHub() {
@@ -27,6 +37,7 @@ export default function WoWHub() {
   const [selectedChar, setSelectedChar] = useState<WowCharacter | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [stats, setStats] = useState<CharacterStats | null>(null);
+  const [charStats, setCharStats] = useState<Map<number, CharacterStats>>(new Map());
   const [loadingChecklist, setLoadingChecklist] = useState(false);
   const [loadingStats, setLoadingStats] = useState(false);
   const [newTask, setNewTask] = useState("");
@@ -38,7 +49,30 @@ export default function WoWHub() {
   async function loadCharacters() {
     const res = await fetch("/api/wow/character");
     const data = await res.json();
-    setCharacters(data.characters ?? []);
+    const chars: WowCharacter[] = data.characters ?? [];
+    setCharacters(chars);
+    // Load stats for each character in the background
+    chars.forEach((char) => fetchCharStats(char));
+  }
+
+  async function fetchCharStats(char: WowCharacter): Promise<CharacterStats | null> {
+    const key = `${char.region}-${char.realm}-${char.name}`.toLowerCase();
+    const cached = statsCache.get(key);
+    if (cached) {
+      setCharStats((prev) => new Map(prev).set(char.id, cached));
+      return cached;
+    }
+    try {
+      const res = await fetch(
+        `/api/wow/character?name=${encodeURIComponent(char.name)}&realm=${encodeURIComponent(char.realm)}&region=${char.region}`
+      );
+      const data = await res.json();
+      statsCache.set(key, data);
+      setCharStats((prev) => new Map(prev).set(char.id, data));
+      return data;
+    } catch {
+      return null;
+    }
   }
 
   useEffect(() => {
@@ -56,14 +90,11 @@ export default function WoWHub() {
     } finally {
       setLoadingChecklist(false);
     }
-    // Load stats in parallel
+    // Load stats
     setLoadingStats(true);
     try {
-      const res = await fetch(
-        `/api/wow/character?name=${encodeURIComponent(char.name)}&realm=${encodeURIComponent(char.realm)}&region=${char.region}`
-      );
-      const data = await res.json();
-      setStats(data);
+      const result = await fetchCharStats(char);
+      setStats(result);
     } finally {
       setLoadingStats(false);
     }
@@ -121,6 +152,32 @@ export default function WoWHub() {
     loadCharacters();
   }
 
+  async function moveCharacter(char: WowCharacter, direction: "up" | "down") {
+    const sorted = [...characters].sort((a, b) => a.sortOrder - b.sortOrder);
+    const idx = sorted.findIndex((c) => c.id === char.id);
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+
+    const other = sorted[swapIdx];
+    const myOrder = char.sortOrder;
+    const otherOrder = other.sortOrder;
+
+    // Swap sortOrders
+    await Promise.all([
+      fetch("/api/wow/character", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: char.id, sortOrder: otherOrder }),
+      }),
+      fetch("/api/wow/character", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: other.id, sortOrder: myOrder }),
+      }),
+    ]);
+    loadCharacters();
+  }
+
   async function lookupCharacter(e: React.FormEvent) {
     e.preventDefault();
     const res = await fetch(
@@ -130,8 +187,20 @@ export default function WoWHub() {
     setLookupResult({ ...data, name: lookupForm.name });
   }
 
+  // Separate M+ runs (1-8) from custom tasks
+  const mplusTasks = checklist.filter((item) => getMPlusNumber(item.task) !== null);
+  const customTasks = checklist.filter((item) => getMPlusNumber(item.task) === null);
+  const mplusDone = mplusTasks.filter((t) => t.done).length;
+
+  // Build an 8-slot M+ grid (slots 1-8)
+  const mplusGrid: (ChecklistItem | null)[] = Array.from({ length: 8 }, (_, i) => {
+    return mplusTasks.find((t) => getMPlusNumber(t.task) === i + 1) ?? null;
+  });
+
   const doneCount = checklist.filter((c) => c.done).length;
   const pct = checklist.length > 0 ? Math.round((doneCount / checklist.length) * 100) : 0;
+
+  const sortedCharacters = [...characters].sort((a, b) => a.sortOrder - b.sortOrder);
 
   return (
     <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
@@ -219,40 +288,91 @@ export default function WoWHub() {
           )}
 
           <div className="space-y-2">
-            {characters.map((char) => (
-              <div
-                key={char.id}
-                className="flex items-center gap-2 rounded-xl p-2.5 cursor-pointer transition-all"
-                style={{
-                  background:
-                    selectedChar?.id === char.id
-                      ? "var(--accent-purple)22"
-                      : "var(--surface-2)",
-                  border:
-                    selectedChar?.id === char.id
-                      ? "1px solid var(--accent-purple)"
-                      : "1px solid transparent",
-                }}
-                onClick={() => loadChecklist(char)}
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium capitalize">{char.name}</p>
-                  <p className="text-xs capitalize" style={{ color: "var(--text-muted)" }}>
-                    {char.realm} · {char.region.toUpperCase()}
-                  </p>
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteCharacter(char.id);
+            {sortedCharacters.map((char, idx) => {
+              const s = charStats.get(char.id);
+              return (
+                <div
+                  key={char.id}
+                  className="rounded-xl p-2.5 cursor-pointer transition-all"
+                  style={{
+                    background:
+                      selectedChar?.id === char.id
+                        ? "var(--accent-purple)22"
+                        : "var(--surface-2)",
+                    border:
+                      selectedChar?.id === char.id
+                        ? "1px solid var(--accent-purple)"
+                        : "1px solid transparent",
                   }}
-                  className="text-xs"
-                  style={{ color: "var(--accent-red)" }}
+                  onClick={() => loadChecklist(char)}
                 >
-                  ✕
-                </button>
-              </div>
-            ))}
+                  <div className="flex items-center gap-2">
+                    {/* Reorder arrows */}
+                    <div className="flex flex-col gap-0.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); moveCharacter(char, "up"); }}
+                        disabled={idx === 0}
+                        className="text-xs leading-none px-0.5"
+                        style={{ color: idx === 0 ? "var(--border)" : "var(--text-muted)" }}
+                        title="Move up"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); moveCharacter(char, "down"); }}
+                        disabled={idx === sortedCharacters.length - 1}
+                        className="text-xs leading-none px-0.5"
+                        style={{
+                          color:
+                            idx === sortedCharacters.length - 1
+                              ? "var(--border)"
+                              : "var(--text-muted)",
+                        }}
+                        title="Move down"
+                      >
+                        ↓
+                      </button>
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium capitalize">{char.name}</p>
+                      <p className="text-xs capitalize" style={{ color: "var(--text-muted)" }}>
+                        {char.realm} · {char.region.toUpperCase()}
+                      </p>
+                      {s && (
+                        <div className="flex gap-2 mt-0.5">
+                          {s.ilvl !== null && (
+                            <span className="text-xs" style={{ color: "var(--accent-blue)" }}>
+                              {s.ilvl} ilvl
+                            </span>
+                          )}
+                          {s.rioScore !== null && (
+                            <span className="text-xs" style={{ color: "var(--accent-orange)" }}>
+                              {Math.round(s.rioScore)} rio
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteCharacter(char.id);
+                      }}
+                      className="text-xs px-2 py-1 rounded-md font-medium"
+                      style={{
+                        color: "var(--accent-red)",
+                        background: "var(--surface)",
+                        border: "1px solid var(--accent-red)",
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
             {characters.length === 0 && (
               <p className="text-sm" style={{ color: "var(--text-muted)" }}>
                 No characters yet
@@ -296,42 +416,87 @@ export default function WoWHub() {
               {loadingChecklist ? (
                 <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
               ) : (
-                <div className="space-y-1.5">
-                  {checklist.map((item) => (
-                    <div key={item.id} className="flex items-center gap-3">
-                      <button
-                        onClick={() => toggleTask(item)}
-                        className="w-5 h-5 rounded-md flex-shrink-0 flex items-center justify-center transition-all"
-                        style={{
-                          background: item.done
-                            ? "var(--accent-green)"
-                            : "var(--surface-2)",
-                          border: `1px solid ${item.done ? "var(--accent-green)" : "var(--border)"}`,
-                        }}
-                      >
-                        {item.done && (
-                          <span className="text-white text-xs">✓</span>
-                        )}
-                      </button>
-                      <span
-                        className="flex-1 text-sm"
-                        style={{
-                          textDecoration: item.done ? "line-through" : "none",
-                          color: item.done ? "var(--text-muted)" : "var(--text)",
-                        }}
-                      >
-                        {item.task}
-                      </span>
-                      <button
-                        onClick={() => deleteTask(item.id)}
-                        className="text-xs opacity-0 hover:opacity-100 transition-opacity"
-                        style={{ color: "var(--accent-red)" }}
-                      >
-                        ✕
-                      </button>
+                <>
+                  {/* M+ 4×2 grid */}
+                  {mplusGrid.some((slot) => slot !== null) && (
+                    <div className="mb-4">
+                      <p className="text-xs font-medium mb-2" style={{ color: "var(--text-muted)" }}>
+                        M+ Runs ({mplusDone}/8)
+                      </p>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {mplusGrid.map((item, i) => (
+                          <button
+                            key={i}
+                            onClick={() => item && toggleTask(item)}
+                            disabled={!item}
+                            className="h-10 rounded-lg flex items-center justify-center text-sm font-bold transition-all"
+                            style={{
+                              background: item?.done
+                                ? "var(--accent-green)"
+                                : item
+                                ? "var(--surface-2)"
+                                : "var(--surface-2)",
+                              border: item?.done
+                                ? "1px solid var(--accent-green)"
+                                : "1px solid var(--border)",
+                              color: item?.done
+                                ? "#fff"
+                                : item
+                                ? "var(--text)"
+                                : "var(--border)",
+                              opacity: item ? 1 : 0.4,
+                            }}
+                          >
+                            {i + 1}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  ))}
-                </div>
+                  )}
+
+                  {/* Custom tasks */}
+                  {customTasks.length > 0 && (
+                    <div className="space-y-1.5">
+                      {customTasks.map((item) => (
+                        <div key={item.id} className="flex items-center gap-3">
+                          <button
+                            onClick={() => toggleTask(item)}
+                            className="w-5 h-5 rounded-md flex-shrink-0 flex items-center justify-center transition-all"
+                            style={{
+                              background: item.done
+                                ? "var(--accent-green)"
+                                : "var(--surface-2)",
+                              border: `1px solid ${item.done ? "var(--accent-green)" : "var(--border)"}`,
+                            }}
+                          >
+                            {item.done && (
+                              <span className="text-white text-xs">✓</span>
+                            )}
+                          </button>
+                          <span
+                            className="flex-1 text-sm"
+                            style={{
+                              textDecoration: item.done ? "line-through" : "none",
+                              color: item.done ? "var(--text-muted)" : "var(--text)",
+                            }}
+                          >
+                            {item.task}
+                          </span>
+                          <button
+                            onClick={() => deleteTask(item.id)}
+                            className="text-xs px-2 py-0.5 rounded-md"
+                            style={{
+                              color: "var(--accent-red)",
+                              border: "1px solid var(--accent-red)",
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
 
               <form onSubmit={addTask} className="mt-4 flex gap-2">
@@ -377,7 +542,7 @@ export default function WoWHub() {
                 </p>
               ) : stats ? (
                 <div className="space-y-3">
-                  <div className="flex gap-4">
+                  <div className="flex gap-3">
                     <div
                       className="flex-1 rounded-xl p-3 text-center"
                       style={{ background: "var(--surface-2)" }}
@@ -408,6 +573,22 @@ export default function WoWHub() {
                         Raider.IO
                       </div>
                     </div>
+                    {stats.raidProgress && (
+                      <div
+                        className="flex-1 rounded-xl p-3 text-center"
+                        style={{ background: "var(--surface-2)" }}
+                      >
+                        <div
+                          className="text-2xl font-bold"
+                          style={{ color: "var(--accent-purple)" }}
+                        >
+                          {stats.raidProgress}
+                        </div>
+                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                          Raid
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {stats.errors.length > 0 && (
                     <p className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -481,21 +662,29 @@ export default function WoWHub() {
             {lookupResult && (
               <div className="mt-4 rounded-xl p-3" style={{ background: "var(--surface-2)" }}>
                 <p className="font-medium capitalize mb-2">{lookupResult.name}</p>
-                <div className="flex gap-4 text-sm">
-                  <span>
-                    ilvl:{" "}
-                    <strong style={{ color: "var(--accent-blue)" }}>
-                      {lookupResult.ilvl ?? "—"}
-                    </strong>
+                <div className="flex flex-wrap gap-2 text-sm">
+                  <span
+                    className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                    style={{ background: "var(--accent-blue)22", color: "var(--accent-blue)" }}
+                  >
+                    {lookupResult.ilvl ?? "—"} ilvl
                   </span>
-                  <span>
-                    Raider.IO:{" "}
-                    <strong style={{ color: "var(--accent-orange)" }}>
-                      {lookupResult.rioScore !== null
-                        ? Math.round(lookupResult.rioScore)
-                        : "—"}
-                    </strong>
+                  <span
+                    className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                    style={{ background: "var(--accent-orange)22", color: "var(--accent-orange)" }}
+                  >
+                    {lookupResult.rioScore !== null
+                      ? Math.round(lookupResult.rioScore)
+                      : "—"} rio
                   </span>
+                  {lookupResult.raidProgress && (
+                    <span
+                      className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                      style={{ background: "var(--accent-purple)22", color: "var(--accent-purple)" }}
+                    >
+                      {lookupResult.raidProgress}
+                    </span>
+                  )}
                 </div>
                 {lookupResult.errors.length > 0 && (
                   <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>

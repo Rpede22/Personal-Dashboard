@@ -19,6 +19,7 @@ interface Game {
   homeTeam: { abbrev: string; score?: number };
   awayTeam: { abbrev: string; score?: number };
   gameState: string;
+  periodType?: string | null;
 }
 
 export default function NHLWidget() {
@@ -52,13 +53,16 @@ export default function NHLWidget() {
     load();
   }, []);
 
-  function gameResult(game: Game): "W" | "L" | "?" {
+  function gameResult(game: Game): "W" | "L" | "OTL" | "?" {
     const edm_score =
       game.homeTeam.abbrev === "EDM" ? game.homeTeam.score : game.awayTeam.score;
     const opp_score =
       game.homeTeam.abbrev === "EDM" ? game.awayTeam.score : game.homeTeam.score;
     if (edm_score === undefined || opp_score === undefined) return "?";
-    return edm_score > opp_score ? "W" : "L";
+    if (edm_score > opp_score) return "W";
+    // Loss — check if it was OT/SO
+    const isOT = game.periodType === "OT" || game.periodType === "SO";
+    return isOT ? "OTL" : "L";
   }
 
   return (
@@ -134,8 +138,14 @@ export default function NHLWidget() {
                     className="w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold"
                     style={{
                       background:
-                        res === "W" ? "var(--accent-green)" : res === "L" ? "#374151" : "var(--surface-2)",
-                      color: res === "W" ? "#fff" : "var(--text)",
+                        res === "W"
+                          ? "var(--accent-green)"
+                          : res === "OTL"
+                          ? "var(--accent-orange)"
+                          : res === "L"
+                          ? "#374151"
+                          : "var(--surface-2)",
+                      color: res === "W" || res === "OTL" ? "#fff" : "var(--text)",
                     }}
                   >
                     {res}

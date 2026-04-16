@@ -13,7 +13,7 @@ model Assignment {
   dueDate   DateTime
   subject   String?
   status    String   @default("pending") // pending | in_progress | done
-  priority  String   @default("medium")  // low | medium | high
+  priority  String   @default("medium")  // low | medium | high — auto-overridden by UI
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -23,8 +23,17 @@ model RunLog {
   date      DateTime
   distance  Float    // km
   duration  Int      // seconds
-  feel      String?  // easy | moderate | hard
   notes     String?
+  createdAt DateTime @default(now())
+}
+
+model RunPlan {
+  id        Int      @id @default(autoincrement())
+  date      DateTime
+  distance  Float?   // planned km (null = rest day)
+  type      String   // easy | tempo | long | rest
+  notes     String?
+  completed Boolean  @default(false)
   createdAt DateTime @default(now())
 }
 
@@ -33,6 +42,7 @@ model WowCharacter {
   name      String
   realm     String
   region    String   @default("eu")
+  sortOrder Int      @default(0)
   createdAt DateTime @default(now())
 
   @@unique([name, realm, region])
@@ -41,7 +51,7 @@ model WowCharacter {
 model WowChecklist {
   id          Int      @id @default(autoincrement())
   characterId Int
-  weekStart   DateTime // Monday of the reset week
+  weekStart   DateTime // Wednesday reset week start
   task        String
   done        Boolean  @default(false)
   createdAt   DateTime @default(now())
@@ -50,7 +60,7 @@ model WowChecklist {
 }
 
 model WowChecklistTemplate {
-  id      Int     @id @default(autoincrement())
-  task    String  @unique
+  id        Int     @id @default(autoincrement())
+  task      String  @unique
   isDefault Boolean @default(false)
 }

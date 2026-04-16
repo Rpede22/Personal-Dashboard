@@ -12,20 +12,20 @@ interface Assignment {
   status: string;
 }
 
-const PRIORITY_OPTIONS = ["low", "medium", "high"] as const;
 const STATUS_OPTIONS = ["pending", "in_progress", "done"] as const;
-
-const PRIORITY_COLOR: Record<string, string> = {
-  high: "var(--accent-red)",
-  medium: "var(--accent-orange)",
-  low: "var(--accent-green)",
-};
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending",
   in_progress: "In Progress",
   done: "Done",
 };
+
+// Auto-priority: sort pending+in_progress by dueDate asc, position 1-2=high, 3-4=medium, 5+=low
+function getAutoPriorityColor(index: number): string {
+  if (index < 2) return "var(--accent-red)";
+  if (index < 4) return "var(--accent-orange)";
+  return "var(--accent-green)";
+}
 
 export default function SchoolHub() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
@@ -35,7 +35,6 @@ export default function SchoolHub() {
     title: "",
     dueDate: "",
     subject: "",
-    priority: "medium",
   });
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
@@ -59,9 +58,9 @@ export default function SchoolHub() {
     await fetch("/api/school", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({ ...form, priority: "low" }),
     });
-    setForm({ title: "", dueDate: "", subject: "", priority: "medium" });
+    setForm({ title: "", dueDate: "", subject: "" });
     setShowForm(false);
     load();
   }
@@ -96,6 +95,21 @@ export default function SchoolHub() {
     filterStatus === "all"
       ? assignments
       : assignments.filter((a) => a.status === filterStatus);
+
+  // Sort filtered list — pending/in_progress by dueDate asc; done tasks at end
+  const sortedFiltered = [...filtered].sort((a, b) => {
+    const aActive = a.status !== "done";
+    const bActive = b.status !== "done";
+    if (aActive && !bActive) return -1;
+    if (!aActive && bActive) return 1;
+    return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+  });
+
+  // Build auto-priority index map: only for pending+in_progress sorted by dueDate
+  const activeSorted = [...assignments]
+    .filter((a) => a.status !== "done")
+    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+  const priorityIndexMap = new Map(activeSorted.map((a, i) => [a.id, i]));
 
   return (
     <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
@@ -160,22 +174,6 @@ export default function SchoolHub() {
                 colorScheme: "dark",
               }}
             />
-            <select
-              value={form.priority}
-              onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
-              className="rounded-lg px-3 py-2 text-sm"
-              style={{
-                background: "var(--surface-2)",
-                color: "var(--text)",
-                border: "1px solid var(--border)",
-              }}
-            >
-              {PRIORITY_OPTIONS.map((p) => (
-                <option key={p} value={p}>
-                  {p.charAt(0).toUpperCase() + p.slice(1)} priority
-                </option>
-              ))}
-            </select>
           </div>
           <div className="flex gap-2">
             <button
@@ -214,14 +212,14 @@ export default function SchoolHub() {
           </button>
         ))}
         <span className="ml-auto text-sm" style={{ color: "var(--text-muted)" }}>
-          {filtered.length} item{filtered.length !== 1 ? "s" : ""}
+          {sortedFiltered.length} item{sortedFiltered.length !== 1 ? "s" : ""}
         </span>
       </div>
 
       {/* Assignment list */}
       {loading ? (
         <p style={{ color: "var(--text-muted)" }}>Loading…</p>
-      ) : filtered.length === 0 ? (
+      ) : sortedFiltered.length === 0 ? (
         <div
           className="rounded-2xl p-12 text-center"
           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
@@ -233,71 +231,81 @@ export default function SchoolHub() {
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered
-            .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-            .map((a) => {
-              const due = daysUntil(a.dueDate);
-              return (
-                <div
-                  key={a.id}
-                  className="rounded-2xl p-4 flex items-center gap-4"
-                  style={{
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    opacity: a.status === "done" ? 0.5 : 1,
-                  }}
-                >
-                  <span
-                    className="w-3 h-3 rounded-full flex-shrink-0"
-                    style={{ background: PRIORITY_COLOR[a.priority] ?? "var(--text-muted)" }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className="font-medium"
-                      style={{
-                        textDecoration: a.status === "done" ? "line-through" : "none",
-                      }}
-                    >
-                      {a.title}
-                    </p>
-                    {a.subject && (
-                      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        {a.subject}
-                      </p>
-                    )}
-                  </div>
+          {sortedFiltered.map((a) => {
+            const due = daysUntil(a.dueDate);
+            const priorityIdx = priorityIndexMap.get(a.id);
+            const dotColor =
+              a.status === "done"
+                ? "var(--text-muted)"
+                : priorityIdx !== undefined
+                ? getAutoPriorityColor(priorityIdx)
+                : "var(--text-muted)";
 
-                  <span className="text-sm font-semibold" style={{ color: due.color }}>
-                    {due.label}
-                  </span>
-
-                  <select
-                    value={a.status}
-                    onChange={(e) => updateStatus(a.id, e.target.value)}
-                    className="rounded-lg px-2 py-1 text-xs"
+            return (
+              <div
+                key={a.id}
+                className="rounded-2xl p-4 flex items-center gap-4"
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  opacity: a.status === "done" ? 0.5 : 1,
+                }}
+              >
+                <span
+                  className="w-3 h-3 rounded-full flex-shrink-0"
+                  style={{ background: dotColor }}
+                />
+                <div className="flex-1 min-w-0">
+                  <p
+                    className="font-medium"
                     style={{
-                      background: "var(--surface-2)",
-                      color: "var(--text)",
-                      border: "1px solid var(--border)",
+                      textDecoration: a.status === "done" ? "line-through" : "none",
                     }}
                   >
-                    {STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {STATUS_LABEL[s]}
-                      </option>
-                    ))}
-                  </select>
-
-                  <button
-                    onClick={() => deleteAssignment(a.id)}
-                    className="text-xs px-2 py-1 rounded-lg"
-                    style={{ color: "var(--accent-red)", background: "transparent" }}
-                  >
-                    ✕
-                  </button>
+                    {a.title}
+                  </p>
+                  {a.subject && (
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      {a.subject}
+                    </p>
+                  )}
                 </div>
-              );
-            })}
+
+                <span className="text-sm font-semibold" style={{ color: due.color }}>
+                  {due.label}
+                </span>
+
+                <select
+                  value={a.status}
+                  onChange={(e) => updateStatus(a.id, e.target.value)}
+                  className="rounded-lg px-2 py-1 text-xs"
+                  style={{
+                    background: "var(--surface-2)",
+                    color: "var(--text)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  {STATUS_OPTIONS.map((s) => (
+                    <option key={s} value={s}>
+                      {STATUS_LABEL[s]}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  onClick={() => deleteAssignment(a.id)}
+                  className="text-xs px-2 py-1 rounded-lg font-medium"
+                  style={{
+                    color: "var(--accent-red)",
+                    border: "1px solid var(--accent-red)",
+                    background: "transparent",
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
