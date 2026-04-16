@@ -204,13 +204,22 @@ export default function NHLHub() {
 
   // ── Playoffs helpers ──────────────────────────────────────────────────────
 
+  // team1 = home ice (better regular season rank). Layout always: home | vs | away
   function MatchupCard({ m }: { m: MatchupResult }) {
     const isEdm = m.team1.abbrev === "EDM" || m.team2.abbrev === "EDM";
-    const winnerIsT1 = m.seriesWinProb >= 0.5;
-    const displayProb = Math.round((winnerIsT1 ? m.seriesWinProb : 1 - m.seriesWinProb) * 100);
-    const winner = m.predictedWinner;
-    const loser = winnerIsT1 ? m.team2 : m.team1;
+    const t1WinProb = Math.round(m.seriesWinProb * 100);
+    const t2WinProb = 100 - t1WinProb;
     const isPredicted = m.round > 1;
+
+    // H2H: "HOME W–A AWAY" where home is whoever has home-ice (team1)
+    const h2hStr = m.h2h.total > 0
+      ? `H2H: ${m.team1.abbrev} ${m.h2h.wins}–${m.h2h.losses} ${m.team2.abbrev}`
+      : "H2H: no meetings";
+
+    const h2hColor = m.h2h.total === 0 ? "var(--text-muted)"
+      : m.h2h.wins > m.h2h.losses ? "var(--accent-green)"
+      : m.h2h.wins < m.h2h.losses ? "var(--accent-red)"
+      : "var(--text-muted)";
 
     return (
       <div
@@ -220,71 +229,62 @@ export default function NHLHub() {
           border: isEdm ? "1px solid var(--accent-blue)44" : "1px solid var(--border)",
         }}
       >
-        {/* Teams */}
-        <div className="flex items-start gap-2">
-          {/* Winner side */}
+        {/* Teams row — home always left, away always right */}
+        <div className="flex items-center gap-2">
+          {/* Home team (team1 — better regular season / home ice) */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <span
                 className="font-bold text-base"
-                style={{ color: winner.abbrev === "EDM" ? "var(--accent-blue)" : "var(--accent-green)" }}
+                style={{ color: m.team1.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}
               >
-                {winner.abbrev}
+                {m.team1.abbrev}
               </span>
               <span
                 className="text-xs px-1.5 py-0.5 rounded font-bold"
-                style={{ background: "var(--accent-green)22", color: "var(--accent-green)" }}
+                style={{ background: "var(--accent-blue)22", color: "var(--accent-blue)" }}
               >
-                {displayProb}%
+                {t1WinProb}%
               </span>
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>🏠</span>
             </div>
-            <div className="text-xs" style={{ color: "var(--text-muted)" }}>{winner.role}</div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>{m.team1.role}</div>
           </div>
 
-          <span className="text-sm mt-0.5 font-bold" style={{ color: "var(--text-muted)" }}>vs</span>
+          <span className="text-sm font-bold" style={{ color: "var(--text-muted)" }}>vs</span>
 
-          {/* Loser side */}
+          {/* Away team (team2) */}
           <div className="flex-1 min-w-0 text-right">
             <div className="flex items-center justify-end gap-1.5">
               <span
-                className="text-xs px-1.5 py-0.5 rounded"
+                className="text-xs px-1.5 py-0.5 rounded font-bold"
                 style={{ background: "var(--surface)", color: "var(--text-muted)" }}
               >
-                {100 - displayProb}%
+                {t2WinProb}%
               </span>
               <span
                 className="font-bold text-base"
-                style={{ color: loser.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text-muted)" }}
+                style={{ color: m.team2.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}
               >
-                {loser.abbrev}
+                {m.team2.abbrev}
               </span>
             </div>
-            <div className="text-xs" style={{ color: "var(--text-muted)" }}>{loser.role}</div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>{m.team2.role}</div>
           </div>
         </div>
 
         {/* Stats row */}
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--text-muted)" }}>
+        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
           <span title="Regular season points">
-            {m.team1.abbrev} {m.team1.points} — {m.team2.points} {m.team2.abbrev} pts
+            Pts: {m.team1.abbrev} {m.team1.points} — {m.team2.points} {m.team2.abbrev}
           </span>
-          <span title="Last 10 games (W-L-OTL)">
+          <span title="Last 10 games W-L-OTL">
             L10: {m.team1.abbrev} {m.team1.l10Wins}-{m.team1.l10Losses}-{m.team1.l10OtLosses}
             {" / "}{m.team2.abbrev} {m.team2.l10Wins}-{m.team2.l10Losses}-{m.team2.l10OtLosses}
           </span>
-          {m.h2h.total > 0 ? (
-            <span
-              title="Head-to-head record this season"
-              style={{ color: m.h2h.wins > m.h2h.losses ? "var(--accent-green)" : m.h2h.wins < m.h2h.losses ? "var(--accent-red)" : "var(--text-muted)" }}
-            >
-              H2H: {m.team1.abbrev} {m.h2h.wins}–{m.h2h.losses}
-            </span>
-          ) : (
-            <span>H2H: no meetings yet</span>
-          )}
-          <span title={`${m.team1.abbrev} has home ice advantage`}>🏠 {m.team1.abbrev}</span>
+          <span style={{ color: h2hColor }} title="Head-to-head this season">{h2hStr}</span>
           {isPredicted && (
-            <span className="italic" style={{ color: "var(--border)" }}>projected matchup</span>
+            <span className="italic" style={{ color: "var(--border)" }}>projected</span>
           )}
         </div>
       </div>
@@ -673,36 +673,87 @@ export default function NHLHub() {
               {playoffs.western?.champion && playoffs.eastern?.champion && (() => {
                 const west = playoffs.western.champion;
                 const east = playoffs.eastern.champion;
+                // Home ice in Cup Final goes to team with more pts (west tiebreak)
+                const westHome = west.points >= east.points;
+                const home = westHome ? west : east;
+                const away = westHome ? east : west;
+                // Simple prob using pts%
+                const ptsDiff = (home.ptsPct - away.ptsPct) * 0.9;
+                const finalHomeProb = Math.min(0.85, Math.max(0.15, 0.5 + ptsDiff + 0.07));
+                const finalHomeWinPct = Math.round(finalHomeProb * 100);
+                const cupWinner = finalHomeProb >= 0.5 ? home : away;
+                const cupWinnerProb = finalHomeProb >= 0.5 ? finalHomeWinPct : 100 - finalHomeWinPct;
                 const isEdmFinal = west.abbrev === "EDM" || east.abbrev === "EDM";
+                const isEdmWinner = cupWinner.abbrev === "EDM";
+
                 return (
                   <div>
                     <h3 className="font-semibold text-sm mb-3 uppercase tracking-wide" style={{ color: "var(--accent-orange)" }}>
                       🏆 Stanley Cup Final (Predicted)
                     </h3>
                     <div
-                      className="rounded-2xl p-5"
+                      className="rounded-2xl p-5 space-y-4"
                       style={{
                         background: isEdmFinal ? "var(--accent-blue)11" : "var(--surface)",
                         border: `1px solid ${isEdmFinal ? "var(--accent-blue)44" : "var(--accent-orange)44"}`,
                       }}
                     >
-                      <div className="flex items-center justify-center gap-6 mb-3">
-                        <div className="text-center">
-                          <div className="text-3xl font-bold" style={{ color: west.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>
-                            {west.abbrev}
+                      {/* Matchup */}
+                      <div className="flex items-center gap-4">
+                        <div className="flex-1 text-center">
+                          <div className="text-2xl font-bold" style={{ color: home.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>
+                            {home.abbrev}
                           </div>
-                          <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>West · {west.points} pts</div>
+                          <div className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                            {home === west ? "Western" : "Eastern"} · {home.points} pts 🏠
+                          </div>
+                          <div
+                            className="text-sm font-bold mt-1"
+                            style={{ color: "var(--accent-blue)" }}
+                          >
+                            {finalHomeWinPct}%
+                          </div>
                         </div>
-                        <div className="text-2xl font-bold" style={{ color: "var(--accent-orange)" }}>vs</div>
-                        <div className="text-center">
-                          <div className="text-3xl font-bold" style={{ color: east.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>
-                            {east.abbrev}
+
+                        <span className="text-xl font-bold" style={{ color: "var(--text-muted)" }}>vs</span>
+
+                        <div className="flex-1 text-center">
+                          <div className="text-2xl font-bold" style={{ color: away.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>
+                            {away.abbrev}
                           </div>
-                          <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>East · {east.points} pts</div>
+                          <div className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                            {away === west ? "Western" : "Eastern"} · {away.points} pts
+                          </div>
+                          <div className="text-sm font-bold mt-1" style={{ color: "var(--text-muted)" }}>
+                            {100 - finalHomeWinPct}%
+                          </div>
                         </div>
                       </div>
-                      <p className="text-xs text-center" style={{ color: "var(--text-muted)" }}>
-                        Based on current standings — predictions update every 15 minutes
+
+                      {/* Predicted champion */}
+                      <div
+                        className="rounded-xl p-3 text-center"
+                        style={{
+                          background: isEdmWinner ? "var(--accent-blue)22" : "var(--accent-orange)22",
+                          border: `1px solid ${isEdmWinner ? "var(--accent-blue)44" : "var(--accent-orange)44"}`,
+                        }}
+                      >
+                        <div className="text-xs uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>
+                          Predicted Champion
+                        </div>
+                        <div
+                          className="text-3xl font-bold"
+                          style={{ color: isEdmWinner ? "var(--accent-blue)" : "var(--accent-orange)" }}
+                        >
+                          {cupWinner.abbrev}
+                        </div>
+                        <div className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
+                          {cupWinnerProb}% series win probability
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-center" style={{ color: "var(--border)" }}>
+                        Predictions refresh every 15 min — based on pts%, form, home ice
                       </p>
                     </div>
                   </div>
