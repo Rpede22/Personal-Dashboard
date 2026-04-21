@@ -24,12 +24,96 @@ interface CharacterStats {
   errors: string[];
 }
 
-// Cache stats per character key to avoid re-fetching
-const statsCache = new Map<string, CharacterStats>();
+// No client-side cache — server already caches for 1h via lookupCache.
+// Keeping a module-level cache here caused stale ilvl values (e.g. integers from before the 2dp fix).
 
 function getMPlusNumber(task: string): number | null {
   const m = task.match(/^M\+\s+Run\s+(\d+)$/i);
   return m ? parseInt(m[1]) : null;
+}
+
+// ── CheckGrid ────────────────────────────────────────────────────────────────
+function CheckGrid({
+  label,
+  grid,
+  cols,
+  accentColor,
+  onToggle,
+  onDelete,
+  allowDelete = true,
+}: {
+  label: string;
+  grid: (ChecklistItem | null)[];
+  cols: number;
+  accentColor: string;
+  onToggle: (item: ChecklistItem) => void;
+  onDelete: (id: number) => void;
+  allowDelete?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
+        {label}
+      </p>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${cols}, 28px)`,
+          gap: "4px",
+        }}
+      >
+        {grid.map((item, i) =>
+          item ? (
+            <div key={item.id} className="relative group">
+              <button
+                onClick={() => onToggle(item)}
+                title={item.task}
+                className="rounded-md flex items-center justify-center font-bold transition-all"
+                style={{
+                  width: "28px",
+                  height: "28px",
+                  fontSize: "11px",
+                  background: item.done ? accentColor : "var(--surface-2)",
+                  border: `1px solid ${item.done ? accentColor : "var(--border)"}`,
+                  color: item.done ? "#fff" : "var(--text-muted)",
+                  opacity: item.done ? 1 : 0.85,
+                }}
+              >
+                {i + 1}
+              </button>
+              {/* Delete × button — shown on hover, only for custom tasks */}
+              {allowDelete !== false && (
+                <button
+                  onClick={() => onDelete(item.id)}
+                  title="Delete"
+                  className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full text-white hidden group-hover:flex items-center justify-center leading-none"
+                  style={{ background: "var(--accent-red)", fontSize: "9px" }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ) : (
+            <div
+              key={`empty-${i}`}
+              className="rounded-md flex items-center justify-center"
+              style={{
+                width: "28px",
+                height: "28px",
+                fontSize: "11px",
+                background: "var(--surface-2)",
+                border: "1px dashed var(--border)",
+                color: "var(--border)",
+                opacity: 0.4,
+              }}
+            >
+              {i + 1}
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function WoWHub() {
@@ -47,6 +131,8 @@ export default function WoWHub() {
   const [showAddChar, setShowAddChar] = useState(false);
   const [lookupForm, setLookupForm] = useState({ name: "", realm: "", region: "eu" });
   const [lookupResult, setLookupResult] = useState<(CharacterStats & { name: string }) | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   async function loadCharacters() {
     setLoadingChars(true);
@@ -67,18 +153,11 @@ export default function WoWHub() {
   }
 
   async function fetchCharStats(char: WowCharacter): Promise<CharacterStats | null> {
-    const key = `${char.region}-${char.realm}-${char.name}`.toLowerCase();
-    const cached = statsCache.get(key);
-    if (cached) {
-      setCharStats((prev) => new Map(prev).set(char.id, cached));
-      return cached;
-    }
     try {
       const res = await fetch(
         `/api/wow/character?name=${encodeURIComponent(char.name)}&realm=${encodeURIComponent(char.realm)}&region=${char.region}`
       );
       const data = await res.json();
-      statsCache.set(key, data);
       setCharStats((prev) => new Map(prev).set(char.id, data));
       return data;
     } catch {
@@ -145,6 +224,51 @@ export default function WoWHub() {
     setChecklist((prev) => prev.filter((c) => c.id !== id));
   }
 
+  async function syncFromRaiderIO() {
+    if (!selectedChar) return;
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await fetch("/api/wow/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ characterId: selectedChar.id }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncResult(`Error: ${data.error}`);
+      } else if (data.firstSync) {
+        const crawled = data.lastCrawledAt
+          ? ` · RIO updated ${new Date(data.lastCrawledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+          : "";
+        setSyncResult(`Baseline set — sync again after killing bosses to auto-tick this week's kills${crawled}`);
+      } else {
+        const crawled = data.lastCrawledAt
+          ? ` · RIO: ${new Date(data.lastCrawledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+          : "";
+        setSyncResult(`${selectedChar.name}-${selectedChar.realm}: M+: ${data.synced.mplusCount}/8 · N: ${data.synced.normalKills}/9 · H: ${data.synced.heroicKills}/9 · M: ${data.synced.mythicKills}/9${crawled}`);
+        loadChecklist(selectedChar);
+      }
+    } catch {
+      setSyncResult("Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function resetBaseline() {
+    if (!selectedChar) return;
+    if (!confirm(`Reset raid baseline for ${selectedChar.name}? Next sync will set a fresh baseline — sync BEFORE raiding this week so the baseline is 0.`)) return;
+    try {
+      const res = await fetch(`/api/wow/sync?characterId=${selectedChar.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.ok) setSyncResult(`Baseline cleared for ${data.character} — click Sync now to set fresh baseline`);
+      else setSyncResult(`Error: ${data.error}`);
+    } catch {
+      setSyncResult("Reset failed");
+    }
+  }
+
   async function addCharacter(e: React.FormEvent) {
     e.preventDefault();
     await fetch("/api/wow/character", {
@@ -168,28 +292,28 @@ export default function WoWHub() {
   }
 
   async function moveCharacter(char: WowCharacter, direction: "up" | "down") {
-    const sorted = [...characters].sort((a, b) => a.sortOrder - b.sortOrder);
+    // Sort by sortOrder, break ties by id (fixes the "all-zero" case)
+    const sorted = [...characters].sort((a, b) =>
+      a.sortOrder !== b.sortOrder ? a.sortOrder - b.sortOrder : a.id - b.id
+    );
     const idx = sorted.findIndex((c) => c.id === char.id);
     const swapIdx = direction === "up" ? idx - 1 : idx + 1;
     if (swapIdx < 0 || swapIdx >= sorted.length) return;
 
-    const other = sorted[swapIdx];
-    const myOrder = char.sortOrder;
-    const otherOrder = other.sortOrder;
+    // Swap in array, then rewrite all sortOrders as 0,1,2,... sequentially
+    // This fixes the "all sortOrder=0" case where swapping values is a no-op
+    const reordered = [...sorted];
+    [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
 
-    // Swap sortOrders
-    await Promise.all([
-      fetch("/api/wow/character", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: char.id, sortOrder: otherOrder }),
-      }),
-      fetch("/api/wow/character", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: other.id, sortOrder: myOrder }),
-      }),
-    ]);
+    await Promise.all(
+      reordered.map((c, i) =>
+        fetch("/api/wow/character", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: c.id, sortOrder: i }),
+        })
+      )
+    );
     loadCharacters();
   }
 
@@ -202,20 +326,48 @@ export default function WoWHub() {
     setLookupResult({ ...data, name: lookupForm.name });
   }
 
-  // Separate M+ runs (1-8) from custom tasks
-  const mplusTasks = checklist.filter((item) => getMPlusNumber(item.task) !== null);
-  const customTasks = checklist.filter((item) => getMPlusNumber(item.task) === null);
-  const mplusDone = mplusTasks.filter((t) => t.done).length;
+  // ── Checklist categorisation ──────────────────────────────────────────────
+  function getBossNumber(task: string, diff: string): number | null {
+    const m = task.match(new RegExp(`^${diff} Boss (\\d+)$`, "i"));
+    return m ? parseInt(m[1]) : null;
+  }
 
-  // Build an 8-slot M+ grid (slots 1-8)
-  const mplusGrid: (ChecklistItem | null)[] = Array.from({ length: 8 }, (_, i) => {
-    return mplusTasks.find((t) => getMPlusNumber(t.task) === i + 1) ?? null;
-  });
+  const mplusTasks   = checklist.filter((item) => getMPlusNumber(item.task) !== null);
+  const normalTasks  = checklist.filter((item) => getBossNumber(item.task, "Normal") !== null);
+  const heroicTasks  = checklist.filter((item) => getBossNumber(item.task, "Heroic") !== null);
+  const mythicTasks  = checklist.filter((item) => getBossNumber(item.task, "Mythic") !== null);
+  const raidTasks    = [...normalTasks, ...heroicTasks, ...mythicTasks];
+  const customTasks  = checklist.filter(
+    (item) =>
+      getMPlusNumber(item.task) === null &&
+      getBossNumber(item.task, "Normal") === null &&
+      getBossNumber(item.task, "Heroic") === null &&
+      getBossNumber(item.task, "Mythic") === null
+  );
+
+  const mplusDone  = mplusTasks.filter((t) => t.done).length;
+
+  // Build an 8-slot M+ grid
+  const mplusGrid: (ChecklistItem | null)[] = Array.from({ length: 8 }, (_, i) =>
+    mplusTasks.find((t) => getMPlusNumber(t.task) === i + 1) ?? null
+  );
+
+  // Build boss grids (9 slots each)
+  function buildBossGrid(tasks: ChecklistItem[], diff: string): (ChecklistItem | null)[] {
+    return Array.from({ length: 9 }, (_, i) =>
+      tasks.find((t) => getBossNumber(t.task, diff) === i + 1) ?? null
+    );
+  }
+  const normalGrid = buildBossGrid(normalTasks, "Normal");
+  const heroicGrid = buildBossGrid(heroicTasks, "Heroic");
+  const mythicGrid = buildBossGrid(mythicTasks, "Mythic");
 
   const doneCount = checklist.filter((c) => c.done).length;
   const pct = checklist.length > 0 ? Math.round((doneCount / checklist.length) * 100) : 0;
 
-  const sortedCharacters = [...characters].sort((a, b) => a.sortOrder - b.sortOrder);
+  const sortedCharacters = [...characters].sort((a, b) =>
+    a.sortOrder !== b.sortOrder ? a.sortOrder - b.sortOrder : a.id - b.id
+  );
 
   return (
     <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
@@ -373,7 +525,7 @@ export default function WoWHub() {
                         <div className="flex gap-2 mt-0.5">
                           {s.ilvl !== null && (
                             <span className="text-xs" style={{ color: "var(--accent-blue)" }}>
-                              {s.ilvl} ilvl
+                              {s.ilvl.toFixed(2)} ilvl
                             </span>
                           )}
                           {s.rioScore !== null && (
@@ -422,10 +574,36 @@ export default function WoWHub() {
                 <h2 className="font-semibold capitalize">
                   {selectedChar.name} — Weekly
                 </h2>
-                <span className="text-sm" style={{ color: "var(--text-muted)" }}>
-                  {doneCount}/{checklist.length}
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={syncFromRaiderIO}
+                    disabled={syncing}
+                    className="px-2.5 py-1 rounded-lg text-xs font-medium transition-all"
+                    style={{ background: "var(--accent-purple)22", color: "var(--accent-purple)" }}
+                    title="Auto-sync M+ and raid kills from Raider.IO"
+                  >
+                    {syncing ? "Syncing…" : "⟳ Sync"}
+                  </button>
+                  <button
+                    onClick={resetBaseline}
+                    disabled={syncing}
+                    className="px-2.5 py-1 rounded-lg text-xs font-medium transition-all"
+                    style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
+                    title="Reset raid baseline for this week (use if bosses show 0 incorrectly)"
+                  >
+                    ↺ Reset
+                  </button>
+                  <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+                    {doneCount}/{checklist.length}
+                  </span>
+                </div>
               </div>
+              {syncResult && (
+                <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>{syncResult}</p>
+              )}
+              <p className="text-[11px] mb-2" style={{ color: "var(--border)" }}>
+                How raid sync works: click Sync <strong>before</strong> raiding to set this week&apos;s baseline. Kill bosses, then click Sync again — new kills tick automatically. If boxes won&apos;t tick, use <strong>↺ Reset</strong> then Sync to capture a fresh baseline.
+              </p>
 
               <div className="mb-4">
                 <div
@@ -446,62 +624,70 @@ export default function WoWHub() {
               {loadingChecklist ? (
                 <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
               ) : (
-                <>
+                <div className="space-y-4">
                   {/* M+ 4×2 grid */}
-                  {mplusGrid.some((slot) => slot !== null) && (
-                    <div className="mb-4">
-                      <p className="text-xs font-medium mb-2" style={{ color: "var(--text-muted)" }}>
-                        M+ Runs ({mplusDone}/8)
-                      </p>
-                      <div className="grid grid-cols-4 gap-1.5">
-                        {mplusGrid.map((item, i) => (
-                          <button
-                            key={i}
-                            onClick={() => item && toggleTask(item)}
-                            disabled={!item}
-                            className="h-10 rounded-lg flex items-center justify-center text-sm font-bold transition-all"
-                            style={{
-                              background: item?.done
-                                ? "var(--accent-green)"
-                                : item
-                                ? "var(--surface-2)"
-                                : "var(--surface-2)",
-                              border: item?.done
-                                ? "1px solid var(--accent-green)"
-                                : "1px solid var(--border)",
-                              color: item?.done
-                                ? "#fff"
-                                : item
-                                ? "var(--text)"
-                                : "var(--border)",
-                              opacity: item ? 1 : 0.4,
-                            }}
-                          >
-                            {i + 1}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                  {mplusGrid.some((s) => s !== null) && (
+                    <CheckGrid
+                      label={`M+ Runs (${mplusDone}/8)`}
+                      grid={mplusGrid}
+                      cols={4}
+                      accentColor="var(--accent-purple)"
+                      onToggle={toggleTask}
+                      onDelete={deleteTask}
+                      allowDelete={false}
+                    />
+                  )}
+
+                  {/* Boss kill grids */}
+                  {normalGrid.some((s) => s !== null) && (
+                    <CheckGrid
+                      label={`Normal (${normalTasks.filter(t=>t.done).length}/9)`}
+                      grid={normalGrid}
+                      cols={5}
+                      accentColor="var(--accent-green)"
+                      onToggle={toggleTask}
+                      onDelete={deleteTask}
+                      allowDelete={false}
+                    />
+                  )}
+                  {heroicGrid.some((s) => s !== null) && (
+                    <CheckGrid
+                      label={`Heroic (${heroicTasks.filter(t=>t.done).length}/9)`}
+                      grid={heroicGrid}
+                      cols={5}
+                      accentColor="var(--accent-blue)"
+                      onToggle={toggleTask}
+                      onDelete={deleteTask}
+                      allowDelete={false}
+                    />
+                  )}
+                  {mythicGrid.some((s) => s !== null) && (
+                    <CheckGrid
+                      label={`Mythic (${mythicTasks.filter(t=>t.done).length}/9)`}
+                      grid={mythicGrid}
+                      cols={5}
+                      accentColor="var(--accent-orange)"
+                      onToggle={toggleTask}
+                      onDelete={deleteTask}
+                      allowDelete={false}
+                    />
                   )}
 
                   {/* Custom tasks */}
                   {customTasks.length > 0 && (
                     <div className="space-y-1.5">
+                      <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Custom</p>
                       {customTasks.map((item) => (
                         <div key={item.id} className="flex items-center gap-3">
                           <button
                             onClick={() => toggleTask(item)}
                             className="w-5 h-5 rounded-md flex-shrink-0 flex items-center justify-center transition-all"
                             style={{
-                              background: item.done
-                                ? "var(--accent-green)"
-                                : "var(--surface-2)",
+                              background: item.done ? "var(--accent-green)" : "var(--surface-2)",
                               border: `1px solid ${item.done ? "var(--accent-green)" : "var(--border)"}`,
                             }}
                           >
-                            {item.done && (
-                              <span className="text-white text-xs">✓</span>
-                            )}
+                            {item.done && <span className="text-white text-xs">✓</span>}
                           </button>
                           <span
                             className="flex-1 text-sm"
@@ -515,10 +701,7 @@ export default function WoWHub() {
                           <button
                             onClick={() => deleteTask(item.id)}
                             className="text-xs px-2 py-0.5 rounded-md"
-                            style={{
-                              color: "var(--accent-red)",
-                              border: "1px solid var(--accent-red)",
-                            }}
+                            style={{ color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
                           >
                             Remove
                           </button>
@@ -526,7 +709,7 @@ export default function WoWHub() {
                       ))}
                     </div>
                   )}
-                </>
+                </div>
               )}
 
               <form onSubmit={addTask} className="mt-4 flex gap-2">
@@ -581,7 +764,7 @@ export default function WoWHub() {
                         className="text-2xl font-bold"
                         style={{ color: "var(--accent-blue)" }}
                       >
-                        {stats.ilvl ?? "—"}
+                        {stats.ilvl !== null ? stats.ilvl.toFixed(2) : "—"}
                       </div>
                       <div className="text-xs" style={{ color: "var(--text-muted)" }}>
                         Item Level
@@ -697,7 +880,7 @@ export default function WoWHub() {
                     className="px-2 py-0.5 rounded-full text-xs font-semibold"
                     style={{ background: "var(--accent-blue)22", color: "var(--accent-blue)" }}
                   >
-                    {lookupResult.ilvl ?? "—"} ilvl
+                    {lookupResult.ilvl !== null ? lookupResult.ilvl.toFixed(2) : "—"} ilvl
                   </span>
                   <span
                     className="px-2 py-0.5 rounded-full text-xs font-semibold"

@@ -3,12 +3,12 @@ import { prisma } from "@/lib/prisma";
 
 function currentWeekStart(): Date {
   const now = new Date();
-  // WoW weekly reset is Wednesday 07:00 UTC
+  // WoW weekly reset is Wednesday 06:00 UTC
   const day = now.getUTCDay(); // 0=Sun, 3=Wed
   const daysSinceWed = (day - 3 + 7) % 7;
   const weekStart = new Date(now);
   weekStart.setUTCDate(now.getUTCDate() - daysSinceWed);
-  weekStart.setUTCHours(7, 0, 0, 0);
+  weekStart.setUTCHours(6, 0, 0, 0);
   return weekStart;
 }
 

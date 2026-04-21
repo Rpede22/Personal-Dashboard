@@ -8,15 +8,18 @@ export async function PATCH(
   const { id } = await params;
   const body = await request.json();
 
+  // If marking done, allow clearing overdue
+  const data: Record<string, unknown> = {};
+  if (body.title !== undefined)   data.title   = body.title;
+  if (body.dueDate !== undefined)  data.dueDate  = new Date(body.dueDate);
+  if (body.dueTime !== undefined)  data.dueTime  = body.dueTime ?? null;
+  if (body.subject !== undefined)  data.subject  = body.subject;
+  if (body.priority !== undefined) data.priority = body.priority;
+  if (body.status !== undefined)   data.status   = body.status;
+
   const assignment = await prisma.assignment.update({
     where: { id: parseInt(id) },
-    data: {
-      title: body.title,
-      dueDate: body.dueDate ? new Date(body.dueDate) : undefined,
-      subject: body.subject,
-      priority: body.priority,
-      status: body.status,
-    },
+    data,
   });
 
   return NextResponse.json({ assignment });

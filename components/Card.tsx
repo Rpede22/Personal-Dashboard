@@ -11,9 +11,14 @@ export default function Card({ children, accentColor, className = "" }: CardProp
     <div
       className={`rounded-2xl p-5 transition-all duration-200 group-hover:scale-[1.01] group-hover:brightness-110 ${className}`}
       style={{
-        background: "var(--surface)",
-        border: `1px solid ${accentColor ?? "var(--border)"}`,
-        boxShadow: accentColor ? `0 0 0 1px ${accentColor}22, 0 4px 24px ${accentColor}11` : "0 4px 24px rgba(0,0,0,0.3)",
+        background: accentColor
+          ? `linear-gradient(170deg, ${accentColor}1a 0%, var(--surface) 45%)`
+          : "var(--surface)",
+        border: accentColor ? `2px solid ${accentColor}` : `2px solid var(--border)`,
+        borderTop: accentColor ? `3px solid ${accentColor}` : `2px solid var(--border)`,
+        boxShadow: accentColor
+          ? `0 4px 28px ${accentColor}33`
+          : "0 4px 24px rgba(0,0,0,0.4)",
       }}
     >
       {children}
@@ -26,11 +31,13 @@ export function CardHeader({
   title,
   subtitle,
   accentColor,
+  showArrow = true,
 }: {
   icon: string;
   title: string;
   subtitle?: string;
   accentColor?: string;
+  showArrow?: boolean;
 }) {
   return (
     <div className="flex items-center gap-3 mb-4">
@@ -48,9 +55,11 @@ export function CardHeader({
           </p>
         )}
       </div>
-      <span className="ml-auto text-xs" style={{ color: "var(--text-muted)" }}>
-        →
-      </span>
+      {showArrow && (
+        <span className="ml-auto text-xs" style={{ color: "var(--text-muted)" }}>
+          →
+        </span>
+      )}
     </div>
   );
 }

@@ -184,21 +184,29 @@ export function runProbabilityEngine(
       pointsAccumulator.get(abbrev)?.push(pts);
     });
 
-    // Compute division ranks
+    // Compute division ranks (tiebreaker: regulation wins, then team abbrev)
     divisionTeams.forEach((divAbbrevs) => {
-      const sorted = [...divAbbrevs].sort(
-        (a, b) => (simPoints.get(b) ?? 0) - (simPoints.get(a) ?? 0)
-      );
+      const sorted = [...divAbbrevs].sort((a, b) => {
+        const ptsDiff = (simPoints.get(b) ?? 0) - (simPoints.get(a) ?? 0);
+        if (ptsDiff !== 0) return ptsDiff;
+        const rwDiff = (teams.get(b)?.regulationWins ?? 0) - (teams.get(a)?.regulationWins ?? 0);
+        if (rwDiff !== 0) return rwDiff;
+        return a.localeCompare(b);
+      });
       sorted.forEach((abbrev, idx) => {
         divRankAccumulator.get(abbrev)?.push(idx + 1);
       });
     });
 
-    // Compute conference ranks
+    // Compute conference ranks (same tiebreaker)
     conferenceTeams.forEach((confAbbrevs) => {
-      const sorted = [...confAbbrevs].sort(
-        (a, b) => (simPoints.get(b) ?? 0) - (simPoints.get(a) ?? 0)
-      );
+      const sorted = [...confAbbrevs].sort((a, b) => {
+        const ptsDiff = (simPoints.get(b) ?? 0) - (simPoints.get(a) ?? 0);
+        if (ptsDiff !== 0) return ptsDiff;
+        const rwDiff = (teams.get(b)?.regulationWins ?? 0) - (teams.get(a)?.regulationWins ?? 0);
+        if (rwDiff !== 0) return rwDiff;
+        return a.localeCompare(b);
+      });
       sorted.forEach((abbrev, idx) => {
         confRankAccumulator.get(abbrev)?.push(idx + 1);
       });

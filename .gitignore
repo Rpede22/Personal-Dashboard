@@ -1,6 +1,4 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
+# ── Dependencies ──────────────────────────────────────────────────────────────
 /node_modules
 /.pnp
 .pnp.*
@@ -10,54 +8,62 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
-# next.js
+# ── Next.js build output ──────────────────────────────────────────────────────
 /.next/
 /out/
-
-# production
 /build
 
-# misc
+# ── Electron build output ─────────────────────────────────────────────────────
+/dist
+/dist-electron
+/release
+
+# ── Prisma generated client (rebuilt with `npx prisma generate`) ──────────────
+/app/generated/prisma
+
+# ── Database ──────────────────────────────────────────────────────────────────
+dev.db
+dev.db-journal
+prisma/dev.db
+prisma/dev.db-journal
+*.db
+*.db-journal
+
+# ── Secrets and local config ──────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+# .env.example is intentionally NOT ignored (safe to commit — no secrets)
+
+# ── Runtime config files (written at runtime, contain personal data/tokens) ───
+.strava-config.json
+.wow-raid-baseline.json
+.race-config.json
+.strava-tokens.json
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/settings.local.json
+.claude/projects/
+
+# ── Build resources (seeded DB used during Electron packaging) ────────────────
+build-resources/*.db
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
 *.pem
 
-# debug
+# ── Logs ──────────────────────────────────────────────────────────────────────
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files — keep .env.example if you create one, ignore real secrets
-.env
-.env.local
-.env.*.local
-
-# vercel
-.vercel
-
-# typescript
+# ── TypeScript ────────────────────────────────────────────────────────────────
 *.tsbuildinfo
 next-env.d.ts
 
-# prisma generated client
-/app/generated/prisma
+# ── Testing ───────────────────────────────────────────────────────────────────
+/coverage
 
-# sqlite database
-dev.db
-dev.db-journal
-
-# race config (local runtime file)
-.race-config.json
-
-# electron build output
-/dist
-/dist-electron
-
-# electron release artifacts
-release/
-
-# claude code local settings (permissions etc.)
-.claude/settings.local.json
+# ── Vercel ────────────────────────────────────────────────────────────────────
+.vercel

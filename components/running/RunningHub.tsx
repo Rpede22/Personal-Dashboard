@@ -102,10 +102,16 @@ export default function RunningHub() {
   const [addPlanDay, setAddPlanDay] = useState<string | null>(null); // date string for inline form
   const [planForm, setPlanForm] = useState({ type: "easy", distance: "", notes: "" });
 
+  // Strava state
+  const [stravaConnected, setStravaConnected] = useState(false);
+  const [stravaHasCredentials, setStravaHasCredentials] = useState(false);
+  const [stravaLoading, setStravaLoading] = useState(false);
+  const [stravaSyncResult, setStravaSyncResult] = useState<string | null>(null);
+
   async function loadRuns() {
     setLoading(true);
     try {
-      const res = await fetch("/api/running?limit=30");
+      const res = await fetch("/api/running?limit=1000");
       const data = await res.json();
       setRuns(data.runs ?? []);
     } finally {
@@ -128,8 +134,43 @@ export default function RunningHub() {
     setPlans(data.plans ?? []);
   }
 
+  async function checkStrava() {
+    try {
+      const res = await fetch("/api/strava");
+      const data = await res.json();
+      setStravaConnected(data.connected);
+      setStravaHasCredentials(data.hasCredentials);
+    } catch {}
+  }
+
+  async function syncStrava() {
+    setStravaLoading(true);
+    setStravaSyncResult(null);
+    try {
+      const res = await fetch("/api/strava/sync", { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        setStravaSyncResult(`Error: ${data.error}`);
+      } else {
+        setStravaSyncResult(`Imported ${data.imported}, skipped ${data.skipped} duplicates`);
+        loadRuns();
+      }
+    } catch {
+      setStravaSyncResult("Sync failed");
+    } finally {
+      setStravaLoading(false);
+    }
+  }
+
+  async function disconnectStrava() {
+    await fetch("/api/strava", { method: "DELETE" });
+    setStravaConnected(false);
+    setStravaSyncResult(null);
+  }
+
   useEffect(() => {
     loadRuns();
+    checkStrava();
     loadSummary();
   }, []);
 
@@ -233,6 +274,26 @@ export default function RunningHub() {
   const weeklyKm = runs
     .filter((r) => toUTCDateStr(new Date(r.date)) >= mondayStr)
     .reduce((sum, r) => sum + r.distance, 0);
+
+  const thirtyDaysAgo = new Date(now);
+  thirtyDaysAgo.setDate(now.getDate() - 30);
+  const thirtyDaysAgoStr = toLocalDateStr(thirtyDaysAgo);
+  const monthlyKm = runs
+    .filter((r) => toUTCDateStr(new Date(r.date)) >= thirtyDaysAgoStr)
+    .reduce((sum, r) => sum + r.distance, 0);
+
+  // Calendar month (1st of this month → now)
+  const monthStartStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const thisMonthKm = runs
+    .filter((r) => toUTCDateStr(new Date(r.date)) >= monthStartStr)
+    .reduce((sum, r) => sum + r.distance, 0);
+
+  // This year (Jan 1 → now)
+  const yearStartStr = `${now.getFullYear()}-01-01`;
+  const thisYearKm = runs
+    .filter((r) => toUTCDateStr(new Date(r.date)) >= yearStartStr)
+    .reduce((sum, r) => sum + r.distance, 0);
+
   const totalKm = runs.reduce((sum, r) => sum + r.distance, 0);
 
   const weekDays = getWeekDays(weekStart);
@@ -279,14 +340,17 @@ export default function RunningHub() {
       </div>
 
       {/* Stats bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-7 gap-3 mb-6">
         {[
-          { label: "This week", value: `${weeklyKm.toFixed(1)} km`, color: "var(--accent-green)" },
-          { label: "Total logged", value: `${totalKm.toFixed(1)} km`, color: "var(--accent-blue)" },
-          { label: "Total runs", value: runs.length.toString(), color: "var(--accent-purple)" },
+          { label: "This week",    value: `${weeklyKm.toFixed(1)} km`,   color: "var(--accent-green)" },
+          { label: "Last 30 days", value: `${monthlyKm.toFixed(1)} km`,  color: "var(--accent-green)" },
+          { label: "This month",   value: `${thisMonthKm.toFixed(1)} km`, color: "var(--accent-blue)" },
+          { label: "This year",    value: `${thisYearKm.toFixed(1)} km`,  color: "var(--accent-purple)" },
+          { label: "Total logged", value: `${totalKm.toFixed(1)} km`,    color: "var(--accent-blue)" },
+          { label: "Total runs",   value: runs.length.toString(),          color: "var(--accent-purple)" },
           {
             label: "Days to race",
-            value: daysToRace !== null ? daysToRace.toString() : "—",
+            value: daysToRace !== null ? `${daysToRace}d` : "—",
             color: "var(--accent-orange)",
           },
         ].map((stat) => (
@@ -335,6 +399,23 @@ export default function RunningHub() {
           Save
         </button>
         {raceDate && (
+          <button
+            onClick={async () => {
+              await fetch("/api/running/summary", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ raceDate: "" }),
+              });
+              setRaceDate("");
+              setRaceDateInput("");
+            }}
+            className="px-4 py-1.5 rounded-lg text-sm"
+            style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
+          >
+            Clear
+          </button>
+        )}
+        {raceDate && (
           <span className="text-sm" style={{ color: "var(--text-muted)" }}>
             {new Date(raceDate).toLocaleDateString("en-GB", {
               weekday: "long",
@@ -343,6 +424,74 @@ export default function RunningHub() {
               day: "numeric",
             })}
           </span>
+        )}
+      </div>
+
+      {/* Strava integration */}
+      <div
+        className="rounded-2xl p-4 mb-6 flex flex-wrap items-center gap-3"
+        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+      >
+        <span className="text-lg">🏃</span>
+        <span className="text-sm font-semibold" style={{ color: "var(--accent-orange)" }}>Strava</span>
+        {stravaConnected ? (
+          <>
+            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--accent-green)22", color: "var(--accent-green)" }}>Connected</span>
+            <button
+              onClick={syncStrava}
+              disabled={stravaLoading}
+              className="px-3 py-1.5 rounded-lg text-sm"
+              style={{ background: "var(--accent-orange)", color: "#fff" }}
+            >
+              {stravaLoading ? "Syncing…" : "Sync runs"}
+            </button>
+            <button
+              onClick={disconnectStrava}
+              className="px-3 py-1.5 rounded-lg text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
+            >
+              Disconnect
+            </button>
+            {stravaSyncResult && (
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>{stravaSyncResult}</span>
+            )}
+          </>
+        ) : stravaHasCredentials ? (
+          <a
+            href="/api/strava/auth"
+            className="px-4 py-1.5 rounded-lg text-sm font-semibold"
+            style={{ background: "var(--accent-orange)", color: "#fff" }}
+          >
+            Connect Strava
+          </a>
+        ) : (
+          <div className="text-xs space-y-1" style={{ color: "var(--text-muted)" }}>
+            <p className="font-medium" style={{ color: "var(--text)" }}>Setup required — 3 steps:</p>
+            <ol className="list-decimal list-inside space-y-0.5">
+              <li>
+                Create a Strava app at{" "}
+                <a
+                  href="https://www.strava.com/settings/api"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                  style={{ color: "var(--accent-orange)" }}
+                >
+                  strava.com/settings/api
+                </a>
+                {" "}— set <em>Authorization Callback Domain</em> to{" "}
+                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>localhost</code>
+              </li>
+              <li>
+                Add to{" "}
+                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>.env.local</code>
+                :{" "}
+                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>STRAVA_CLIENT_ID=…</code>{" "}
+                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>STRAVA_CLIENT_SECRET=…</code>
+              </li>
+              <li>Restart the dev server, then a &quot;Connect Strava&quot; button will appear here</li>
+            </ol>
+          </div>
         )}
       </div>
 

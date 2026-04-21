@@ -10,9 +10,10 @@ export async function GET(request: Request) {
   const teams = searchParams.get("teams"); // comma-separated abbrevs, optional
   const gamesAhead = parseInt(searchParams.get("games") ?? "5");
 
+  const bust = searchParams.get("bust"); // pass ?bust=1 to force refresh
   const cacheKey = `${scope}-${gamesAhead}`;
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < TTL) {
+  if (!bust && cached && Date.now() - cached.ts < TTL) {
     return NextResponse.json(cached.data);
   }
 
@@ -56,10 +57,12 @@ export async function GET(request: Request) {
     }
 
     // Filter to games involving teams in our scope and map to ScheduledGame
+    // gameType 2 = regular season only (3 = playoffs) — playoff games must not affect predicted standings
     const relevantGames = allGames
       .filter((g) => {
-        const game = g as { homeTeam: { abbrev: string }; awayTeam: { abbrev: string }; gameState: string };
+        const game = g as { homeTeam: { abbrev: string }; awayTeam: { abbrev: string }; gameState: string; gameType: number };
         return (
+          game.gameType === 2 &&
           (game.gameState === "FUT" || game.gameState === "PRE") &&
           (abbrevs.includes(game.homeTeam.abbrev) || abbrevs.includes(game.awayTeam.abbrev))
         );

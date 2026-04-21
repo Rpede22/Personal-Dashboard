@@ -41,7 +41,9 @@ interface ProbResult {
 }
 
 interface Game {
+  gameId?: string | number;
   gameDate: string;
+  startTimeUTC?: string;
   homeTeam: { abbrev: string; score?: number };
   awayTeam: { abbrev: string; score?: number };
   gameState: string;
@@ -49,7 +51,36 @@ interface Game {
   periodType?: string | null;
 }
 
-// ── Playoffs types ─────────────────────────────────────────────────────────────
+interface GoalEvent {
+  period: number;
+  periodType: string;
+  timeInPeriod: string;
+  scorer: string;
+  assists: string[];
+  isHomeGoal: boolean;
+  homeScore: number;
+  awayScore: number;
+  strength: "EV" | "PP1" | "PP2" | "SH" | "EN" | "SO";
+}
+
+// ── Live bracket types ─────────────────────────────────────────────────────────
+
+interface BracketSeries {
+  letter: string;
+  roundNumber: number;
+  conference: string;
+  topSeed: { abbrev: string; wins: number };
+  bottomSeed: { abbrev: string; wins: number };
+  status: string;
+  complete: boolean;
+}
+
+interface BracketData {
+  series: BracketSeries[];
+  year: number;
+}
+
+// ── Predicted playoffs types ───────────────────────────────────────────────────
 
 interface PlayoffTeamInfo {
   role: string;
@@ -115,22 +146,9 @@ const STANDINGS_HEADERS: { label: string; title: string }[] = [
 
 const ROUND_LABELS = ["First Round", "Second Round", "Conference Final"];
 
-const PROB_HEADERS: (gamesAhead: number) => { label: string; title: string }[] = (n) => [
-  { label: "#", title: "Rank" },
-  { label: "Team", title: "Team" },
-  { label: "Now", title: "Current points" },
-  { label: `Exp. Pts (+${n})`, title: `Expected points after ${n} games (Monte Carlo average)` },
-  { label: "Gain", title: "Expected points gained" },
-  { label: "Top 3 div", title: "Probability of finishing in top 3 of division" },
-  { label: "P(#1)", title: "Probability of 1st in division" },
-  { label: "P(#2)", title: "Probability of 2nd in division" },
-  { label: "P(#3)", title: "Probability of 3rd in division" },
-  { label: "Games", title: "Games simulated ahead" },
-];
 
 export default function NHLHub() {
   const [standings, setStandings] = useState<Standing[]>([]);
-  const [probResults, setProbResults] = useState<ProbResult[]>([]);
   const [schedule, setSchedule] = useState<{ recent: Game[]; next5: Game[] }>({ recent: [], next5: [] });
   const [playoffs, setPlayoffs] = useState<PlayoffsData | null>(null);
   const [scopeType, setScopeType] = useState<ScopeType>("division");
@@ -138,13 +156,15 @@ export default function NHLHub() {
   const [conference, setConference] = useState<Conference>("western");
   const [gamesAhead, setGamesAhead] = useState(5);
   const [loadingStandings, setLoadingStandings] = useState(true);
-  const [loadingProb, setLoadingProb] = useState(false);
   const [loadingPlayoffs, setLoadingPlayoffs] = useState(false);
-  const [tab, setTab] = useState<"standings" | "probability" | "schedule" | "playoffs">("standings");
-
-  const scopeParam =
-    scopeType === "division" ? `division:${division}` :
-    scopeType === "conference" ? `conference:${conference}` : "league";
+  const [tab, setTab] = useState<"standings" | "schedule" | "playoffs" | "predicted" | "playoff-predicted">("standings");
+  const [predictedResults, setPredictedResults] = useState<Record<string, ProbResult[]>>({});
+  const [loadingPredicted, setLoadingPredicted] = useState(false);
+  const [bracket, setBracket] = useState<BracketData | null>(null);
+  const [loadingBracket, setLoadingBracket] = useState(false);
+  const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[]>>({});
+  const [loadingGoals, setLoadingGoals] = useState<Set<string>>(new Set());
+  const [expandedGame, setExpandedGame] = useState<string | null>(null);
 
   const loadStandings = useCallback(async () => {
     setLoadingStandings(true);
@@ -159,17 +179,6 @@ export default function NHLHub() {
     }
   }, [scopeType, division, conference]);
 
-  const loadProbability = useCallback(async () => {
-    setLoadingProb(true);
-    try {
-      const res = await fetch(`/api/nhl/probability?scope=${scopeParam}&games=${gamesAhead}`);
-      const data = await res.json();
-      setProbResults(data.results ?? []);
-    } finally {
-      setLoadingProb(false);
-    }
-  }, [scopeParam, gamesAhead]);
-
   const loadPlayoffs = useCallback(async () => {
     setLoadingPlayoffs(true);
     try {
@@ -181,6 +190,49 @@ export default function NHLHub() {
     }
   }, []);
 
+  const loadBracket = useCallback(async () => {
+    setLoadingBracket(true);
+    try {
+      const res = await fetch("/api/nhl/bracket");
+      const data = await res.json();
+      setBracket(data.error ? null : data);
+    } finally {
+      setLoadingBracket(false);
+    }
+  }, []);
+
+  const loadPredicted = useCallback(async () => {
+    setLoadingPredicted(true);
+    try {
+      const divisions = ["pacific", "central", "atlantic", "metropolitan"];
+      const results: Record<string, ProbResult[]> = {};
+      await Promise.all(
+        divisions.map(async (div) => {
+          const res = await fetch(`/api/nhl/probability?scope=division:${div}&games=${gamesAhead}`);
+          const data = await res.json();
+          results[div] = data.results ?? [];
+        })
+      );
+      setPredictedResults(results);
+    } finally {
+      setLoadingPredicted(false);
+    }
+  }, [gamesAhead]);
+
+  async function toggleGoals(gameId: string) {
+    if (expandedGame === gameId) { setExpandedGame(null); return; }
+    setExpandedGame(gameId);
+    if (goalsMap[gameId] !== undefined || loadingGoals.has(gameId)) return;
+    setLoadingGoals((prev) => new Set(prev).add(gameId));
+    try {
+      const res = await fetch(`/api/nhl/goals?gameId=${gameId}`);
+      const data = await res.json();
+      setGoalsMap((prev) => ({ ...prev, [gameId]: data.goals ?? [] }));
+    } finally {
+      setLoadingGoals((prev) => { const s = new Set(prev); s.delete(gameId); return s; });
+    }
+  }
+
   useEffect(() => { loadStandings(); }, [loadStandings]);
 
   useEffect(() => {
@@ -190,6 +242,20 @@ export default function NHLHub() {
       .catch(() => {});
   }, []);
 
+  function formatCEST(dateStr: string, startTimeUTC?: string): string {
+    // If we have a full ISO timestamp from startTimeUTC, use it
+    const d = startTimeUTC ? new Date(startTimeUTC) : new Date(dateStr);
+    // Format in Europe/Berlin timezone (CEST in summer)
+    return d.toLocaleString("en-GB", {
+      timeZone: "Europe/Berlin",
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }) + " CEST";
+  }
+
   function gameResult(game: Game, team = "EDM"): "W" | "L" | "OTL" | "?" {
     if (game.gameState !== "OFF" && game.gameState !== "FINAL") return "?";
     const myScore = game.homeTeam.abbrev === team ? game.homeTeam.score : game.awayTeam.score;
@@ -198,9 +264,6 @@ export default function NHLHub() {
     if (myScore > oppScore) return "W";
     return (game.periodType === "OT" || game.periodType === "SO") ? "OTL" : "L";
   }
-
-  const topRankProb = (result: ProbResult) =>
-    Math.round([1, 2, 3].reduce((sum, r) => sum + (result.divisionRankDistribution[r] ?? 0), 0) * 100);
 
   // ── Playoffs helpers ──────────────────────────────────────────────────────
 
@@ -303,92 +366,73 @@ export default function NHLHub() {
         </h1>
       </div>
 
-      {/* Scope controls */}
-      <div
-        className="rounded-2xl p-4 mb-6 flex flex-wrap gap-4 items-end"
-        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-      >
-        <div>
-          <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>View</label>
-          <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid var(--border)" }}>
-            {(["division", "conference", "league"] as ScopeType[]).map((s) => (
-              <button
-                key={s}
-                onClick={() => setScopeType(s)}
-                className="px-3 py-1.5 text-sm capitalize transition-colors"
-                style={{
-                  background: scopeType === s ? "var(--accent-blue)" : "var(--surface-2)",
-                  color: scopeType === s ? "#fff" : "var(--text-muted)",
-                }}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {scopeType === "division" && (
-          <div>
-            <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Division</label>
-            <select
-              value={division}
-              onChange={(e) => setDivision(e.target.value as Division)}
-              className="rounded-lg px-3 py-1.5 text-sm"
-              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
-            >
-              <option value="pacific">Pacific</option>
-              <option value="central">Central</option>
-              <option value="atlantic">Atlantic</option>
-              <option value="metropolitan">Metropolitan</option>
-            </select>
-          </div>
-        )}
-
-        {scopeType === "conference" && (
-          <div>
-            <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Conference</label>
-            <select
-              value={conference}
-              onChange={(e) => setConference(e.target.value as Conference)}
-              className="rounded-lg px-3 py-1.5 text-sm"
-              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
-            >
-              <option value="western">Western</option>
-              <option value="eastern">Eastern</option>
-            </select>
-          </div>
-        )}
-
-        <button
-          onClick={loadStandings}
-          className="px-4 py-1.5 rounded-lg text-sm font-medium"
-          style={{ background: "var(--accent-blue)", color: "#fff" }}
-        >
-          Refresh
-        </button>
-      </div>
-
       {/* Tabs */}
-      <div className="flex gap-1 mb-4">
-        {(["standings", "probability", "schedule", "playoffs"] as const).map((t) => (
+      <div className="flex gap-1 mb-4 flex-wrap">
+        {([
+          ["standings", "Standings"],
+          ["schedule", "Schedule"],
+          ["playoffs", "Playoffs"],
+          ["predicted", "Predicted"],
+          ["playoff-predicted", "Playoff Predicted"],
+        ] as const).map(([t, label]) => (
           <button
             key={t}
             onClick={() => {
               setTab(t);
-              if (t === "probability" && probResults.length === 0) loadProbability();
-              if (t === "playoffs" && playoffs === null) loadPlayoffs();
+              if (t === "predicted" && Object.keys(predictedResults).length === 0) loadPredicted();
+              if (t === "playoff-predicted" && playoffs === null) loadPlayoffs();
+              if (t === "playoffs" && bracket === null) loadBracket();
             }}
-            className="px-4 py-2 rounded-lg text-sm font-medium capitalize transition-colors"
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             style={{
               background: tab === t ? "var(--surface)" : "transparent",
               color: tab === t ? "var(--accent-blue)" : "var(--text-muted)",
               border: tab === t ? "1px solid var(--border)" : "1px solid transparent",
             }}
           >
-            {t}
+            {label}
           </button>
         ))}
       </div>
+
+      {/* Scope controls — standings only, below tabs */}
+      {tab === "standings" && (
+        <div className="rounded-2xl p-4 mb-4 flex flex-wrap gap-4 items-end" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div>
+            <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>View</label>
+            <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid var(--border)" }}>
+              {(["division", "conference", "league"] as ScopeType[]).map((s) => (
+                <button key={s} onClick={() => setScopeType(s)} className="px-3 py-1.5 text-sm capitalize transition-colors" style={{ background: scopeType === s ? "var(--accent-blue)" : "var(--surface-2)", color: scopeType === s ? "#fff" : "var(--text-muted)" }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          {scopeType === "division" && (
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Division</label>
+              <select value={division} onChange={(e) => setDivision(e.target.value as Division)} className="rounded-lg px-3 py-1.5 text-sm" style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}>
+                <option value="pacific">Pacific</option>
+                <option value="central">Central</option>
+                <option value="atlantic">Atlantic</option>
+                <option value="metropolitan">Metropolitan</option>
+              </select>
+            </div>
+          )}
+          {scopeType === "conference" && (
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Conference</label>
+              <select value={conference} onChange={(e) => setConference(e.target.value as Conference)} className="rounded-lg px-3 py-1.5 text-sm" style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}>
+                <option value="western">Western</option>
+                <option value="eastern">Eastern</option>
+              </select>
+            </div>
+          )}
+          <button onClick={loadStandings} className="px-4 py-1.5 rounded-lg text-sm font-medium" style={{ background: "var(--accent-blue)", color: "#fff" }}>
+            Refresh
+          </button>
+        </div>
+      )}
 
       {/* ── Standings ── */}
       {tab === "standings" && (
@@ -420,6 +464,9 @@ export default function NHLHub() {
                   const divColor = DIVISION_COLORS[s.division?.toLowerCase() as Division] ?? "var(--accent-blue)";
                   const l10 = `${s.l10Wins ?? 0}-${s.l10Losses ?? 0}-${s.l10OtLosses ?? 0}`;
                   const l10Pts = (s.l10Wins ?? 0) * 2 + (s.l10OtLosses ?? 0);
+                  // Playoff spot badges: top 3 per division = guaranteed (P), wildcard rank ≤ 2 (div > 3) = WC
+                  const isGuaranteed = (s.divisionRank ?? 99) <= 3;
+                  const isWildcard = !isGuaranteed && (s.wildcardRank ?? 99) <= 2;
                   return (
                     <tr
                       key={s.teamAbbrev}
@@ -430,12 +477,26 @@ export default function NHLHub() {
                     >
                       <td className="px-4 py-3 font-bold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
                       <td className="px-4 py-3">
-                        <span className="font-semibold" style={{ color: isEDM ? divColor : "var(--text)" }}>
-                          {s.teamAbbrev}
-                        </span>
-                        <span className="ml-2 text-xs hidden sm:inline" style={{ color: "var(--text-muted)" }}>
-                          {s.teamName}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold" style={{ color: isEDM ? divColor : "var(--text)" }}>
+                            {s.teamAbbrev}
+                          </span>
+                          {isGuaranteed && (
+                            <span
+                              title="Division playoff spot (top 3)"
+                              style={{ fontSize: "10px", fontWeight: 700, padding: "0 3px", borderRadius: "3px", background: "var(--accent-green)33", color: "var(--accent-green)" }}
+                            >P</span>
+                          )}
+                          {isWildcard && (
+                            <span
+                              title="Wild card playoff spot"
+                              style={{ fontSize: "10px", fontWeight: 700, padding: "0 3px", borderRadius: "3px", background: "var(--accent-orange)33", color: "var(--accent-orange)" }}
+                            >WC</span>
+                          )}
+                          <span className="ml-1 text-xs hidden sm:inline" style={{ color: "var(--text-muted)" }}>
+                            {s.teamName}
+                          </span>
+                        </div>
                       </td>
                       <td className="px-4 py-3">{s.gamesPlayed}</td>
                       <td className="px-4 py-3">{s.wins}</td>
@@ -464,8 +525,8 @@ export default function NHLHub() {
         </div>
       )}
 
-      {/* ── Probability ── */}
-      {tab === "probability" && (
+      {/* ── Predicted Standings ── */}
+      {tab === "predicted" && (
         <div className="space-y-4">
           <div className="flex items-center gap-4">
             <div>
@@ -488,74 +549,127 @@ export default function NHLHub() {
               </div>
             </div>
             <button
-              onClick={loadProbability}
+              onClick={loadPredicted}
               className="mt-5 px-4 py-1.5 rounded-lg text-sm font-medium"
               style={{ background: "var(--accent-blue)", color: "#fff" }}
             >
-              {loadingProb ? "Simulating…" : "Run Simulation"}
+              {loadingPredicted ? "Simulating\u2026" : "Run All Divisions"}
             </button>
           </div>
 
-          {loadingProb ? (
+          {loadingPredicted ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-              <div style={{ color: "var(--text-muted)" }}>Running Monte Carlo simulation ({(20000).toLocaleString()} iterations)…</div>
+              <div style={{ color: "var(--text-muted)" }}>Running simulations for all divisions\u2026</div>
             </div>
-          ) : probResults.length === 0 ? (
+          ) : Object.keys(predictedResults).length === 0 ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-              <p style={{ color: "var(--text-muted)" }}>Click &quot;Run Simulation&quot; to calculate probabilities</p>
+              <p style={{ color: "var(--text-muted)" }}>Click &quot;Run All Divisions&quot; to calculate predicted standings</p>
             </div>
           ) : (
-            <div className="rounded-2xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-              <div className="p-4 border-b" style={{ borderColor: "var(--border)" }}>
-                <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-                  Weighted Monte Carlo after next {gamesAhead} games. Home ice base 54%, adjusted by pts% and regulation win rate.
-                  {(20000).toLocaleString()} simulations.
-                </p>
-              </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    {PROB_HEADERS(gamesAhead).map(({ label, title }) => (
-                      <th key={label} title={title} className="px-4 py-3 text-left font-medium cursor-help" style={{ color: "var(--text-muted)" }}>
-                        {label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {probResults.map((r, i) => {
-                    const isEDM = r.teamAbbrev === "EDM";
-                    const gain = r.expectedPoints - r.currentPoints;
-                    const p1 = Math.round((r.divisionRankDistribution["1"] ?? 0) * 100);
-                    const p2 = Math.round((r.divisionRankDistribution["2"] ?? 0) * 100);
-                    const p3 = Math.round((r.divisionRankDistribution["3"] ?? 0) * 100);
-                    return (
-                      <tr
-                        key={r.teamAbbrev}
-                        style={{ borderBottom: "1px solid var(--border)", background: isEDM ? "var(--accent-blue)11" : "transparent" }}
-                      >
-                        <td className="px-4 py-3 font-bold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
-                        <td className="px-4 py-3 font-semibold">
-                          <span style={{ color: isEDM ? "var(--accent-blue)" : "var(--text)" }}>{r.teamAbbrev}</span>
-                        </td>
-                        <td className="px-4 py-3">{r.currentPoints}</td>
-                        <td className="px-4 py-3 font-bold" style={{ color: "var(--accent-green)" }}>{r.expectedPoints.toFixed(1)}</td>
-                        <td className="px-4 py-3" style={{ color: "var(--accent-orange)" }}>+{gain.toFixed(1)}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="h-2 rounded-full" style={{ width: `${topRankProb(r)}px`, maxWidth: "60px", background: "var(--accent-blue)", opacity: 0.7 }} />
-                            <span style={{ color: isEDM ? "var(--accent-blue)" : "var(--text)" }}>{topRankProb(r)}%</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">{p1}%</td>
-                        <td className="px-4 py-3">{p2}%</td>
-                        <td className="px-4 py-3">{p3}%</td>
-                        <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>{r.gamesAhead}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div className="space-y-6">
+              <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                Monte Carlo predicted standings after next {gamesAhead} games &middot; {(20000).toLocaleString()} simulations per division
+              </p>
+
+              {/* Division standings */}
+              {(["pacific", "central", "atlantic", "metropolitan"] as const).map((div) => {
+                const divResults = predictedResults[div] ?? [];
+                if (divResults.length === 0) return null;
+                const divColor = DIVISION_COLORS[div];
+                return (
+                  <div key={div} className="rounded-2xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: "var(--border)" }}>
+                      <div className="w-3 h-3 rounded-full" style={{ background: divColor }} />
+                      <h3 className="font-semibold capitalize">{div} Division</h3>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                          {["#", "Team", "Current", "Predicted", "Gain", "Likely Rank", "Rank %"].map((h) => (
+                            <th key={h} className="px-4 py-2 text-left font-medium" style={{ color: "var(--text-muted)" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...divResults].sort((a, b) => a.mostLikelyDivRank - b.mostLikelyDivRank).map((r, i) => {
+                          const isEDM = r.teamAbbrev === "EDM";
+                          const gain = r.expectedPoints - r.currentPoints;
+                          const rankProb = r.gamesAhead === 0 ? 100 : Math.round((r.divisionRankDistribution[r.mostLikelyDivRank] ?? 0) * 100);
+                          return (
+                            <tr key={r.teamAbbrev} style={{ borderBottom: "1px solid var(--border)", background: isEDM ? "var(--accent-blue)11" : "transparent" }}>
+                              <td className="px-4 py-2 font-bold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
+                              <td className="px-4 py-2 font-semibold" style={{ color: isEDM ? "var(--accent-blue)" : "var(--text)" }}>{r.teamAbbrev}</td>
+                              <td className="px-4 py-2">{r.currentPoints}</td>
+                              <td className="px-4 py-2 font-bold" style={{ color: "var(--accent-green)" }}>{r.expectedPoints.toFixed(1)}</td>
+                              <td className="px-4 py-2" style={{ color: "var(--accent-orange)" }}>+{gain.toFixed(1)}</td>
+                              <td className="px-4 py-2 text-center">
+                                <span className="inline-block w-7 h-7 rounded-lg text-sm font-bold leading-7 text-center" style={{
+                                  background: r.mostLikelyDivRank === 1 ? "var(--accent-green)" : r.mostLikelyDivRank <= 3 ? "var(--accent-blue)33" : "var(--surface-2)",
+                                  color: r.mostLikelyDivRank === 1 ? "#fff" : r.mostLikelyDivRank <= 3 ? "var(--accent-blue)" : "var(--text-muted)",
+                                }}>
+                                  {r.mostLikelyDivRank}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-2 rounded-full" style={{ width: `${rankProb}px`, maxWidth: "60px", background: divColor, opacity: 0.7 }} />
+                                  <span>{rankProb}%</span>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+
+              {/* Conference standings */}
+              {(["Western", "Eastern"] as const).map((conf) => {
+                const confDivisions = conf === "Western" ? ["pacific", "central"] : ["atlantic", "metropolitan"];
+                const confTeams = confDivisions.flatMap((d) => predictedResults[d] ?? []).sort((a, b) => b.expectedPoints - a.expectedPoints);
+                if (confTeams.length === 0) return null;
+                const confColor = conf === "Western" ? "var(--accent-orange)" : "var(--accent-purple)";
+                return (
+                  <div key={conf} className="rounded-2xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: "var(--border)" }}>
+                      <div className="w-3 h-3 rounded-full" style={{ background: confColor }} />
+                      <h3 className="font-semibold">{conf} Conference</h3>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                          {["#", "Team", "Division", "Current", "Predicted", "Gain"].map((h) => (
+                            <th key={h} className="px-4 py-2 text-left font-medium" style={{ color: "var(--text-muted)" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {confTeams.map((r, i) => {
+                          const isEDM = r.teamAbbrev === "EDM";
+                          const gain = r.expectedPoints - r.currentPoints;
+                          const divColor = DIVISION_COLORS[r.division?.toLowerCase() as Division] ?? "var(--text-muted)";
+                          return (
+                            <tr key={r.teamAbbrev} style={{ borderBottom: "1px solid var(--border)", background: isEDM ? "var(--accent-blue)11" : "transparent" }}>
+                              <td className="px-4 py-2 font-bold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
+                              <td className="px-4 py-2 font-semibold" style={{ color: isEDM ? "var(--accent-blue)" : "var(--text)" }}>{r.teamAbbrev}</td>
+                              <td className="px-4 py-2">
+                                <span className="text-xs px-2 py-0.5 rounded-full font-medium capitalize" style={{ background: `${divColor}22`, color: divColor }}>
+                                  {r.division}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2">{r.currentPoints}</td>
+                              <td className="px-4 py-2 font-bold" style={{ color: "var(--accent-green)" }}>{r.expectedPoints.toFixed(1)}</td>
+                              <td className="px-4 py-2" style={{ color: "var(--accent-orange)" }}>+{gain.toFixed(1)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -572,22 +686,93 @@ export default function NHLHub() {
               ) : (
                 schedule.recent.map((g, i) => {
                   const res = gameResult(g);
+                  const gid = String(g.gameId ?? i);
+                  const isExpanded = expandedGame === gid;
+                  const goals: GoalEvent[] = goalsMap[gid] ?? [];
+                  const isLoadingGoals = loadingGoals.has(gid);
                   return (
-                    <div key={i} className="flex items-center gap-4 rounded-xl p-3" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                      <span
-                        className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold"
-                        style={{
-                          background: res === "W" ? "var(--accent-green)" : res === "OTL" ? "var(--accent-orange)" : res === "L" ? "var(--surface-2)" : "var(--border)",
-                          color: res === "W" || res === "OTL" ? "#fff" : "var(--text)",
-                        }}
+                    <div key={i} className="rounded-xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                      {/* Game row */}
+                      <button
+                        onClick={() => g.gameId && toggleGoals(gid)}
+                        className="w-full flex items-center gap-4 p-3 text-left"
+                        style={{ cursor: g.gameId ? "pointer" : "default" }}
                       >
-                        {res}
-                      </span>
-                      <span className="font-medium">{g.awayTeam.abbrev} @ {g.homeTeam.abbrev}</span>
-                      <span className="font-bold">{g.awayTeam.score ?? "—"} – {g.homeTeam.score ?? "—"}</span>
-                      <span className="ml-auto text-sm" style={{ color: "var(--text-muted)" }}>
-                        {new Date(g.gameDate).toLocaleDateString("en-GB", { weekday: "short", month: "short", day: "numeric" })}
-                      </span>
+                        <span
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
+                          style={{
+                            background: res === "W" ? "var(--accent-green)" : res === "OTL" ? "var(--accent-orange)" : res === "L" ? "var(--surface-2)" : "var(--border)",
+                            color: res === "W" || res === "OTL" ? "#fff" : "var(--text)",
+                          }}
+                        >
+                          {res}
+                        </span>
+                        <span className="font-medium">{g.awayTeam.abbrev} @ {g.homeTeam.abbrev}</span>
+                        <span className="font-bold">{g.awayTeam.score ?? "—"} – {g.homeTeam.score ?? "—"}</span>
+                        <span className="ml-auto text-sm" style={{ color: "var(--text-muted)" }}>
+                          {formatCEST(g.gameDate, g.startTimeUTC)}
+                        </span>
+                        {g.gameId && (
+                          <span className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
+                            {isExpanded ? "▲" : "▼"}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Goal timeline */}
+                      {isExpanded && (
+                        <div className="px-4 pb-4 pt-2 border-t" style={{ borderColor: "var(--border)" }}>
+                          {isLoadingGoals ? (
+                            <p className="text-xs py-2" style={{ color: "var(--text-muted)" }}>Loading goals…</p>
+                          ) : goals.length === 0 ? (
+                            <p className="text-xs py-2" style={{ color: "var(--text-muted)" }}>No goals data</p>
+                          ) : (
+                            <div className="space-y-2 pt-1">
+                              {goals.map((gl, gi) => {
+                                const isEdmGoal = (gl.isHomeGoal && g.homeTeam.abbrev === "EDM") || (!gl.isHomeGoal && g.awayTeam.abbrev === "EDM");
+                                const periodLabel = gl.periodType === "OT" ? "OT" : gl.periodType === "SO" ? "SO" : `P${gl.period}`;
+                                const scoreStr = `${gl.awayScore}–${gl.homeScore}`;
+                                // Strength badge styling
+                                const strengthColor =
+                                  gl.strength === "PP1" || gl.strength === "PP2" ? "var(--accent-green)" :
+                                  gl.strength === "SH"  ? "var(--accent-purple)" :
+                                  gl.strength === "EN"  ? "var(--accent-orange)" :
+                                  gl.strength === "SO"  ? "var(--accent-blue)" : undefined;
+                                const showStrength = gl.strength && gl.strength !== "EV";
+                                return (
+                                  <div key={gi} className="flex items-start gap-2.5 text-xs">
+                                    <span className="w-2 h-2 rounded-full shrink-0 mt-0.5" style={{ background: isEdmGoal ? "var(--accent-blue)" : "var(--text-muted)" }} />
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span style={{ color: "var(--text-muted)", minWidth: "3.5rem" }}>{periodLabel} {gl.timeInPeriod}</span>
+                                        {showStrength && (
+                                          <span
+                                            style={{
+                                              fontSize: "9px", fontWeight: 700, padding: "0 3px 1px", borderRadius: "3px",
+                                              background: `${strengthColor}33`, color: strengthColor,
+                                            }}
+                                          >
+                                            {gl.strength}
+                                          </span>
+                                        )}
+                                        <span style={{ color: isEdmGoal ? "var(--text)" : "var(--text-muted)", fontWeight: isEdmGoal ? 600 : 400 }}>
+                                          {gl.scorer}
+                                        </span>
+                                        <span className="ml-auto font-mono shrink-0" style={{ color: isEdmGoal ? "var(--accent-blue)" : "var(--text-muted)" }}>{scoreStr}</span>
+                                      </div>
+                                      {gl.assists.length > 0 && (
+                                        <div style={{ color: "var(--text-muted)", paddingLeft: "3.5rem", marginTop: "1px" }}>
+                                          Ast: {gl.assists.join(", ")}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })
@@ -607,7 +792,7 @@ export default function NHLHub() {
                     <span className="font-medium">{g.awayTeam.abbrev} @ {g.homeTeam.abbrev}</span>
                     {g.venue && <span className="text-xs" style={{ color: "var(--text-muted)" }}>{g.venue}</span>}
                     <span className="ml-auto text-sm" style={{ color: "var(--text-muted)" }}>
-                      {new Date(g.gameDate).toLocaleDateString("en-GB", { weekday: "short", month: "short", day: "numeric" })}
+                      {formatCEST(g.gameDate, g.startTimeUTC)}
                     </span>
                   </div>
                 ))
@@ -617,8 +802,115 @@ export default function NHLHub() {
         </div>
       )}
 
-      {/* ── Playoffs ── */}
+      {/* ── Live Playoffs Bracket ── */}
       {tab === "playoffs" && (
+        <div>
+          {loadingBracket ? (
+            <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <div style={{ color: "var(--text-muted)" }}>Loading live bracket…</div>
+            </div>
+          ) : bracket === null || bracket.series.length === 0 ? (
+            <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <p style={{ color: "var(--text-muted)" }}>No bracket data yet — playoffs may not have started</p>
+              <button onClick={loadBracket} className="mt-3 px-4 py-1.5 rounded-lg text-sm font-medium" style={{ background: "var(--accent-blue)", color: "#fff" }}>
+                Retry
+              </button>
+            </div>
+          ) : (() => {
+            const rounds = [1, 2, 3, 4];
+            const ROUND_NAMES: Record<number, string> = { 1: "First Round", 2: "Second Round", 3: "Conference Finals", 4: "Stanley Cup Final" };
+            return (
+              <div className="space-y-6">
+                {rounds.map((round) => {
+                  const series = bracket.series.filter((s) => s.roundNumber === round);
+                  if (series.length === 0) return null;
+                  const isFinal = round === 4;
+                  const confs = isFinal ? ["Finals"] : ["Eastern", "Western"];
+                  return (
+                    <div key={round}>
+                      <h3 className="font-semibold text-sm mb-3 uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                        {ROUND_NAMES[round] ?? `Round ${round}`}
+                      </h3>
+                      <div className={isFinal ? "" : "grid grid-cols-1 lg:grid-cols-2 gap-4"}>
+                        {confs.map((conf) => {
+                          const confSeries = isFinal ? series : series.filter((s) => s.conference === conf);
+                          if (confSeries.length === 0) return null;
+                          return (
+                            <div key={conf} className="space-y-2">
+                              {!isFinal && (
+                                <div className="text-xs font-bold uppercase mb-1" style={{ color: conf === "Eastern" ? "var(--accent-purple)" : "var(--accent-orange)" }}>
+                                  {conf} Conference
+                                </div>
+                              )}
+                              {confSeries.map((s) => {
+                                const edmInvolved = s.topSeed.abbrev === "EDM" || s.bottomSeed.abbrev === "EDM";
+                                const topLeading = s.topSeed.wins > s.bottomSeed.wins;
+                                const tied = s.topSeed.wins === s.bottomSeed.wins;
+                                return (
+                                  <div
+                                    key={s.letter}
+                                    className="rounded-xl px-4 py-3"
+                                    style={{
+                                      background: edmInvolved ? "var(--accent-blue)11" : "var(--surface)",
+                                      border: `1px solid ${edmInvolved ? "var(--accent-blue)44" : "var(--border)"}`,
+                                    }}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      {/* Letter badge */}
+                                      <span className="text-xs font-bold w-5 shrink-0" style={{ color: "var(--text-muted)" }}>{s.letter}</span>
+                                      {/* Left: top seed + pips (right-aligned) */}
+                                      <div className="flex items-center gap-2 flex-1 justify-end">
+                                        <span className="font-bold text-sm" style={{ color: s.topSeed.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>
+                                          {s.topSeed.abbrev}
+                                        </span>
+                                        <div className="flex gap-0.5">
+                                          {[0,1,2,3].map((i) => (
+                                            <div key={i} className="w-4 h-4 rounded-sm" style={{ background: i < s.topSeed.wins ? (topLeading || s.complete ? "var(--accent-blue)" : "var(--surface-2)") : "var(--surface-2)", border: "1px solid var(--border)" }} />
+                                          ))}
+                                        </div>
+                                      </div>
+                                      {/* Score — fixed width, truly centered */}
+                                      <span className="text-sm font-bold w-10 text-center shrink-0" style={{ color: "var(--text-muted)" }}>
+                                        {s.topSeed.wins}–{s.bottomSeed.wins}
+                                      </span>
+                                      {/* Right: pips + bottom seed (left-aligned) */}
+                                      <div className="flex items-center gap-2 flex-1 justify-start">
+                                        <div className="flex gap-0.5">
+                                          {[0,1,2,3].map((i) => (
+                                            <div key={i} className="w-4 h-4 rounded-sm" style={{ background: i < s.bottomSeed.wins ? (!topLeading || s.complete ? "var(--accent-orange)" : "var(--surface-2)") : "var(--surface-2)", border: "1px solid var(--border)" }} />
+                                          ))}
+                                        </div>
+                                        <span className="font-bold text-sm" style={{ color: s.bottomSeed.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>
+                                          {s.bottomSeed.abbrev}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    {s.status && (
+                                      <div className="text-xs mt-1.5 ml-5" style={{ color: s.complete ? "var(--accent-green)" : "var(--text-muted)" }}>
+                                        {s.status}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+                <p className="text-xs text-center" style={{ color: "var(--border)" }}>
+                  Live data from NHL · refreshes every 5 min
+                </p>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ── Playoff Predicted ── */}
+      {tab === "playoff-predicted" && (
         <div>
           {loadingPlayoffs ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>

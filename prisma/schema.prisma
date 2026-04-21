@@ -11,8 +11,9 @@ model Assignment {
   id        Int      @id @default(autoincrement())
   title     String
   dueDate   DateTime
+  dueTime   String?  // HH:MM in local time, e.g. "20:00"
   subject   String?
-  status    String   @default("pending") // pending | in_progress | done
+  status    String   @default("pending") // pending | in_progress | done | overdue
   priority  String   @default("medium")  // low | medium | high — auto-overridden by UI
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

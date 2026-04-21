@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, shell, nativeImage } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -120,6 +120,9 @@ function startNextServer(dbPath) {
 // Create the browser window
 // ------------------------------------------------------------------
 async function createWindow() {
+  const iconPath = path.join(__dirname, "..", "public", "icon.png");
+  const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : null;
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -132,12 +135,17 @@ async function createWindow() {
     trafficLightPosition: process.platform === "darwin" ? { x: 12, y: 8 } : undefined,
     backgroundColor: "#0f1117",
     show: false,
+    icon: appIcon ?? undefined,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
     },
     title: "Dashboard",
   });
+
+  if (process.platform === "darwin" && appIcon) {
+    app.dock.setIcon(appIcon);
+  }
 
   const url = DEV
     ? "http://localhost:3000"
@@ -162,6 +170,8 @@ async function createWindow() {
 // ------------------------------------------------------------------
 // App lifecycle
 // ------------------------------------------------------------------
+app.setName("Dashboard");
+
 app.whenReady().then(async () => {
   try {
     const dbPath = DEV

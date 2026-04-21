@@ -15,9 +15,10 @@ export async function GET(request: Request) {
 
   try {
     // Fetch last 5 + next 5 games for the team
+    // Use month/now (not week/now) so playoffs with sparse scheduling still return 4-5 upcoming games
     const [recentRes, upcomingRes] = await Promise.all([
       fetch(`https://api-web.nhle.com/v1/club-schedule-season/${team}/now`),
-      fetch(`https://api-web.nhle.com/v1/club-schedule/${team}/week/now`),
+      fetch(`https://api-web.nhle.com/v1/club-schedule/${team}/month/now`),
     ]);
 
     const [recentData, upcomingData] = await Promise.all([
@@ -59,6 +60,7 @@ function mapGame(g: Record<string, unknown>) {
   return {
     gameId: g.id,
     gameDate: g.gameDate,
+    startTimeUTC: g.startTimeUTC,
     gameState: g.gameState,
     venue: (g.venue as Record<string, string>)?.default,
     periodType: (g.periodDescriptor as any)?.periodType ?? null,

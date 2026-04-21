@@ -5,60 +5,18 @@ import { prisma } from "@/lib/prisma";
 const lookupCache = new Map<string, { data: unknown; ts: number }>();
 const TTL = 60 * 60 * 1000; // 1 hour
 
-async function getBlizzardToken(): Promise<string | null> {
-  const clientId = process.env.BLIZZARD_CLIENT_ID;
-  const clientSecret = process.env.BLIZZARD_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-
-  const res = await fetch(
-    "https://oauth.battle.net/token",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
-      },
-      body: "grant_type=client_credentials",
-    }
-  );
-
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.access_token ?? null;
-}
-
 async function lookupCharacter(name: string, realm: string, region: string) {
   const cacheKey = `${region}-${realm}-${name}`.toLowerCase();
   const cached = lookupCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < TTL) return cached.data;
 
-  const token = await getBlizzardToken();
-  const nameLower = name.toLowerCase();
-  const realmSlug = realm.toLowerCase().replace(/\s+/g, "-");
   const regionLower = region.toLowerCase();
 
   let ilvl: number | null = null;
-  let blizzardError: string | null = null;
 
-  if (token) {
-    const equipRes = await fetch(
-      `https://${regionLower}.api.blizzard.com/profile/wow/character/${realmSlug}/${nameLower}/equipment?namespace=profile-${regionLower}&locale=en_US`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-
-    if (equipRes.ok) {
-      const equipData = await equipRes.json();
-      ilvl = equipData.average_item_level ?? null;
-    } else {
-      blizzardError = `Blizzard API ${equipRes.status}`;
-    }
-  } else {
-    blizzardError = "Blizzard API credentials not configured";
-  }
-
-  // Raider.IO — fetch with raid_progression included
+  // Raider.IO — fetch ilvl, RIO score, and raid progression
   const rioRes = await fetch(
-    `https://raider.io/api/v1/characters/profile?region=${regionLower}&realm=${encodeURIComponent(realm)}&name=${encodeURIComponent(name)}&fields=mythic_plus_scores_by_season:current,raid_progression`,
+    `https://raider.io/api/v1/characters/profile?region=${regionLower}&realm=${encodeURIComponent(realm)}&name=${encodeURIComponent(name)}&fields=mythic_plus_scores_by_season:current,raid_progression,gear`,
     { next: { revalidate: 3600 } }
   );
 
@@ -79,6 +37,11 @@ async function lookupCharacter(name: string, realm: string, region: string) {
         raidProgress = raidProg[firstKey]?.summary ?? null;
       }
     }
+
+    // Fallback: get ilvl from Raider.IO if Blizzard didn't provide it
+    if (ilvl === null && rioData.gear?.item_level_equipped) {
+      ilvl = rioData.gear.item_level_equipped;
+    }
   } else {
     rioError = `Raider.IO ${rioRes.status}`;
   }
@@ -90,7 +53,7 @@ async function lookupCharacter(name: string, realm: string, region: string) {
     ilvl,
     rioScore,
     raidProgress,
-    errors: [blizzardError, rioError].filter(Boolean),
+    errors: [rioError].filter(Boolean),
   };
 
   lookupCache.set(cacheKey, { data: result, ts: Date.now() });
@@ -125,6 +88,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "name and realm required" }, { status: 400 });
   }
 
+  // Assign sortOrder = max existing + 1 so new chars appear at the bottom
+  const maxChar = await prisma.wowCharacter.findFirst({ orderBy: { sortOrder: "desc" } });
+  const newSortOrder = (maxChar?.sortOrder ?? -1) + 1;
+
   const character = await prisma.wowCharacter.upsert({
     where: {
       name_realm_region: {
@@ -138,6 +105,7 @@ export async function POST(request: Request) {
       name: name.toLowerCase(),
       realm: realm.toLowerCase(),
       region: (region ?? "eu").toLowerCase(),
+      sortOrder: newSortOrder,
     },
   });
 
