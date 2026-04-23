@@ -22,11 +22,12 @@ const MONTH_NAMES = [
 ];
 
 function calColor(name: string): string {
-  if (name === "SDU")              return "var(--accent-blue)";
-  if (name === "Cand")             return "var(--accent-purple)";
-  if (name === "Arbejde")          return "var(--accent-green)";
-  if (name === "Skolerelateret")   return "var(--accent-orange)";
-  if (name === "Kalender")         return "var(--accent-red)";
+  if (name === "SDU")                       return "var(--accent-red)";
+  if (name === "Cand")                      return "var(--accent-indigo)";
+  if (name === "Arbejde")                   return "var(--accent-green)";
+  if (name === "Skolerelateret")            return "var(--accent-yellow)";
+  if (name === "Kalender")                  return "var(--accent-blue)";
+  if (name === "Rasmus_Arbejde")            return "var(--accent-pink)";
   return "var(--accent-blue)";
 }
 
@@ -89,7 +90,7 @@ export default function CalendarHub() {
   const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [enabledCals, setEnabledCals] = useState<Set<string>>(new Set(["SDU", "Cand", "Arbejde"]));
+  const [enabledCals, setEnabledCals] = useState<Set<string>>(new Set(["SDU", "Cand", "Rasmus_Arbejde"]));
   const [calendarNames, setCalendarNames] = useState<string[]>([]);
   const [viewDate, setViewDate] = useState(() => {
     const d = new Date();

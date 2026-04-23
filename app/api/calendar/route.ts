@@ -20,7 +20,7 @@ export interface CalEvent {
 const ICS_FEEDS = [
   { name: "SDU",     envKey: "CALENDAR_SDU_URL" },
   { name: "Cand",    envKey: "CALENDAR_CAND_URL" },
-  { name: "Arbejde", envKey: "CALENDAR_ARBEJDE_URL" },
+  { name: "Rasmus_Arbejde", envKey: "CALENDAR_ARBEJDE_URL" },
 ];
 
 async function fetchICSFeed(rawUrl: string, calName: string, from: Date, to: Date): Promise<CalEvent[]> {
@@ -247,7 +247,7 @@ export async function GET() {
     })
   );
 
-  // 2. iCloud CalDAV (Arbejde, Skolerelateret, Kalender)
+  // 2. iCloud CalDAV (Jennifer_Arbejde, Skolerelateret, Kalender)
   if (hasCalDAV) {
     try {
       const auth = "Basic " + Buffer.from(`${process.env.ICLOUD_CALDAV_USER}:${process.env.ICLOUD_CALDAV_PASS}`).toString("base64");
