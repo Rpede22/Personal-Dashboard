@@ -194,6 +194,19 @@ export default function WoWHub() {
     }
   }
 
+  // Lightweight checklist-only refresh — used after sync so we don't wipe ilvl/stats
+  async function refreshChecklist(char: WowCharacter) {
+    setLoadingChecklist(true);
+    try {
+      const res = await fetch(`/api/wow/checklist?characterId=${char.id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setChecklist(data.checklist ?? []);
+    } catch { /* silently ignore */ } finally {
+      setLoadingChecklist(false);
+    }
+  }
+
   async function toggleTask(item: ChecklistItem) {
     await fetch("/api/wow/checklist", {
       method: "POST",
@@ -249,7 +262,7 @@ export default function WoWHub() {
         const staleNote = data.staleData ? " ⚠️ RIO data may be stale — visit raider.io to trigger a fresh crawl" : "";
         const updatedNote = data.updated > 0 ? ` · ✓ ${data.updated} task${data.updated > 1 ? "s" : ""} ticked` : "";
         setSyncResult(`${selectedChar.name}-${selectedChar.realm}: M+: ${data.synced.mplusCount}/8 · N: ${data.synced.normalKills}/9 · H: ${data.synced.heroicKills}/9 · M: ${data.synced.mythicKills}/9${crawled}${updatedNote}${staleNote}`);
-        loadChecklist(selectedChar);
+        refreshChecklist(selectedChar);
       }
     } catch {
       setSyncResult("Sync failed");
