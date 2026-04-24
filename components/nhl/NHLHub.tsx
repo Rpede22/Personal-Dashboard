@@ -865,7 +865,12 @@ export default function NHLHub() {
                                         </span>
                                         <div className="flex gap-0.5">
                                           {[0,1,2,3].map((i) => (
-                                            <div key={i} className="w-4 h-4 rounded-sm" style={{ background: i < s.topSeed.wins ? (topLeading || s.complete ? "var(--accent-blue)" : "var(--surface-2)") : "var(--surface-2)", border: "1px solid var(--border)" }} />
+                                            <div key={i} className="w-4 h-4 rounded-sm" style={{
+                                              background: i < s.topSeed.wins
+                                                ? (s.complete && s.topSeed.wins > s.bottomSeed.wins ? "var(--accent-green)" : "var(--accent-blue)")
+                                                : "var(--surface-2)",
+                                              border: "1px solid var(--border)"
+                                            }} />
                                           ))}
                                         </div>
                                       </div>
@@ -877,7 +882,12 @@ export default function NHLHub() {
                                       <div className="flex items-center gap-2 flex-1 justify-start">
                                         <div className="flex gap-0.5">
                                           {[0,1,2,3].map((i) => (
-                                            <div key={i} className="w-4 h-4 rounded-sm" style={{ background: i < s.bottomSeed.wins ? (!topLeading || s.complete ? "var(--accent-orange)" : "var(--surface-2)") : "var(--surface-2)", border: "1px solid var(--border)" }} />
+                                            <div key={i} className="w-4 h-4 rounded-sm" style={{
+                                              background: i < s.bottomSeed.wins
+                                                ? (s.complete && s.bottomSeed.wins > s.topSeed.wins ? "var(--accent-green)" : "var(--accent-orange)")
+                                                : "var(--surface-2)",
+                                              border: "1px solid var(--border)"
+                                            }} />
                                           ))}
                                         </div>
                                         <span className="font-bold text-sm" style={{ color: s.bottomSeed.abbrev === "EDM" ? "var(--accent-blue)" : "var(--text)" }}>

@@ -60,6 +60,7 @@ export default function CalendarWidget() {
   const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fetchErrors, setFetchErrors] = useState<string[]>([]);
   const [enabledCals, setEnabledCals] = useState<Set<string> | null>(null);
 
   useEffect(() => {
@@ -74,6 +75,7 @@ export default function CalendarWidget() {
         setConfigured(d.configured ?? true);
         setEvents(d.events ?? []);
         if (d.error) setError(d.error);
+        if (d.errors?.length) setFetchErrors(d.errors);
       })
       .catch(() => setError("Failed to load"))
       .finally(() => setLoading(false));
@@ -100,6 +102,12 @@ export default function CalendarWidget() {
       ) : error ? (
         <p className="text-sm" style={{ color: "var(--accent-red)" }}>Error: {error}</p>
       ) : (
+        <>
+        {fetchErrors.length > 0 && (
+          <p className="text-xs mb-2 truncate" style={{ color: "var(--accent-orange)" }} title={fetchErrors.join(" | ")}>
+            ⚠ {fetchErrors.length} source{fetchErrors.length > 1 ? "s" : ""} failed
+          </p>
+        )}
         <div className="grid grid-cols-7 gap-1">
           {days.map((day, i) => {
             const key = toDateKey(day);
@@ -155,6 +163,7 @@ export default function CalendarWidget() {
             );
           })}
         </div>
+        </>
       )}
     </Card>
   );

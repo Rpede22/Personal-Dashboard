@@ -5,9 +5,12 @@
  * the probability distribution of standings positions after N upcoming games.
  *
  * Per-game win probability (from home team's perspective):
- *   homeWinProb = clamp(0.54 + ptsPctAdjust + regWinAdjust, 0.28, 0.78)
- *   ptsPctAdjust  = (homePtsPct - awayPtsPct) * 0.3
- *   regWinAdjust  = (homeRegWinRate - awayRegWinRate) * 0.2
+ *   homeWinProb = clamp(0.54 + ptsPctAdjust + l10Adjust + regWinAdjust, 0.28, 0.78)
+ *   ptsPctAdjust = (homePtsPct - awayPtsPct)        * 0.25  // ~45% weight (season pts%)
+ *   l10Adjust    = (homeL10Pct - awayL10Pct)         * 0.15  // ~25% weight (recent L10 form)
+ *   regWinAdjust = (homeRegWinRate - awayRegWinRate)  * 0.10  // ~20% weight (reg. wins)
+ *   0.54 base = home-ice advantage (~10% weight)
+ * Weights match the Playoff Predicted tab (45% pts% / 25% L10 / 10% home-ice / 8% H2H).
  *
  * Outcome probabilities from home team perspective:
  *   regWin  = homeWinProb * 0.76
@@ -91,7 +94,7 @@ function pickOutcomeWeighted(homeWinProb: number): (typeof OUTCOMES)[number] {
 function computeHomeWinProb(
   homeAbbrev: string,
   awayAbbrev: string,
-  teamStats: Map<string, { ptsPct: number; regWinRate: number }>
+  teamStats: Map<string, { ptsPct: number; regWinRate: number; l10Pct?: number }>
 ): number {
   const homeStats = teamStats.get(homeAbbrev);
   const awayStats = teamStats.get(awayAbbrev);
@@ -99,18 +102,24 @@ function computeHomeWinProb(
   const awayPtsPct = awayStats?.ptsPct ?? 0.5;
   const homeRegWinRate = homeStats?.regWinRate ?? 0.4;
   const awayRegWinRate = awayStats?.regWinRate ?? 0.4;
+  // L10 form (last 10 games pts%) — falls back to season pts% when unavailable
+  const homeL10Pct = homeStats?.l10Pct ?? homePtsPct;
+  const awayL10Pct  = awayStats?.l10Pct  ?? awayPtsPct;
 
-  const ptsPctAdjust = (homePtsPct - awayPtsPct) * 0.3;
-  const regWinAdjust = (homeRegWinRate - awayRegWinRate) * 0.2;
+  // Weighted per-game win prob matching playoff-predicted weights:
+  // 45% season pts%, 25% L10 form, 20% reg win rate, 10% home ice (baked into 0.54 base)
+  const ptsPctAdjust  = (homePtsPct      - awayPtsPct)      * 0.25; // was 0.3
+  const l10Adjust     = (homeL10Pct      - awayL10Pct)      * 0.15; // new
+  const regWinAdjust  = (homeRegWinRate  - awayRegWinRate)  * 0.10; // was 0.2
 
-  return clamp(0.54 + ptsPctAdjust + regWinAdjust, 0.28, 0.78);
+  return clamp(0.54 + ptsPctAdjust + l10Adjust + regWinAdjust, 0.28, 0.78);
 }
 
 export function runProbabilityEngine(
   currentStandings: TeamStanding[],
   upcomingGames: ScheduledGame[],
   targetTeams?: string[], // if provided, only return results for these teams
-  teamStats?: Map<string, { ptsPct: number; regWinRate: number }>
+  teamStats?: Map<string, { ptsPct: number; regWinRate: number; l10Pct?: number }>
 ): ProbabilityResult[] {
   const teams = new Map<string, TeamStanding>(
     currentStandings.map((s) => [s.teamAbbrev, { ...s }])

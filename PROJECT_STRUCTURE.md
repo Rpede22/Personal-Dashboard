@@ -41,11 +41,11 @@ Stack: Next.js 16.2.3 App Router · Turbopack · React 19 · Electron · SQLite 
 | endpoint | file | notes |
 | -------- | ---- | ----- |
 | `GET /api/nhl/standings`   | `app/api/nhl/standings/route.ts`   | `api-web.nhle.com/v1/standings/now`, 10 min cache |
-| `GET /api/nhl/probability` | `app/api/nhl/probability/route.ts` | Monte Carlo (20k iters), 15 min cache. **Filters `gameType===2`** only |
+| `GET /api/nhl/probability` | `app/api/nhl/probability/route.ts` | Monte Carlo (20k iters), 15 min cache. **Filters `gameType===2`** only. Uses actual upcoming schedule (`/v1/schedule/now`) and per-team L10 form in win-probability weights (45% pts% / 25% L10 / 20% reg-wins / 10% home-ice). |
 | `GET /api/nhl/playoffs`    | `app/api/nhl/playoffs/route.ts`    | Bracket builder with H2H from team schedule, 15 min cache |
 | `GET /api/nhl/bracket`     | `app/api/nhl/bracket/route.ts`     | Live bracket from `api-web.nhle.com/v1/playoff-bracket/{year}`, 5 min cache |
 | `GET /api/nhl/goals?gameId=X` | `app/api/nhl/goals/route.ts`    | Goal scorer timeline from `gamecenter/{id}/play-by-play`. Event type "goal", player names from rosterSpots. `strength` parsed from `situationCode` (`EV`/`PP1`/`PP2`/`SH`/`EN`/`SO`) from scoring team's POV. 1h cache (completed games). |
-| `GET /api/calendar`           | `app/api/calendar/route.ts`     | **Dual source**: (1) ICS feeds via HTTP GET (`CALENDAR_SDU_URL`, `CALENDAR_CAND_URL`, `CALENDAR_ARBEJDE_URL`). (2) iCloud CalDAV for Arbejde/Skolerelateret/Kalender/Cand (PROPFIND discovery + REPORT). Parses ICS with `node-ical`. 15 min cache. Window: **31 days back → 92 days ahead** (enables 1-month back navigation in CalendarHub). Returns `{ configured, events[] }`. |
+| `GET /api/calendar`           | `app/api/calendar/route.ts`     | **Dual source**: (1) ICS feeds via HTTP GET (`CALENDAR_SDU_URL`, `CALENDAR_CAND_URL`, `CALENDAR_ARBEJDE_URL`). (2) iCloud CalDAV for Arbejde/Skolerelateret/Kalender/Cand (PROPFIND discovery + REPORT). Parses ICS with `node-ical`. 15 min cache. Window: **31 days back → 92 days ahead**. Returns `{ configured, events[], errors[] }` — `errors` lists any per-source fetch failures (non-fatal; other sources still returned). |
 | `GET /api/nhl/schedule`    | `app/api/nhl/schedule/route.ts`    | EDM schedule (recent + next 5). Uses `club-schedule/{team}/month/now` |
 
 ### Sports (football/hockey for 4 teams)
@@ -59,7 +59,7 @@ Stack: Next.js 16.2.3 App Router · Turbopack · React 19 · Electron · SQLite 
 | `GET /api/wow/character` (list) or `?name&realm&region` (lookup) | `app/api/wow/character/route.ts` | Raider.IO only. ilvl from RIO `gear.item_level_equipped`. No Blizzard API needed. |
 | `POST/DELETE/PATCH /api/wow/character` | same | CRUD + reorder |
 | `GET /api/wow/checklist?characterId=X` | `app/api/wow/checklist/route.ts` | Weekly checklist; auto-seeds templates at Wed 06:00 UTC reset |
-| `POST /api/wow/sync` | `app/api/wow/sync/route.ts` | Sync M+ + raid kills from RIO. `CURRENT_RAID_TIER = "tier-mn-1"` (Midnight S1, 9 bosses combined across 3 raids). Baseline delta system. Returns `lastCrawledAt` |
+| `POST /api/wow/sync` | `app/api/wow/sync/route.ts` | Sync M+ + raid kills from RIO. `CURRENT_RAID_TIER = "tier-mn-1"` (Midnight S1, 9 bosses combined across 3 raids). Baseline delta system. **Auto-seeds this week's checklist from templates if not yet created** (so sync works even without opening the checklist tab first). Returns `lastCrawledAt`, `staleData` (>2h since RIO crawl), `updated` (items ticked). |
 | `DELETE /api/wow/sync?characterId=X` | same | Reset this week's baseline |
 
 ### Running
@@ -96,7 +96,7 @@ Stack: Next.js 16.2.3 App Router · Turbopack · React 19 · Electron · SQLite 
 | file | purpose |
 | ---- | ------- |
 | `components/Card.tsx`                  | `<Card>` + `<CardHeader>` reusable. `showArrow` prop (default true). |
-| `components/nhl/NHLHub.tsx`            | Tabs: standings / schedule / playoffs (live bracket) / predicted / playoff predicted. EDM row highlight. Controls only shown in standings tab. |
+| `components/nhl/NHLHub.tsx`            | Tabs: standings / schedule / playoffs (live bracket) / predicted / playoff predicted. EDM row highlight. Controls only shown in standings tab. **Bracket pips**: blue for top seed (green when series winner), orange for bottom seed (green when series winner) — always shown regardless of who leads. |
 | `components/sports/SportsTeamHub.tsx`  | Tabs: standings / schedule / playoffs (hockey only). Renders `subTables` under main "Regular Season" (Oprykningsspil + Nedrykningsspil for Esbjerg fB). Header rank badge shows **Oprykningsspil rank** when promotion subtable exists (matches front-page logic), otherwise main league rank. Times converted to Copenhagen via `toCopenhagenTime/Date`. |
 | `components/wow/WoWHub.tsx`            | Character list, CheckGrid (28px), M+/boss/custom tasks, Sync/Reset buttons. ilvl `.toFixed(2)`. |
 | `components/running/RunningHub.tsx`    | Run log, planner, race date, Strava panel |

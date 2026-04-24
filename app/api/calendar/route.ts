@@ -236,6 +236,7 @@ export async function GET() {
   const oneMonthAgo = new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000);
   const threeMonths = new Date(now.getTime() + 92 * 24 * 60 * 60 * 1000);
   const allEvents: CalEvent[] = [];
+  const fetchErrors: string[] = [];
 
   // 1. ICS feeds
   await Promise.all(
@@ -243,11 +244,15 @@ export async function GET() {
       const url = process.env[envKey];
       if (!url) return;
       try { allEvents.push(...await fetchICSFeed(url, name, oneMonthAgo, threeMonths)); }
-      catch (err) { console.error(`[Calendar] ICS ${name}:`, String(err)); }
+      catch (err) {
+        const msg = `ICS ${name}: ${String(err)}`;
+        console.error(`[Calendar] ${msg}`);
+        fetchErrors.push(msg);
+      }
     })
   );
 
-  // 2. iCloud CalDAV (Jennifer_Arbejde, Skolerelateret, Kalender)
+  // 2. iCloud CalDAV (Arbejde, Skolerelateret, Kalender, Cand)
   if (hasCalDAV) {
     try {
       const auth = "Basic " + Buffer.from(`${process.env.ICLOUD_CALDAV_USER}:${process.env.ICLOUD_CALDAV_PASS}`).toString("base64");
@@ -255,17 +260,23 @@ export async function GET() {
       await Promise.all(
         calendars.map(async ({ url, name }) => {
           try { allEvents.push(...await fetchCalDAVEvents(url, name, auth, oneMonthAgo, threeMonths)); }
-          catch (err) { console.error(`[Calendar] CalDAV ${name}:`, String(err)); }
+          catch (err) {
+            const msg = `CalDAV ${name}: ${String(err)}`;
+            console.error(`[Calendar] ${msg}`);
+            fetchErrors.push(msg);
+          }
         })
       );
     } catch (err) {
-      console.error("[Calendar] CalDAV discovery failed:", String(err));
+      const msg = `CalDAV discovery: ${String(err)}`;
+      console.error(`[Calendar] ${msg}`);
+      fetchErrors.push(msg);
       // Non-fatal: ICS events are still returned
     }
   }
 
   allEvents.sort((a, b) => a.start.localeCompare(b.start));
-  const payload = { configured: true, events: allEvents };
+  const payload = { configured: true, events: allEvents, errors: fetchErrors };
   cache.set(cacheKey, { data: payload, ts: Date.now() });
   return NextResponse.json(payload);
 }

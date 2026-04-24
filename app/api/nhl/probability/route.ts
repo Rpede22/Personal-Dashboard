@@ -95,13 +95,16 @@ export async function GET(request: Request) {
 
     const targetTeams = teams ? teams.split(",").map((t) => t.trim().toUpperCase()) : undefined;
 
-    // Build teamStats map from standings for weighted simulation
-    const teamStats = new Map<string, { ptsPct: number; regWinRate: number }>(
+    // Build teamStats map from standings for weighted simulation.
+    // Weights match playoff-predicted: 45% season pts%, 25% L10 form, 20% reg win rate.
+    const teamStats = new Map<string, { ptsPct: number; regWinRate: number; l10Pct: number }>(
       standings.map((s: any) => [
         s.teamAbbrev as string,
         {
           ptsPct: s.gamesPlayed > 0 ? s.points / (s.gamesPlayed * 2) : 0.5,
           regWinRate: s.gamesPlayed > 0 ? s.regulationWins / s.gamesPlayed : 0.4,
+          // L10 pts% = (wins*2 + otLosses) out of 20 possible points
+          l10Pct: ((s.l10Wins ?? 0) * 2 + (s.l10OtLosses ?? 0)) / 20,
         },
       ])
     );

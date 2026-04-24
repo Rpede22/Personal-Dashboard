@@ -244,9 +244,11 @@ export default function WoWHub() {
         setSyncResult(`Baseline set — sync again after killing bosses to auto-tick this week's kills${crawled}`);
       } else {
         const crawled = data.lastCrawledAt
-          ? ` · RIO: ${new Date(data.lastCrawledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+          ? ` · RIO crawled: ${new Date(data.lastCrawledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
           : "";
-        setSyncResult(`${selectedChar.name}-${selectedChar.realm}: M+: ${data.synced.mplusCount}/8 · N: ${data.synced.normalKills}/9 · H: ${data.synced.heroicKills}/9 · M: ${data.synced.mythicKills}/9${crawled}`);
+        const staleNote = data.staleData ? " ⚠️ RIO data may be stale — visit raider.io to trigger a fresh crawl" : "";
+        const updatedNote = data.updated > 0 ? ` · ✓ ${data.updated} task${data.updated > 1 ? "s" : ""} ticked` : "";
+        setSyncResult(`${selectedChar.name}-${selectedChar.realm}: M+: ${data.synced.mplusCount}/8 · N: ${data.synced.normalKills}/9 · H: ${data.synced.heroicKills}/9 · M: ${data.synced.mythicKills}/9${crawled}${updatedNote}${staleNote}`);
         loadChecklist(selectedChar);
       }
     } catch {

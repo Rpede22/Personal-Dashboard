@@ -125,9 +125,26 @@ export async function POST(request: Request) {
   }
 
   // ── Update checklist ───────────────────────────────────────────────────────
-  const checklist = await prisma.wowChecklist.findMany({
+  let checklist = await prisma.wowChecklist.findMany({
     where: { characterId: char.id, weekStart },
   });
+
+  // Auto-seed this week's checklist from templates if it hasn't been created yet.
+  // Normally the GET /api/wow/checklist endpoint does this, but a user who syncs
+  // before ever opening the checklist tab would find 0 items and nothing would tick.
+  if (checklist.length === 0) {
+    const templates = await prisma.wowChecklistTemplate.findMany();
+    if (templates.length > 0) {
+      for (const t of templates) {
+        await prisma.wowChecklist.upsert({
+          where: { characterId_weekStart_task: { characterId: char.id, weekStart, task: t.task } },
+          update: {},
+          create: { characterId: char.id, weekStart, task: t.task, done: false },
+        });
+      }
+      checklist = await prisma.wowChecklist.findMany({ where: { characterId: char.id, weekStart } });
+    }
+  }
 
   const updates: { id: number; done: boolean }[] = [];
 
@@ -153,12 +170,18 @@ export async function POST(request: Request) {
     await prisma.wowChecklist.update({ where: { id: u.id }, data: { done: u.done } });
   }
 
+  // Warn if RIO data is stale (crawled >2 hours ago)
+  const crawledMs = lastCrawledAt ? new Date(lastCrawledAt).getTime() : null;
+  const staleData = crawledMs !== null && (Date.now() - crawledMs) > 2 * 60 * 60 * 1000;
+
   return NextResponse.json({
     ok: true,
     character: char.name,
     firstSync: !weekBaseline,
     raidTier: CURRENT_RAID_TIER,
     lastCrawledAt,
+    staleData,
+    checklistSeeded: checklist.length > 0,
     synced: { mplusCount, normalKills, heroicKills, mythicKills, totalBosses },
     updated: updates.length,
   });
