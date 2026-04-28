@@ -80,6 +80,12 @@ async function fetchFromESPN(espnLeague: string, date: string, keyword: string):
 const SA7_BASE = "https://sportapi7.p.rapidapi.com";
 const SA7_HOST = "sportapi7.p.rapidapi.com";
 
+// Map sports-config `sport` values → SportAPI7 URL slugs
+const SA7_SPORT: Record<string, string> = {
+  football:  "football",
+  icehockey: "ice-hockey",
+};
+
 async function fetchFromSportAPI7(slug: string, date: string): Promise<GoalEvent[] | null> {
   const key = process.env.RAPIDAPI_KEY;
   if (!key) return null;
@@ -93,8 +99,9 @@ async function fetchFromSportAPI7(slug: string, date: string): Promise<GoalEvent
     "x-rapidapi-key":  key,
   };
 
-  // Step 1: get all football events on this date and find our team's match
-  const schedRes = await fetch(`${SA7_BASE}/api/v1/sport/football/scheduled-events/${date}`, { headers });
+  // Step 1: get all events for this sport on this date and find our team's match
+  const sportSlug = SA7_SPORT[team.sport ?? "football"] ?? "football";
+  const schedRes = await fetch(`${SA7_BASE}/api/v1/sport/${sportSlug}/scheduled-events/${date}`, { headers });
   if (!schedRes.ok) return null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
