@@ -48,6 +48,7 @@ export interface SportsStandingRow {
 }
 
 export interface SportsEvent {
+  matchId?: string | null; // FotMob match ID — present when source is fotmob
   date: string;
   time: string;
   homeTeam: string;
@@ -242,6 +243,7 @@ function fmSubTableToSports(t: FMSubTable): SportsSubTable {
 
 function fmFixtureToEvent(f: FMFixture, leagueName: string): SportsEvent {
   return {
+    matchId:   f.matchId,
     date:      f.date,
     time:      f.time,
     homeTeam:  f.homeTeam,

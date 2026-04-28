@@ -32,28 +32,38 @@ async function fetchICSFeed(rawUrl: string, calName: string, from: Date, to: Dat
 
 // ── ICS parser (shared) ────────────────────────────────────────────────────────
 
+// node-ical properties can be a plain string or a ParameterValue object { val, params }.
+// This helper extracts the string regardless of which form it takes.
+function strVal(v: unknown): string | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && "val" in (v as object)) return (v as { val: string }).val;
+  return undefined;
+}
+
 function parseICS(text: string, calName: string, from: Date, to: Date): CalEvent[] {
   const parsed = ical.parseICS(text);
   const events: CalEvent[] = [];
   for (const comp of Object.values(parsed)) {
-    if (comp.type !== "VEVENT") continue;
+    if (!comp || comp.type !== "VEVENT") continue;
     const ev = comp as ical.VEvent;
     const start = ev.start instanceof Date ? ev.start : new Date(ev.start as unknown as string);
-    const end   = ev.end   instanceof Date ? ev.end   : new Date((ev.end ?? ev.start) as unknown as string);
+    const end   = ev.end   instanceof Date ? ev.end   : new Date(((ev.end as Date | undefined) ?? ev.start) as unknown as string);
     if (isNaN(start.getTime())) continue;
     const allDay = (ev as unknown as Record<string, unknown>).datetype === "date";
     // DTEND for all-day events is exclusive — subtract 1 ms to get true end
     const effectiveEnd = allDay ? new Date(end.getTime() - 1) : end;
     if (effectiveEnd < from || start > to) continue;
+    const desc = strVal(ev.description);
     events.push({
-      uid:         ev.uid ?? Math.random().toString(36),
-      title:       ev.summary ?? "(No title)",
+      uid:         strVal(ev.uid) ?? Math.random().toString(36),
+      title:       strVal(ev.summary) ?? "(No title)",
       start:       start.toISOString(),
       end:         end.toISOString(),
       allDay,
       calendar:    calName,
-      location:    ev.location ?? undefined,
-      description: (ev.description ?? "").replace(/\\n/g, "\n").trim() || undefined,
+      location:    strVal(ev.location),
+      description: desc ? desc.replace(/\\n/g, "\n").trim() || undefined : undefined,
     });
   }
   return events;

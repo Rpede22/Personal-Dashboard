@@ -44,40 +44,34 @@ export async function GET(request: Request) {
   const charId = parseInt(characterId);
 
   // Get or create this week's checklist
-  const existing = await prisma.wowChecklist.findMany({
-    where: { characterId: charId, weekStart },
-  });
-
-  if (existing.length === 0) {
-    // Seed from templates
-    const templates = await prisma.wowChecklistTemplate.findMany();
-    if (templates.length > 0) {
-      for (const t of templates) {
-        await prisma.wowChecklist.upsert({
-          where: {
-            characterId_weekStart_task: {
-              characterId: charId,
-              weekStart,
-              task: t.task,
-            },
-          },
-          update: {},
-          create: {
+  // Always sync with current templates — adds any missing tasks without touching already-ticked ones.
+  // This handles: first load, new templates added mid-week, boss count changes.
+  const templates = await prisma.wowChecklistTemplate.findMany();
+  if (templates.length > 0) {
+    for (const t of templates) {
+      await prisma.wowChecklist.upsert({
+        where: {
+          characterId_weekStart_task: {
             characterId: charId,
             weekStart,
             task: t.task,
-            done: false,
           },
-        });
-      }
+        },
+        update: {},
+        create: {
+          characterId: charId,
+          weekStart,
+          task: t.task,
+          done: false,
+        },
+      });
     }
-    const fresh = await prisma.wowChecklist.findMany({
-      where: { characterId: charId, weekStart },
-    });
-    return NextResponse.json({ checklist: fresh, weekStart });
   }
 
-  return NextResponse.json({ checklist: existing, weekStart });
+  const checklist = await prisma.wowChecklist.findMany({
+    where: { characterId: charId, weekStart },
+  });
+  return NextResponse.json({ checklist, weekStart });
 }
 
 // POST /api/wow/checklist — add a task or toggle done

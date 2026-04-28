@@ -250,18 +250,21 @@ export default function WoWHub() {
       const data = await res.json();
       if (data.error) {
         setSyncResult(`Error: ${data.error}`);
-      } else if (data.firstSync) {
+      } else if (data.firstSync && data.raidDataSource === "raider-io-baseline") {
+        // First RIO baseline sync — no kills trackable yet
         const crawled = data.lastCrawledAt
           ? ` · RIO updated ${new Date(data.lastCrawledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
           : "";
         setSyncResult(`Baseline set — sync again after killing bosses to auto-tick this week's kills${crawled}`);
       } else {
+        const n = data.synced.totalBosses || 9;
+        const source = data.raidDataSource === "blizzard" ? " · Blizzard API" : " · RIO baseline";
         const crawled = data.lastCrawledAt
-          ? ` · RIO crawled: ${new Date(data.lastCrawledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+          ? ` · RIO ${new Date(data.lastCrawledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
           : "";
-        const staleNote = data.staleData ? " ⚠️ RIO data may be stale — visit raider.io to trigger a fresh crawl" : "";
-        const updatedNote = data.updated > 0 ? ` · ✓ ${data.updated} task${data.updated > 1 ? "s" : ""} ticked` : "";
-        setSyncResult(`${selectedChar.name}-${selectedChar.realm}: M+: ${data.synced.mplusCount}/8 · N: ${data.synced.normalKills}/9 · H: ${data.synced.heroicKills}/9 · M: ${data.synced.mythicKills}/9${crawled}${updatedNote}${staleNote}`);
+        const staleNote = data.staleData ? " ⚠️ RIO data stale" : "";
+        const updatedNote = data.updated > 0 ? ` · ✓ ${data.updated} ticked` : "";
+        setSyncResult(`${selectedChar.name}: M+ ${data.synced.mplusCount}/8 · N ${data.synced.normalKills}/${n} · H ${data.synced.heroicKills}/${n} · M ${data.synced.mythicKills}/${n}${source}${crawled}${updatedNote}${staleNote}`);
         refreshChecklist(selectedChar);
       }
     } catch {
@@ -617,7 +620,7 @@ export default function WoWHub() {
                 <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>{syncResult}</p>
               )}
               <p className="text-[11px] mb-2" style={{ color: "var(--border)" }}>
-                How raid sync works: click Sync <strong>before</strong> raiding to set this week&apos;s baseline. Kill bosses, then click Sync again — new kills tick automatically. If boxes won&apos;t tick, use <strong>↺ Reset</strong> then Sync to capture a fresh baseline.
+                With Blizzard API credentials: kills detected per-boss automatically each sync. Without credentials (RIO fallback): Sync <strong>before</strong> raiding to set baseline, then Sync after to tick kills. Use <strong>↺ Reset</strong> if the baseline is wrong.
               </p>
 
               <div className="mb-4">

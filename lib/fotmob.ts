@@ -34,6 +34,7 @@ export interface FMSubTable {
 }
 
 export interface FMFixture {
+  matchId: string | null; // FotMob match ID — used for cross-referencing goal timelines
   date: string;   // YYYY-MM-DD
   time: string;   // HH:MM UTC (caller converts to local)
   homeTeam: string;
@@ -95,6 +96,7 @@ const GROUP_NAME_MAP: Record<string, string> = {
 };
 
 interface FMRawMatch {
+  id?: number | string;
   home: { name: string; id: string };
   away: { name: string; id: string };
   status: {
@@ -118,6 +120,7 @@ function parseMatch(m: FMRawMatch): FMFixture {
     if (!isNaN(a)) awayScore = a;
   }
   return {
+    matchId:   m.id != null ? String(m.id) : null,
     date,
     time,
     homeTeam:  m.home.name,

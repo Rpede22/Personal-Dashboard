@@ -45,6 +45,7 @@ prisma/dev.db-journal
 .claude/
 CLAUDE.md
 AGENTS.md
+.claudeignore
 
 # ── Build resources (seeded DB used during Electron packaging) ────────────────
 build-resources/*.db

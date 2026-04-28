@@ -1,9 +1,66 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+// Must match the constant in app/api/wow/sync/route.ts — update both when a new raid releases.
+const CURRENT_RAID_TIER = "tier-mn-1";
+
 // In-memory cache for API lookups
 const lookupCache = new Map<string, { data: unknown; ts: number }>();
 const TTL = 60 * 60 * 1000; // 1 hour
+
+// ── Blizzard API — decimal ilvl via equipment endpoint ────────────────────────
+// Blizzard's `item_level_equipped` on the character endpoint is an integer (floored).
+// The equipment endpoint gives each slot's true ilvl; averaging those gives the real decimal.
+// Falls back to RIO integer when credentials are not set.
+let _charBlizzardToken: { token: string; expiresAt: number } | null = null;
+
+async function getCharBlizzardToken(region: string): Promise<string | null> {
+  const clientId = process.env.BLIZZARD_CLIENT_ID;
+  const clientSecret = process.env.BLIZZARD_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+
+  if (_charBlizzardToken && Date.now() < _charBlizzardToken.expiresAt) return _charBlizzardToken.token;
+
+  try {
+    const res = await fetch(`https://${region}.battle.net/oauth/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+      },
+      body: "grant_type=client_credentials",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    _charBlizzardToken = {
+      token: data.access_token,
+      expiresAt: Date.now() + Math.max(0, data.expires_in - 300) * 1000,
+    };
+    return _charBlizzardToken.token;
+  } catch { return null; }
+}
+
+async function fetchDecimalIlvl(name: string, realm: string, region: string): Promise<number | null> {
+  const r = region.toLowerCase();
+  const token = await getCharBlizzardToken(r);
+  if (!token) return null;
+
+  const realmSlug = realm.toLowerCase().replace(/'/g, "").replace(/\s+/g, "-");
+  const charName = name.toLowerCase();
+
+  try {
+    const res = await fetch(
+      `https://${r}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charName)}/equipment?namespace=profile-${r}&locale=en_US`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const items: Array<{ level?: { value?: number } }> = data.equipped_items ?? [];
+    if (items.length === 0) return null;
+    const total = items.reduce((sum, item) => sum + (item.level?.value ?? 0), 0);
+    return total / items.length;
+  } catch { return null; }
+}
 
 async function lookupCharacter(name: string, realm: string, region: string) {
   const cacheKey = `${region}-${realm}-${name}`.toLowerCase();
@@ -12,9 +69,11 @@ async function lookupCharacter(name: string, realm: string, region: string) {
 
   const regionLower = region.toLowerCase();
 
-  let ilvl: number | null = null;
+  // Primary: Blizzard equipment endpoint for true decimal ilvl
+  // (RIO `item_level_equipped` is floored to integer; Blizzard slot average gives real decimal)
+  let ilvl: number | null = await fetchDecimalIlvl(name, realm, region).catch(() => null);
 
-  // Raider.IO — fetch ilvl, RIO score, and raid progression
+  // Raider.IO — fetch RIO score, raid progression, and integer ilvl fallback
   const rioRes = await fetch(
     `https://raider.io/api/v1/characters/profile?region=${regionLower}&realm=${encodeURIComponent(realm)}&name=${encodeURIComponent(name)}&fields=mythic_plus_scores_by_season:current,raid_progression,gear`,
     { next: { revalidate: 3600 } }
@@ -29,12 +88,14 @@ async function lookupCharacter(name: string, realm: string, region: string) {
     rioScore =
       rioData.mythic_plus_scores_by_season?.[0]?.scores?.all ?? null;
 
-    // Parse raid progression — take the first entry's summary
+    // Parse raid progression — prefer the current tier, fall back to first key
     const raidProg = rioData.raid_progression;
     if (raidProg && typeof raidProg === "object") {
-      const firstKey = Object.keys(raidProg)[0];
-      if (firstKey) {
-        raidProgress = raidProg[firstKey]?.summary ?? null;
+      const tierKey = CURRENT_RAID_TIER in raidProg
+        ? CURRENT_RAID_TIER
+        : Object.keys(raidProg)[0];
+      if (tierKey) {
+        raidProgress = raidProg[tierKey]?.summary ?? null;
       }
     }
 

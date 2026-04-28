@@ -12,11 +12,12 @@ interface Assignment {
   status: string;
 }
 
-// Auto-priority: position 0-1 = high, 2-3 = medium, 4+ = low
+// Auto-priority: position 0-1 = high (red), 2-3 = medium (yellow/orange), 4+ = low (green)
+// Matches the same colour scale used in SchoolHub
 function autoPriorityColor(index: number, isOverdue: boolean): string {
   if (isOverdue) return "var(--accent-red)";
   if (index < 2) return "var(--accent-red)";
-  if (index < 4) return "var(--accent-indigo)";
+  if (index < 4) return "var(--accent-orange)";
   return "var(--accent-green)";
 }
 
