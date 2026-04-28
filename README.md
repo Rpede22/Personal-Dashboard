@@ -1,4 +1,4 @@
-# Personal Dashboard
+# Personal Dashboard — Vibe Coded
 
 A local-only personal dashboard desktop app built with **Next.js 16 + Electron**. It aggregates sports scores, WoW weekly progress, school deadlines, running training, and your iCloud calendar into a single always-available dark-themed window — no browser, no cloud, no accounts needed beyond the optional integrations you configure.
 
@@ -58,11 +58,14 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 | FC Barcelona | Football (La Liga) | **FotMob** — free, no key |
 | Esbjerg Energy | Ice hockey (Metal Ligaen) | TheSportsDB — free |
 
-**Source priority for football:** FotMob → API-Football (RapidAPI fallback, optional key) → TheSportsDB.
+**Source priority for football standings:** FotMob → TheSportsDB.
 
 **Danish 1st Division split table:** After round 22, FotMob returns three sub-tables (Promotion Group / Relegation Group / 1. Division). The hub and widget both display the team's Oprykningsspil rank when available.
 
-**NHL goal timeline:** Click any recent game in the NHL hub to expand a goal-by-goal timeline with scorer, assist(s), strength indicator (EV / PP1 / PP2 / SH / EN / SO), and running score. Uses the free NHL play-by-play API.
+**Goal timelines:** Click any finished match to expand a goal-by-goal timeline with scorer, assist, and running score.
+- **NHL:** Uses the free NHL play-by-play API. Includes strength indicator (EV / PP1 / PP2 / SH / EN / SO).
+- **Barcelona:** ESPN hidden API (`site.api.espn.com`) — free, no key.
+- **Esbjerg fB / Esbjerg Energy:** SportAPI7 via RapidAPI (`RAPIDAPI_KEY`). Searches all matches for the date, then fetches incidents. Requires a free SportAPI7 subscription.
 
 **Team box gradient borders** use real club colours — the GradientBorder wrapper component (outer div = gradient background + 3 px padding, inner div = surface colour) is the only reliable way to get gradient borders with `border-radius` in React inline styles.
 
@@ -70,12 +73,12 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 ## World of Warcraft
 
-Characters are stored in SQLite and looked up via **Raider.IO** (public API, no key needed).
+Characters are stored in SQLite and enriched via **Raider.IO** (public API, no key) and the **Blizzard API** (optional key, recommended).
 
-- **ilvl** is sourced from `gear.item_level_equipped` in the RIO response.
+- **ilvl** — primary source is the Blizzard equipment API (true decimal average, shown to 2 dp). Falls back to RIO `gear.item_level_equipped` if Blizzard credentials are not set.
 - The **weekly checklist** auto-seeds from templates every Wednesday at 06:00 UTC (EU reset). Templates: 8 M+ runs + 9 bosses × 3 difficulties for the current raid tier (`CURRENT_RAID_TIER` constant in `app/api/wow/sync/route.ts`).
-- **Auto-sync** (`⟳ Sync` button): hits RIO for current M+ run count and raid kill count, compares against a baseline captured at the start of each WoW week, and auto-ticks completed items. Baseline is stored in `.wow-raid-baseline.json` (git-ignored).
-- **Raid tier changes:** update `CURRENT_RAID_TIER` in `app/api/wow/sync/route.ts`, update boss count in `prisma/seed.ts`, then `npx prisma db seed`.
+- **Auto-sync** (`⟳ Sync` button) — primary source is the Blizzard API per-boss `last_kill_timestamp`. Falls back to a RIO cumulative delta against a baseline captured at the start of each WoW week (stored in `.wow-raid-baseline.json`, git-ignored).
+- **Raid tier changes:** update `CURRENT_RAID_TIER` + `CURRENT_TIER_INSTANCES` + `CURRENT_TIER_BOSS_COUNT` in `app/api/wow/sync/route.ts`, update `CURRENT_RAID_TIER` in `app/api/wow/character/route.ts`, update boss count in `prisma/seed.ts`, then `npx prisma db seed`.
 
 ---
 
@@ -112,7 +115,7 @@ Events are pulled from **iCloud CalDAV** using Apple's PROPFIND/REPORT protocol.
 - Fetches calendars named: `Arbejde`, `Skolerelateret`, `Kalender`, `Cand` (configurable in `app/api/calendar/route.ts`).
 - Window: 31 days back → 92 days ahead (supports 3 months of navigation in the hub).
 - **App-specific password required** — never use your main Apple ID password. Generate one at [appleid.apple.com](https://appleid.apple.com) → Security → App-Specific Passwords.
-- ICS feed URLs (`CALENDAR_SDU_URL` etc.) are also supported as a simpler alternative.
+- Public ICS feed URLs (`CALENDAR_SDU_URL`, `CALENDAR_CAND_URL`, `CALENDAR_ARBEJDE_URL`) are also supported as a simpler alternative.
 
 ---
 
@@ -161,9 +164,11 @@ Copy `.env.example` to `.env.local`:
 | `ICLOUD_CALDAV_PASS` | For calendar | App-specific password (not your Apple ID password) |
 | `STRAVA_CLIENT_ID` | For Strava sync | From strava.com/settings/api |
 | `STRAVA_CLIENT_SECRET` | For Strava sync | From strava.com/settings/api |
-| `RAPIDAPI_KEY` | Optional | API-Football fallback (100 req/day free). FotMob is used first. |
+| `RAPIDAPI_KEY` | For goal timelines | SportAPI7 on RapidAPI (free plan). Used for Esbjerg fB and Esbjerg Energy goal timelines. Subscribe at rapidapi.com → search "SportAPI7". |
+| `BLIZZARD_CLIENT_ID` | For WoW ilvl + raid sync | From develop.battle.net → Create Client |
+| `BLIZZARD_CLIENT_SECRET` | For WoW ilvl + raid sync | From develop.battle.net → Create Client |
 
-Sports (NHL, FotMob, TheSportsDB) and WoW (Raider.IO) use free public APIs — no keys needed.
+Sports (NHL, FotMob, TheSportsDB, ESPN) and WoW (Raider.IO) use free public APIs — no keys needed.
 
 ---
 
