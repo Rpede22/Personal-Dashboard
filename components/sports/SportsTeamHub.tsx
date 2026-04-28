@@ -3,6 +3,17 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
+interface GoalEvent {
+  minute: number;
+  extraMinute: number | null;
+  scorer: string;
+  assist: string | null;
+  type: "REGULAR" | "PENALTY" | "OWN_GOAL";
+  isHome: boolean;
+  homeScore: number;
+  awayScore: number;
+}
+
 interface StandingRow {
   rank: number;
   team: string;
@@ -17,6 +28,7 @@ interface StandingRow {
 }
 
 interface SportsEvent {
+  matchId?: string | null;
   date: string;
   time: string;
   homeTeam: string;
@@ -288,6 +300,8 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const [data, setData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("standings");
+  const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
+  const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[] | "loading" | "error">>({});
 
   useEffect(() => {
     (async () => {
@@ -298,6 +312,20 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
       setLoading(false);
     })();
   }, [teamSlug]);
+
+  async function toggleGoals(matchId: string, date: string) {
+    if (expandedMatch === matchId) { setExpandedMatch(null); return; }
+    setExpandedMatch(matchId);
+    if (goalsMap[matchId] !== undefined) return; // already fetched or fetching
+    setGoalsMap((prev) => ({ ...prev, [matchId]: "loading" }));
+    try {
+      const res = await fetch(`/api/sports/goals?matchId=${matchId}&date=${date}&slug=${teamSlug}`);
+      const d = await res.json();
+      setGoalsMap((prev) => ({ ...prev, [matchId]: d.goals ?? [] }));
+    } catch {
+      setGoalsMap((prev) => ({ ...prev, [matchId]: "error" }));
+    }
+  }
 
   const cfg = data?.config;
   const accent = cfg?.accentColor ?? "var(--accent-blue)";
@@ -439,27 +467,85 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
               <div className="space-y-2">
                 {data.last5.map((e, i) => {
                   const res = gameResult(e, keyword);
+                  const canExpand = !!(e.matchId && e.finished);
+                  const isExpanded = expandedMatch === e.matchId;
+                  const goalsState = e.matchId ? goalsMap[e.matchId] : undefined;
+                  const goals = Array.isArray(goalsState) ? goalsState : [];
                   return (
-                    <div key={i} className="rounded-xl px-4 py-3 flex items-center gap-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                      {res ? (
-                        <span className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0" style={{ background: RESULT_BG[res], color: "#fff" }}>
-                          {res}
-                        </span>
-                      ) : (
-                        <span className="w-8 h-8 rounded-lg shrink-0" style={{ background: "var(--surface-2)" }} />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm truncate">
-                          {e.homeTeam} <span style={{ color: "var(--text-muted)" }}>vs</span> {e.awayTeam}
+                    <div key={i} className="rounded-xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                      {/* Match row */}
+                      <div
+                        className={`px-4 py-3 flex items-center gap-4${canExpand ? " cursor-pointer select-none" : ""}`}
+                        onClick={canExpand ? () => toggleGoals(e.matchId!, e.date) : undefined}
+                      >
+                        {res ? (
+                          <span className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0" style={{ background: RESULT_BG[res], color: "#fff" }}>
+                            {res}
+                          </span>
+                        ) : (
+                          <span className="w-8 h-8 rounded-lg shrink-0" style={{ background: "var(--surface-2)" }} />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm truncate">
+                            {e.homeTeam} <span style={{ color: "var(--text-muted)" }}>vs</span> {e.awayTeam}
+                          </div>
+                          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            {toCopenhagenDate(e.date, e.time)}{e.time ? " · " + toCopenhagenTime(e.date, e.time) + " CEST" : ""}
+                          </div>
                         </div>
-                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                          {toCopenhagenDate(e.date, e.time)}{e.time ? " · " + toCopenhagenTime(e.date, e.time) + " CEST" : ""}
-                        </div>
+                        {e.homeScore !== null && e.awayScore !== null && (
+                          <span className="text-lg font-bold shrink-0" style={{ color: accent }}>
+                            {e.homeScore}–{e.awayScore}
+                          </span>
+                        )}
+                        {canExpand && (
+                          <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>
+                            {isExpanded ? "▲" : "▼"}
+                          </span>
+                        )}
                       </div>
-                      {e.homeScore !== null && e.awayScore !== null && (
-                        <span className="text-lg font-bold shrink-0" style={{ color: accent }}>
-                          {e.homeScore}–{e.awayScore}
-                        </span>
+
+                      {/* Goal timeline */}
+                      {isExpanded && (
+                        <div className="px-4 pb-4 pt-2 border-t" style={{ borderColor: "var(--border)" }}>
+                          {goalsState === "loading" ? (
+                            <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading…</p>
+                          ) : goalsState === "error" ? (
+                            <p className="text-xs" style={{ color: "var(--accent-red)" }}>Failed to load goals</p>
+                          ) : goals.length === 0 ? (
+                            <p className="text-xs" style={{ color: "var(--text-muted)" }}>No goals recorded</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {goals.map((gl, gi) => {
+                                const myTeamGoal = gl.type !== "OWN_GOAL"
+                                  ? (gl.isHome === e.homeTeam.toLowerCase().includes(keyword.toLowerCase()))
+                                  : (gl.isHome !== e.homeTeam.toLowerCase().includes(keyword.toLowerCase()));
+                                const minuteStr = gl.extraMinute ? `${gl.minute}+${gl.extraMinute}′` : `${gl.minute}′`;
+                                const typeColor = gl.type === "PENALTY" ? "var(--accent-orange)" : gl.type === "OWN_GOAL" ? "var(--accent-red)" : undefined;
+                                return (
+                                  <div key={gi} className="flex items-center gap-2.5 text-xs">
+                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: myTeamGoal ? accent : "var(--text-muted)" }} />
+                                    <span className="w-9 shrink-0 tabular-nums" style={{ color: "var(--text-muted)" }}>{minuteStr}</span>
+                                    <span className="flex-1 min-w-0 flex flex-wrap items-center gap-1">
+                                      {gl.type !== "REGULAR" && (
+                                        <span style={{ fontSize: "9px", fontWeight: 700, padding: "0 3px 1px", borderRadius: "3px", background: `${typeColor}33`, color: typeColor }}>
+                                          {gl.type === "OWN_GOAL" ? "OG" : "PEN"}
+                                        </span>
+                                      )}
+                                      <span style={{ color: myTeamGoal ? "var(--text)" : "var(--text-muted)", fontWeight: myTeamGoal ? 600 : 400 }}>
+                                        {gl.scorer}
+                                      </span>
+                                      {gl.assist && <span style={{ color: "var(--text-muted)" }}>({gl.assist})</span>}
+                                    </span>
+                                    <span className="shrink-0 font-bold tabular-nums" style={{ color: myTeamGoal ? accent : "var(--text-muted)" }}>
+                                      {gl.homeScore}–{gl.awayScore}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
