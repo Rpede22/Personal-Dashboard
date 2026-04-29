@@ -24,6 +24,35 @@ interface CharacterStats {
   errors: string[];
 }
 
+interface GearWishlistItem {
+  id: number | null;
+  characterId: number;
+  slot: string;
+  itemName: string;
+  obtained: boolean;
+}
+
+const GEAR_SLOTS = [
+  // left column (matches WoW panel left side + weapons)
+  { id: "HEAD",      label: "Head",      abbr: "He" },
+  { id: "NECK",      label: "Neck",      abbr: "Nk" },
+  { id: "SHOULDERS", label: "Shoulders", abbr: "Sh" },
+  { id: "BACK",      label: "Back",      abbr: "Bk" },
+  { id: "CHEST",     label: "Chest",     abbr: "Ch" },
+  { id: "WRISTS",    label: "Wrists",    abbr: "Wr" },
+  { id: "MAIN_HAND", label: "Main Hand", abbr: "MH" },
+  { id: "OFF_HAND",  label: "Off Hand",  abbr: "OH" },
+  // right column (matches WoW panel right side)
+  { id: "HANDS",     label: "Hands",     abbr: "Ha" },
+  { id: "WAIST",     label: "Waist",     abbr: "Wa" },
+  { id: "LEGS",      label: "Legs",      abbr: "Le" },
+  { id: "FEET",      label: "Feet",      abbr: "Fe" },
+  { id: "FINGER_1",  label: "Ring 1",    abbr: "R1" },
+  { id: "FINGER_2",  label: "Ring 2",    abbr: "R2" },
+  { id: "TRINKET_1", label: "Trinket 1", abbr: "T1" },
+  { id: "TRINKET_2", label: "Trinket 2", abbr: "T2" },
+] as const;
+
 // No client-side cache — server already caches for 1h via lookupCache.
 // Keeping a module-level cache here caused stale ilvl values (e.g. integers from before the 2dp fix).
 
@@ -133,6 +162,8 @@ export default function WoWHub() {
   const [lookupResult, setLookupResult] = useState<(CharacterStats & { name: string }) | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [gearWishlist, setGearWishlist] = useState<GearWishlistItem[]>([]);
+  const [gearEdits, setGearEdits] = useState<Record<string, string>>({});
 
   async function loadCharacters() {
     setLoadingChars(true);
@@ -169,6 +200,76 @@ export default function WoWHub() {
     loadCharacters();
   }, []);
 
+  async function loadGearWishlist(char: WowCharacter) {
+    const res = await fetch(`/api/wow/gear-wishlist?characterId=${char.id}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const items: GearWishlistItem[] = data.items ?? [];
+    setGearWishlist(items);
+    setGearEdits(Object.fromEntries(items.map((i) => [i.slot, i.itemName])));
+  }
+
+  async function toggleGearObtained(slot: string) {
+    if (!selectedChar) return;
+    const current = gearWishlist.find((i) => i.slot === slot);
+    const newObtained = !(current?.obtained ?? false);
+    const placeholder: GearWishlistItem = {
+      id: null, characterId: selectedChar.id, slot, itemName: current?.itemName ?? "", obtained: newObtained,
+    };
+    // Optimistic update — insert placeholder if item not yet in state
+    setGearWishlist((prev) => {
+      const exists = prev.some((i) => i.slot === slot);
+      return exists
+        ? prev.map((i) => (i.slot === slot ? { ...i, obtained: newObtained } : i))
+        : [...prev, placeholder];
+    });
+    const res = await fetch("/api/wow/gear-wishlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        characterId: selectedChar.id,
+        slot,
+        itemName: current?.itemName ?? "",
+        obtained: newObtained,
+      }),
+    });
+    // Sync back with the real DB id
+    const data = await res.json();
+    if (data.item) {
+      setGearWishlist((prev) =>
+        prev.map((i) => (i.slot === slot ? data.item : i))
+      );
+    }
+  }
+
+  async function saveGearItemName(slot: string) {
+    if (!selectedChar) return;
+    const itemName = gearEdits[slot] ?? "";
+    const current = gearWishlist.find((i) => i.slot === slot);
+    setGearWishlist((prev) => {
+      const exists = prev.some((i) => i.slot === slot);
+      return exists
+        ? prev.map((i) => (i.slot === slot ? { ...i, itemName } : i))
+        : [...prev, { id: null, characterId: selectedChar.id, slot, itemName, obtained: false }];
+    });
+    const res = await fetch("/api/wow/gear-wishlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        characterId: selectedChar.id,
+        slot,
+        itemName,
+        obtained: current?.obtained ?? false,
+      }),
+    });
+    const data = await res.json();
+    if (data.item) {
+      setGearWishlist((prev) =>
+        prev.map((i) => (i.slot === slot ? data.item : i))
+      );
+    }
+  }
+
   async function loadChecklist(char: WowCharacter) {
     setSelectedChar(char);
     setLoadingChecklist(true);
@@ -192,6 +293,8 @@ export default function WoWHub() {
     } finally {
       setLoadingStats(false);
     }
+    // Load gear wishlist
+    loadGearWishlist(char);
   }
 
   // Lightweight checklist-only refresh — used after sync so we don't wipe ilvl/stats
@@ -927,6 +1030,102 @@ export default function WoWHub() {
           </div>
         </div>
       </div>
+
+      {/* ── Gear Wishlist ──────────────────────────────────────────────────── */}
+      {selectedChar && (
+        <div
+          className="rounded-2xl p-5 mt-6"
+          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold capitalize">
+              {selectedChar.name} — Items to Get
+            </h2>
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {gearWishlist.filter((i) => i.obtained).length}/{gearWishlist.length} obtained
+            </span>
+          </div>
+
+          <div className="flex gap-6">
+            {[GEAR_SLOTS.slice(0, 8), GEAR_SLOTS.slice(8, 16)].map((col, colIdx) => (
+              <div key={colIdx} className="flex-1 min-w-0">
+                {col.map((slotInfo) => {
+                  const item = gearWishlist.find((i) => i.slot === slotInfo.id) ?? {
+                    id: null, characterId: selectedChar.id, slot: slotInfo.id, itemName: "", obtained: false,
+                  };
+                  const editVal = gearEdits[slotInfo.id] ?? "";
+                  const hasItem = editVal.trim() !== "";
+                  return (
+                    <div key={slotInfo.id} className="flex items-center gap-2.5 py-1 border-b" style={{ borderColor: "var(--border)" }}>
+                      {/* WoW-style slot box */}
+                      <div
+                        className="flex-shrink-0 rounded flex items-center justify-center font-bold text-xs select-none"
+                        style={{
+                          width: 34,
+                          height: 34,
+                          background: item.obtained
+                            ? "var(--accent-green)33"
+                            : hasItem
+                              ? "var(--accent-purple)22"
+                              : "var(--surface-2)",
+                          border: `1px solid ${item.obtained
+                            ? "var(--accent-green)"
+                            : hasItem
+                              ? "var(--accent-purple)55"
+                              : "var(--border)"}`,
+                          color: item.obtained ? "var(--accent-green)" : "var(--text-muted)",
+                          boxShadow: item.obtained ? "0 0 6px var(--accent-green)44" : "none",
+                        }}
+                      >
+                        {item.obtained ? "✓" : slotInfo.abbr}
+                      </div>
+
+                      {/* Slot name + item name input */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] leading-none mb-0.5" style={{ color: "var(--text-muted)" }}>
+                          {slotInfo.label}
+                        </p>
+                        <input
+                          value={editVal}
+                          onChange={(e) =>
+                            setGearEdits((prev) => ({ ...prev, [slotInfo.id]: e.target.value }))
+                          }
+                          onBlur={() => saveGearItemName(slotInfo.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                          }}
+                          placeholder="—"
+                          className="block w-full text-xs bg-transparent outline-none"
+                          style={{
+                            color: item.obtained ? "var(--text-muted)" : "var(--text)",
+                            textDecoration: item.obtained ? "line-through" : "none",
+                          }}
+                        />
+                      </div>
+
+                      {/* Obtained toggle — only active when an item name is set */}
+                      <button
+                        onClick={() => hasItem && toggleGearObtained(slotInfo.id)}
+                        title={!hasItem ? "Enter an item name first" : item.obtained ? "Mark as needed" : "Mark as obtained"}
+                        className="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-xs font-bold transition-all"
+                        style={{
+                          background: item.obtained ? "var(--accent-green)" : "var(--surface-2)",
+                          border: `1px solid ${item.obtained ? "var(--accent-green)" : "var(--border)"}`,
+                          color: item.obtained ? "#fff" : "var(--border)",
+                          opacity: hasItem ? 1 : 0.3,
+                          cursor: hasItem ? "pointer" : "not-allowed",
+                        }}
+                      >
+                        ✓
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

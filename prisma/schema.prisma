@@ -65,3 +65,13 @@ model WowChecklistTemplate {
   task      String  @unique
   isDefault Boolean @default(false)
 }
+
+model WowGearWishlist {
+  id          Int     @id @default(autoincrement())
+  characterId Int
+  slot        String
+  itemName    String  @default("")
+  obtained    Boolean @default(false)
+
+  @@unique([characterId, slot])
+}
