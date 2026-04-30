@@ -9,6 +9,7 @@ interface WowCharacter {
   realm: string;
   region: string;
   sortOrder: number;
+  notes: string;
 }
 
 interface ChecklistItem {
@@ -164,6 +165,7 @@ export default function WoWHub() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [gearWishlist, setGearWishlist] = useState<GearWishlistItem[]>([]);
   const [gearEdits, setGearEdits] = useState<Record<string, string>>({});
+  const [notesEdit, setNotesEdit] = useState("");
 
   async function loadCharacters() {
     setLoadingChars(true);
@@ -293,8 +295,21 @@ export default function WoWHub() {
     } finally {
       setLoadingStats(false);
     }
-    // Load gear wishlist
+    // Load gear wishlist + notes
     loadGearWishlist(char);
+    setNotesEdit(char.notes ?? "");
+  }
+
+  async function saveNotes() {
+    if (!selectedChar) return;
+    await fetch("/api/wow/character", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: selectedChar.id, notes: notesEdit }),
+    });
+    setCharacters((prev) =>
+      prev.map((c) => (c.id === selectedChar.id ? { ...c, notes: notesEdit } : c))
+    );
   }
 
   // Lightweight checklist-only refresh — used after sync so we don't wipe ilvl/stats
@@ -1123,6 +1138,24 @@ export default function WoWHub() {
                 })}
               </div>
             ))}
+          </div>
+
+          {/* Notes */}
+          <div className="mt-5">
+            <p className="text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>Notes</p>
+            <textarea
+              value={notesEdit}
+              onChange={(e) => setNotesEdit(e.target.value)}
+              onBlur={saveNotes}
+              placeholder="Add notes for this character…"
+              rows={4}
+              className="w-full rounded-xl px-3 py-2.5 text-sm resize-none outline-none"
+              style={{
+                background: "var(--surface-2)",
+                color: "var(--text)",
+                border: "1px solid var(--border)",
+              }}
+            />
           </div>
         </div>
       )}

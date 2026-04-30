@@ -173,19 +173,28 @@ export async function POST(request: Request) {
   return NextResponse.json({ character }, { status: 201 });
 }
 
-// PATCH /api/wow/character — update sortOrder for reordering
-// Body: { id: number, sortOrder: number }
+// PATCH /api/wow/character — update sortOrder or notes
+// Body: { id: number, sortOrder?: number, notes?: string }
 export async function PATCH(request: Request) {
   const body = await request.json();
-  const { id, sortOrder } = body;
+  const { id, sortOrder, notes } = body;
 
-  if (id === undefined || sortOrder === undefined) {
-    return NextResponse.json({ error: "id and sortOrder required" }, { status: 400 });
+  if (id === undefined) {
+    return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data: Record<string, any> = {};
+  if (sortOrder !== undefined) data.sortOrder = parseInt(sortOrder);
+  if (notes    !== undefined) data.notes     = notes;
+
+  if (Object.keys(data).length === 0) {
+    return NextResponse.json({ error: "nothing to update" }, { status: 400 });
   }
 
   const character = await prisma.wowCharacter.update({
     where: { id: parseInt(id) },
-    data: { sortOrder: parseInt(sortOrder) },
+    data,
   });
 
   return NextResponse.json({ character });

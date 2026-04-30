@@ -44,6 +44,7 @@ model WowCharacter {
   realm     String
   region    String   @default("eu")
   sortOrder Int      @default(0)
+  notes     String   @default("")
   createdAt DateTime @default(now())
 
   @@unique([name, realm, region])
