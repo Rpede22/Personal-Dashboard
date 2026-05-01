@@ -15,7 +15,7 @@ The home screen is a 2-column grid of widgets, each linking to a full hub page:
 | 🧙 **World of Warcraft** | Purple | Per-character ilvl, RIO score, weekly M+/raid/custom task progress |
 | 🏃 **Running** | Green | This week's km, last 30-day km, recent runs, 7-day plan, days to race |
 | 📅 **Calendar** | Pink | Upcoming events pulled live from iCloud CalDAV |
-| 💼 **Work Hours** | Cyan | One-click link to register daily hours at profil.cand.dk |
+| 💼 **Work Hours** | Cyan | Two links side by side: register daily hours at profil.cand.dk and view payslips at intect.app |
 
 ---
 
