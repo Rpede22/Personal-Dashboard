@@ -75,22 +75,29 @@ export function distributeLoad(assignments: AssignmentLoad[]): LoadResult {
       continue;
     }
 
-    // Look-ahead: how many days do future assignments need at SOFT_CAP?
-    const futureWork = remainingHours
-      .slice(idx + 1)
-      .reduce((s, h) => s + h, 0);
-    const futureDaysNeeded = Math.ceil(futureWork / SOFT_CAP);
+    // Look-ahead: only compress this assignment if future work can't fit comfortably
+    // after it finishes at SOFT_CAP.
+    const futureWork = remainingHours.slice(idx + 1).reduce((s, h) => s + h, 0);
 
-    // Days available from nextStart to this assignment's deadline
-    const msToCurrent = assignment.dueDate.getTime() - nextStart.getTime();
-    const daysToCurrent = Math.max(1, Math.ceil(msToCurrent / (1000 * 60 * 60 * 24)));
+    // How many days would this assignment take at SOFT_CAP (natural pace)?
+    const daysAtSoftCap = Math.ceil(remaining / SOFT_CAP);
+    const naturalFinishMs = nextStart.getTime() + daysAtSoftCap * 86400000;
 
-    // Reserve future days: compress current assignment into fewer days so later
-    // ones have breathing room at SOFT_CAP
-    const daysForCurrent = Math.max(1, daysToCurrent - futureDaysNeeded);
+    // Days remaining for future work after natural finish → last deadline
+    const lastDeadline = sorted[sorted.length - 1].dueDate;
+    const msAfterFinish = Math.max(0, lastDeadline.getTime() - naturalFinishMs);
+    const daysAfterFinish = Math.floor(msAfterFinish / 86400000);
 
-    // Rate needed to finish current assignment within its compressed window
-    const lookaheadRate = remaining / daysForCurrent;
+    // Future work that can't fit at SOFT_CAP in the remaining time
+    const overflowWork = Math.max(0, futureWork - daysAfterFinish * SOFT_CAP);
+
+    // Only raise the rate above SOFT_CAP when there's genuine overflow
+    let lookaheadRate = SOFT_CAP;
+    if (overflowWork > 0) {
+      const extraDaysNeeded = Math.ceil(overflowWork / SOFT_CAP);
+      const daysForCurrent = Math.max(1, daysAtSoftCap - extraDaysNeeded);
+      lookaheadRate = remaining / daysForCurrent;
+    }
 
     let rem = remaining;
     const cursor = new Date(nextStart);

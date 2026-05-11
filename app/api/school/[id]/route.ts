@@ -10,12 +10,13 @@ export async function PATCH(
 
   // If marking done, allow clearing overdue
   const data: Record<string, unknown> = {};
-  if (body.title !== undefined)   data.title   = body.title;
-  if (body.dueDate !== undefined)  data.dueDate  = new Date(body.dueDate);
-  if (body.dueTime !== undefined)  data.dueTime  = body.dueTime ?? null;
-  if (body.subject !== undefined)  data.subject  = body.subject;
-  if (body.priority !== undefined) data.priority = body.priority;
-  if (body.status !== undefined)   data.status   = body.status;
+  if (body.title !== undefined)      data.title      = body.title;
+  if (body.dueDate !== undefined)    data.dueDate    = new Date(body.dueDate);
+  if (body.dueTime !== undefined)    data.dueTime    = body.dueTime ?? null;
+  if (body.subject !== undefined)    data.subject    = body.subject;
+  if (body.priority !== undefined)   data.priority   = body.priority;
+  if (body.status !== undefined)     data.status     = body.status;
+  if (body.hoursSpent !== undefined) data.hoursSpent = Number(body.hoursSpent);
 
   const assignment = await prisma.assignment.update({
     where: { id: parseInt(id) },
