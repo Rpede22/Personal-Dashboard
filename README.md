@@ -110,7 +110,10 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 - The widget shows overdue items first with a glowing red dot. The due-date label shows an exact countdown (`2d 14h`, `3h 20m`) when a due time is set.
 - Overdue status can only be cleared by marking the assignment **Done**.
 - **Estimated hours** — optionally set how many hours an assignment will take when creating it.
-- **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears below the list. A greedy algorithm distributes work across days (up to 3 h/day by default), sorted by deadline. Each day card shows which assignments are scheduled and how many hours, colour-coded green (under cap) or red (at/over cap).
+- **Hours spent** — log actual hours spent so far on in-progress tasks directly in the School Hub. The scheduler subtracts spent hours from the estimate and reschedules automatically.
+- **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears in both the hub and the dashboard widget. A sequential scheduler completes one assignment fully before scheduling the next (sorted by deadline). Each assignment targets 3 h/day (soft cap, green) so it finishes as quickly as possible, freeing the most days for later ones. If a deadline forces more than 3 h/day the cap escalates smoothly up to 10 h/day (red). All displayed hours are rounded up to the nearest 0.5 h. The last scheduled day for each assignment is shown as "Est. done".
+- **Schedule-aware colours** — priority dots reflect the schedule: green = fits within 3 h/day, orange = tight (needs hard cap), red = overdue. Tasks without estimates use days-to-deadline proximity instead.
+- **Dashboard widget** mirrors the full hub view (estimated hours, due date, countdown, read-only hours spent) — navigate to the hub only to add tasks or update hours spent.
 
 ---
 

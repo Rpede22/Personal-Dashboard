@@ -58,10 +58,14 @@ export async function GET(request: Request) {
       title: a.title,
       dueDate: new Date(a.dueDate),
       estimatedHours: a.estimatedHours!,
+      hoursSpent: a.hoursSpent ?? 0,
     }));
 
-  const loadPlan = Object.fromEntries(distributeLoad(withEstimates));
-  return NextResponse.json({ assignments, loadPlan });
+  const { plan, estDoneByAssignment, needsHardCap } = distributeLoad(withEstimates);
+  const loadPlan = Object.fromEntries(plan);
+  const estDoneMap = Object.fromEntries(estDoneByAssignment);
+  const needsHardCapMap = Object.fromEntries(needsHardCap);
+  return NextResponse.json({ assignments, loadPlan, estDoneMap, needsHardCapMap });
 }
 
 export async function POST(request: Request) {

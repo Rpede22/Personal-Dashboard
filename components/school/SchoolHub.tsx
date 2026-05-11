@@ -12,6 +12,7 @@ interface Assignment {
   priority: string;
   status: string;
   estimatedHours: number | null;
+  hoursSpent: number;
 }
 
 // Non-overdue statuses the user can manually set
@@ -31,11 +32,26 @@ const STATUS_COLOR: Record<string, string> = {
   overdue: "var(--accent-red)",
 };
 
-// Auto-priority: sort pending+in_progress+overdue by dueDate asc, position 1-2=high, 3-4=medium, 5+=low
-function getAutoPriorityColor(index: number, isOverdue: boolean): string {
+// Schedule-aware dot color:
+// - Overdue → red
+// - Has estimate + needs hard cap (tight deadline) → orange
+// - Has estimate + fits soft cap → green
+// - No estimate → based on days to deadline
+function getDotColor(
+  a: { status: string; dueDate: string; estimatedHours: number | null },
+  isOverdue: boolean,
+  needsHardCapMap: Record<number, boolean>,
+  id: number
+): string {
   if (isOverdue) return "var(--accent-red)";
-  if (index < 2) return "var(--accent-red)";
-  if (index < 4) return "var(--accent-orange)";
+  if (a.status === "done") return "var(--text-muted)";
+  if (a.estimatedHours) {
+    return needsHardCapMap[id] ? "var(--accent-orange)" : "var(--accent-green)";
+  }
+  // No estimate — use proximity to deadline
+  const daysLeft = Math.ceil((new Date(a.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  if (daysLeft <= 1) return "var(--accent-red)";
+  if (daysLeft <= 4) return "var(--accent-orange)";
   return "var(--accent-green)";
 }
 
@@ -53,16 +69,21 @@ export default function SchoolHub() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [formError, setFormError] = useState<string | null>(null);
   const [loadPlan, setLoadPlan] = useState<Record<string, { assignmentId: number; title: string; hours: number }[]>>({});
+  const [estDoneMap, setEstDoneMap] = useState<Record<number, string>>({});
+  const [needsHardCapMap, setNeedsHardCapMap] = useState<Record<number, boolean>>({});
+  const [hoursSpentEdits, setHoursSpentEdits] = useState<Record<number, string>>({});
 
-  async function load() {
-    setLoading(true);
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch("/api/school");
       const data = await res.json();
       setAssignments(data.assignments ?? []);
       setLoadPlan(data.loadPlan ?? {});
+      setEstDoneMap(data.estDoneMap ?? {});
+      setNeedsHardCapMap(data.needsHardCapMap ?? {});
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -113,6 +134,33 @@ export default function SchoolHub() {
   async function deleteAssignment(id: number) {
     await fetch(`/api/school/${id}`, { method: "DELETE" });
     setAssignments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  async function saveHoursSpent(id: number, rawValue: string) {
+    const val = parseFloat(rawValue);
+    if (isNaN(val) || val < 0) return;
+    const res = await fetch(`/api/school/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hoursSpent: val }),
+    });
+    if (!res.ok) {
+      console.error("Failed to save hours spent:", await res.text());
+      return;
+    }
+    setAssignments((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, hoursSpent: val } : a))
+    );
+    // Silent reload to refresh load plan + est done dates without flicker
+    load(true);
+  }
+
+  function formatDueDate(dueDate: string): string {
+    return new Date(dueDate).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
   }
 
   function dueInfo(a: Assignment): { label: string; color: string } {
@@ -326,11 +374,7 @@ export default function SchoolHub() {
           {sortedFiltered.map((a) => {
             const due = dueInfo(a);
             const isOverdue = a.status === "overdue";
-            const priorityIdx = priorityIndexMap.get(a.id);
-            const dotColor =
-              a.status === "done"
-                ? "var(--text-muted)"
-                : getAutoPriorityColor(priorityIdx ?? 99, isOverdue);
+            const dotColor = getDotColor(a, isOverdue, needsHardCapMap, a.id);
 
             return (
               <div
@@ -372,12 +416,61 @@ export default function SchoolHub() {
                   {a.status === "done" && a.subject && (
                     <p className="text-xs" style={{ color: "var(--text-muted)" }}>{a.subject}</p>
                   )}
+
+                  {/* Hours spent + est done — only when estimate exists and task is in progress */}
+                  {a.estimatedHours && a.status === "in_progress" && (
+                    <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                      <label className="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
+                        Spent:
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          value={hoursSpentEdits[a.id] ?? a.hoursSpent ?? 0}
+                          onChange={(e) =>
+                            setHoursSpentEdits((prev) => ({ ...prev, [a.id]: e.target.value }))
+                          }
+                          onBlur={(e) => saveHoursSpent(a.id, e.target.value)}
+                          className="w-14 rounded px-1.5 py-0.5 text-xs"
+                          style={{
+                            background: "var(--surface-2)",
+                            color: "var(--text)",
+                            border: "1px solid var(--border)",
+                          }}
+                        />
+                        / {a.estimatedHours}h
+                      </label>
+                      {estDoneMap[a.id] && (
+                        <span className="text-xs font-medium" style={{ color: "var(--accent-indigo)" }}>
+                          Est. done{" "}
+                          {new Date(estDoneMap[a.id]).toLocaleDateString("en-GB", {
+                            weekday: "short",
+                            day: "numeric",
+                            month: "short",
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                {a.status !== "done" && a.status !== "overdue" && (
-                  <span className="text-sm font-semibold flex-shrink-0" style={{ color: due.color }}>
-                    {due.label}
-                  </span>
+                {/* Right-side info block — est hours · due date · countdown */}
+                {a.status !== "done" && (
+                  <div className="flex-shrink-0 text-right space-y-0.5">
+                    {a.estimatedHours && (
+                      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        Estimated: {a.estimatedHours}h
+                      </p>
+                    )}
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      Due: {formatDueDate(a.dueDate)}
+                    </p>
+                    {!isOverdue && (
+                      <p className="text-xs font-semibold" style={{ color: due.color }}>
+                        {due.label}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 {/* Status selector — overdue is read-only (only Done clears it) */}
@@ -448,11 +541,15 @@ export default function SchoolHub() {
         <div className="mt-6">
           <h3 className="font-semibold mb-3">Work Plan</h3>
           <div className="space-y-2">
-            {Object.entries(loadPlan)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([date, slots]) => {
-                const totalHours = slots.reduce((s, sl) => s + sl.hours, 0);
-                const isOverloaded = totalHours >= 3;
+            {(() => {
+              const now = new Date();
+              const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+              return Object.entries(loadPlan)
+                .filter(([date]) => date >= localToday)
+                .sort(([a], [b]) => a.localeCompare(b));
+            })().map(([date, slots]) => {
+                const totalHours = Math.ceil(slots.reduce((s, sl) => s + sl.hours, 0) * 2) / 2;
+                const planColor = totalHours > 3 ? "var(--accent-red)" : "var(--accent-green)";
                 return (
                   <div
                     key={date}
@@ -469,7 +566,7 @@ export default function SchoolHub() {
                       </span>
                       <span
                         className="text-xs font-semibold"
-                        style={{ color: isOverloaded ? "var(--accent-red)" : "var(--accent-green)" }}
+                        style={{ color: planColor }}
                       >
                         {totalHours}h
                       </span>
@@ -478,7 +575,7 @@ export default function SchoolHub() {
                       {slots.map((slot, i) => (
                         <div key={i} className="flex justify-between text-xs" style={{ color: "var(--text-muted)" }}>
                           <span>{slot.title}</span>
-                          <span>{slot.hours}h</span>
+                          <span>{Math.ceil(slot.hours * 2) / 2}h</span>
                         </div>
                       ))}
                     </div>

@@ -18,6 +18,7 @@ model Assignment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   estimatedHours Float?  // null = no estimate given
+  hoursSpent     Float   @default(0) // hours logged so far
 }
 
 model RunLog {
