@@ -196,31 +196,35 @@ export default function SportsWidget() {
   const [sportsSummaries, setSportsSummaries] = useState<SportsSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
+  async function loadData() {
+    try {
+      const [standingsRes, scheduleRes, sportsRes, bracketRes] = await Promise.all([
+        fetch("/api/nhl/standings"),
+        fetch("/api/nhl/schedule?team=EDM"),
+        fetch("/api/sports"),
+        fetch("/api/nhl/bracket"),
+      ]);
+      const standings = await standingsRes.json();
+      const schedule = await scheduleRes.json();
+      const sports = await sportsRes.json();
+      const bracketData = await bracketRes.json();
+
+      setEdm(standings.standings?.find((s: TeamStanding) => s.teamAbbrev === "EDM") ?? null);
+      setEdmGames(schedule.recent ?? []);
+      setEdmNext(schedule.next ?? null);
+      setSportsSummaries(sports.summaries ?? []);
+
+      const series: BracketSeries[] = bracketData.series ?? [];
+      const edmS = series.find((s) => s.topSeed.abbrev === "EDM" || s.bottomSeed.abbrev === "EDM") ?? null;
+      setEdmSeries(edmS);
+    } catch {}
+    setLoading(false);
+  }
+
   useEffect(() => {
-    (async () => {
-      try {
-        const [standingsRes, scheduleRes, sportsRes, bracketRes] = await Promise.all([
-          fetch("/api/nhl/standings"),
-          fetch("/api/nhl/schedule?team=EDM"),
-          fetch("/api/sports"),
-          fetch("/api/nhl/bracket"),
-        ]);
-        const standings = await standingsRes.json();
-        const schedule = await scheduleRes.json();
-        const sports = await sportsRes.json();
-        const bracketData = await bracketRes.json();
-
-        setEdm(standings.standings?.find((s: TeamStanding) => s.teamAbbrev === "EDM") ?? null);
-        setEdmGames(schedule.recent ?? []);
-        setEdmNext(schedule.next ?? null);
-        setSportsSummaries(sports.summaries ?? []);
-
-        const series: BracketSeries[] = bracketData.series ?? [];
-        const edmS = series.find((s) => s.topSeed.abbrev === "EDM" || s.bottomSeed.abbrev === "EDM") ?? null;
-        setEdmSeries(edmS);
-      } catch {}
-      setLoading(false);
-    })();
+    loadData();
+    const interval = setInterval(loadData, 5 * 60 * 1000); // refresh every 5 minutes
+    return () => clearInterval(interval);
   }, []);
 
   function edmResult(game: NHLGame): "W" | "L" | "OTL" {
