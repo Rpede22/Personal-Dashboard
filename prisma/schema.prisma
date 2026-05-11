@@ -17,6 +17,7 @@ model Assignment {
   priority  String   @default("medium")  // low | medium | high — auto-overridden by UI
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  estimatedHours Float?  // null = no estimate given
 }
 
 model RunLog {

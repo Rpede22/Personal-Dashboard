@@ -67,6 +67,8 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 - **Barcelona:** ESPN hidden API (`site.api.espn.com`) — free, no key.
 - **Esbjerg fB / Esbjerg Energy:** SportAPI7 via RapidAPI (`RAPIDAPI_KEY`). Searches all matches for the date, then fetches incidents. Requires a free SportAPI7 subscription.
 
+**Auto-refresh:** The sports widget on the dashboard and every team hub page automatically re-fetch data every 5 minutes while the app is open — no manual refresh needed.
+
 **Team box gradient borders** use real club colours — the GradientBorder wrapper component (outer div = gradient background + 3 px padding, inner div = surface colour) is the only reliable way to get gradient borders with `border-radius` in React inline styles.
 
 ---
@@ -107,6 +109,8 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 - `GET /api/school` auto-marks any non-done assignment as **overdue** the moment its deadline passes (date + time combined), with no manual action needed.
 - The widget shows overdue items first with a glowing red dot. The due-date label shows an exact countdown (`2d 14h`, `3h 20m`) when a due time is set.
 - Overdue status can only be cleared by marking the assignment **Done**.
+- **Estimated hours** — optionally set how many hours an assignment will take when creating it.
+- **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears below the list. A greedy algorithm distributes work across days (up to 3 h/day by default), sorted by deadline. Each day card shows which assignments are scheduled and how many hours, colour-coded green (under cap) or red (at/over cap).
 
 ---
 

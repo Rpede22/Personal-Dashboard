@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { distributeLoad } from "@/lib/load-distributor";
 
 // Returns a Date for when an assignment becomes overdue, respecting dueTime if set.
 function overdueThreshold(dueDate: Date, dueTime: string | null): Date {
@@ -49,13 +50,23 @@ export async function GET(request: Request) {
     }
   }
   await Promise.all(updates);
+  // Build load plan from assignments that have estimates and aren't done
+  const withEstimates = assignments
+    .filter((a) => a.estimatedHours && a.status !== "done" && a.status !== "overdue")
+    .map((a) => ({
+      id: a.id,
+      title: a.title,
+      dueDate: new Date(a.dueDate),
+      estimatedHours: a.estimatedHours!,
+    }));
 
-  return NextResponse.json({ assignments });
+  const loadPlan = Object.fromEntries(distributeLoad(withEstimates));
+  return NextResponse.json({ assignments, loadPlan });
 }
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { title, dueDate, dueTime, subject, priority } = body;
+  const { title, dueDate, dueTime, subject, priority, estimatedHours } = body;
 
   if (!title || !dueDate) {
     return NextResponse.json({ error: "title and dueDate required" }, { status: 400 });
@@ -69,6 +80,7 @@ export async function POST(request: Request) {
       subject: subject ?? null,
       priority: priority ?? "medium",
       status: "pending",
+      estimatedHours: estimatedHours ? parseFloat(estimatedHours) : null,
     },
   });
 

@@ -27,9 +27,8 @@ export async function GET() {
   // Today's UTC midnight (runs stored as UTC midnight)
   const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
-  // Last 3 runs — exclude today so it shows actual past activity
+  // Last 3 runs
   const recentRuns = await prisma.runLog.findMany({
-    where: { date: { lt: todayUTC } },
     orderBy: { date: "desc" },
     take: 3,
   });

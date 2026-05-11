@@ -11,6 +11,7 @@ interface Assignment {
   subject: string | null;
   priority: string;
   status: string;
+  estimatedHours: number | null;
 }
 
 // Non-overdue statuses the user can manually set
@@ -47,9 +48,11 @@ export default function SchoolHub() {
     dueDate: "",
     dueTime: "",
     subject: "",
+    estimatedHours: "",
   });
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [formError, setFormError] = useState<string | null>(null);
+  const [loadPlan, setLoadPlan] = useState<Record<string, { assignmentId: number; title: string; hours: number }[]>>({});
 
   async function load() {
     setLoading(true);
@@ -57,6 +60,7 @@ export default function SchoolHub() {
       const res = await fetch("/api/school");
       const data = await res.json();
       setAssignments(data.assignments ?? []);
+      setLoadPlan(data.loadPlan ?? {});
     } finally {
       setLoading(false);
     }
@@ -79,6 +83,7 @@ export default function SchoolHub() {
           dueTime: form.dueTime || null,
           subject: form.subject || null,
           priority: "low",
+          estimatedHours: form.estimatedHours || null,
         }),
       });
       if (!res.ok) {
@@ -86,7 +91,7 @@ export default function SchoolHub() {
         setFormError(body.error ?? `Server error ${res.status} — try restarting npm run dev`);
         return;
       }
-      setForm({ title: "", dueDate: "", dueTime: "", subject: "" });
+      setForm({ title: "", dueDate: "", dueTime: "", subject: "", estimatedHours: "" });
       setShowForm(false);
       load();
     } catch (err) {
@@ -225,6 +230,26 @@ export default function SchoolHub() {
                 type="time"
                 value={form.dueTime}
                 onChange={(e) => setForm((f) => ({ ...f, dueTime: e.target.value }))}
+                className="w-full rounded-lg px-3 py-2 text-sm"
+                style={{
+                  background: "var(--surface-2)",
+                  color: "var(--text)",
+                  border: "1px solid var(--border)",
+                  colorScheme: "dark",
+                }}
+              />
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                Estimated hours (optional)
+              </label>
+              <input
+                type="number"
+                placeholder="e.g. 4"
+                value={form.estimatedHours}
+                onChange={(e) => setForm((f) => ({ ...f, estimatedHours: e.target.value }))}
+                min="0.5"
+                step="0.5"
                 className="w-full rounded-lg px-3 py-2 text-sm"
                 style={{
                   background: "var(--surface-2)",
@@ -415,6 +440,52 @@ export default function SchoolHub() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Work Plan */}
+      {Object.keys(loadPlan).length > 0 && (
+        <div className="mt-6">
+          <h3 className="font-semibold mb-3">Work Plan</h3>
+          <div className="space-y-2">
+            {Object.entries(loadPlan)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([date, slots]) => {
+                const totalHours = slots.reduce((s, sl) => s + sl.hours, 0);
+                const isOverloaded = totalHours >= 3;
+                return (
+                  <div
+                    key={date}
+                    className="rounded-xl p-3"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+                  >
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-sm font-medium">
+                        {new Date(date).toLocaleDateString("en-GB", {
+                          weekday: "short",
+                          day: "numeric",
+                          month: "short",
+                        })}
+                      </span>
+                      <span
+                        className="text-xs font-semibold"
+                        style={{ color: isOverloaded ? "var(--accent-red)" : "var(--accent-green)" }}
+                      >
+                        {totalHours}h
+                      </span>
+                    </div>
+                    <div className="space-y-0.5">
+                      {slots.map((slot, i) => (
+                        <div key={i} className="flex justify-between text-xs" style={{ color: "var(--text-muted)" }}>
+                          <span>{slot.title}</span>
+                          <span>{slot.hours}h</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
         </div>
       )}
     </div>

@@ -303,14 +303,18 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[] | "loading" | "error">>({});
 
+  async function loadData() {
+    try {
+      const res = await fetch(`/api/sports?team=${teamSlug}`);
+      setData(await res.json());
+    } catch {}
+    setLoading(false);
+  }
+
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`/api/sports?team=${teamSlug}`);
-        setData(await res.json());
-      } catch {}
-      setLoading(false);
-    })();
+    loadData();
+    const interval = setInterval(loadData, 5 * 60 * 1000); // refresh every 5 minutes
+    return () => clearInterval(interval);
   }, [teamSlug]);
 
   async function toggleGoals(matchId: string, date: string) {
