@@ -25,32 +25,32 @@ export default function DashboardPage() {
 
       {/* 2-column grid — each column is min 420px and grows to fill the window */}
       <div
-        className="grid gap-6 items-start"
+        className="grid gap-6"
         style={{ gridTemplateColumns: "repeat(2, minmax(420px, 1fr))" }}
       >
 
         {/* Row 1: Sports | School */}
-        <SportsWidget />
+        <div className="h-full"><SportsWidget /></div>
 
-        <Link href="/school" className="block group">
+        <Link href="/school" className="block group h-full">
           <SchoolWidget />
         </Link>
 
         {/* Row 2: WoW | Running */}
-        <Link href="/wow" className="block group">
+        <Link href="/wow" className="block group h-full">
           <WoWWidget />
         </Link>
 
-        <Link href="/running" className="block group">
+        <Link href="/running" className="block group h-full">
           <RunningWidget />
         </Link>
 
         {/* Row 3: Calendar | Workhub */}
-        <Link href="/calendar" className="block group">
+        <Link href="/calendar" className="block group h-full">
           <CalendarWidget />
         </Link>
 
-        <WorkhubWidget />
+        <div className="h-full"><WorkhubWidget /></div>
 
       </div>
     </main>

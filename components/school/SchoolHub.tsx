@@ -75,6 +75,9 @@ export default function SchoolHub() {
   const [estimatedHoursEdits, setEstimatedHoursEdits] = useState<Record<number, string>>({});
   // workDays: JS day numbers (0=Sun…6=Sat) available for school work
   const [workDays, setWorkDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  // hoursPerDay: soft cap — preferred study hours per day
+  const [hoursPerDay, setHoursPerDay] = useState<number>(3);
+  const [hoursPerDayInput, setHoursPerDayInput] = useState<string>("3");
 
   async function load(silent = false) {
     if (!silent) setLoading(true);
@@ -85,6 +88,10 @@ export default function SchoolHub() {
       setLoadPlan(data.loadPlan ?? {});
       setEstDoneMap(data.estDoneMap ?? {});
       setNeedsHardCapMap(data.needsHardCapMap ?? {});
+      if (typeof data.hoursPerDay === "number") {
+        setHoursPerDay(data.hoursPerDay);
+        setHoursPerDayInput(String(data.hoursPerDay));
+      }
     } finally {
       if (!silent) setLoading(false);
     }
@@ -94,7 +101,13 @@ export default function SchoolHub() {
     load();
     fetch("/api/school/settings")
       .then((r) => r.json())
-      .then((d) => { if (Array.isArray(d.workDays)) setWorkDays(d.workDays); })
+      .then((d) => {
+        if (Array.isArray(d.workDays)) setWorkDays(d.workDays);
+        if (typeof d.hoursPerDay === "number") {
+          setHoursPerDay(d.hoursPerDay);
+          setHoursPerDayInput(String(d.hoursPerDay));
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -154,6 +167,20 @@ export default function SchoolHub() {
     setAssignments((prev) =>
       prev.map((a) => (a.id === id ? { ...a, estimatedHours: val } : a))
     );
+    load(true);
+  }
+
+  async function saveHoursPerDay(raw: string) {
+    const val = parseFloat(raw);
+    if (isNaN(val) || val <= 0) return;
+    const rounded = Math.round(val * 2) / 2; // nearest 0.5
+    setHoursPerDay(rounded);
+    setHoursPerDayInput(String(rounded));
+    await fetch("/api/school/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hoursPerDay: rounded }),
+    });
     load(true);
   }
 
@@ -398,6 +425,24 @@ export default function SchoolHub() {
                 </button>
               );
             })}
+            <span className="text-xs ml-3" style={{ color: "var(--text-muted)" }}>h/day:</span>
+            <input
+              type="number"
+              min="0.5"
+              max="16"
+              step="0.5"
+              value={hoursPerDayInput}
+              onChange={(e) => setHoursPerDayInput(e.target.value)}
+              onBlur={(e) => saveHoursPerDay(e.target.value)}
+              className="w-14 rounded-lg px-2 py-1 text-xs text-center"
+              style={{
+                background: "var(--surface-2)",
+                color: "var(--accent-indigo)",
+                border: "1px solid var(--accent-indigo)",
+                fontWeight: 600,
+              }}
+              title="Preferred study hours per day"
+            />
           </div>
         );
       })()}
@@ -645,7 +690,7 @@ export default function SchoolHub() {
                 .sort(([a], [b]) => a.localeCompare(b));
             })().map(([date, slots]) => {
                 const totalHours = Math.ceil(slots.reduce((s, sl) => s + sl.hours, 0) * 2) / 2;
-                const planColor = totalHours > 3 ? "var(--accent-red)" : "var(--accent-green)";
+                const planColor = totalHours > hoursPerDay ? "var(--accent-red)" : "var(--accent-green)";
                 return (
                   <div
                     key={date}

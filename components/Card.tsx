@@ -9,7 +9,7 @@ interface CardProps {
 export default function Card({ children, accentColor, className = "" }: CardProps) {
   return (
     <div
-      className={`rounded-2xl p-5 transition-all duration-200 group-hover:scale-[1.01] group-hover:brightness-110 ${className}`}
+      className={`rounded-2xl p-5 transition-all duration-200 group-hover:scale-[1.01] group-hover:brightness-110 h-full ${className}`}
       style={{
         background: accentColor
           ? `linear-gradient(170deg, ${accentColor}1a 0%, var(--surface) 45%)`

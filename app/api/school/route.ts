@@ -52,7 +52,7 @@ export async function GET(request: Request) {
   }
   await Promise.all(updates);
   // Load work day settings
-  const { workDays } = readSettings();
+  const { workDays, hoursPerDay } = readSettings();
 
   // Build load plan from assignments that have estimates and aren't done/overdue
   const withEstimates = assignments
@@ -66,11 +66,11 @@ export async function GET(request: Request) {
       hoursSpent: a.hoursSpent ?? 0,
     }));
 
-  const { plan, estDoneByAssignment, needsHardCap } = distributeLoad(withEstimates, workDays);
+  const { plan, estDoneByAssignment, needsHardCap } = distributeLoad(withEstimates, workDays, hoursPerDay);
   const loadPlan = Object.fromEntries(plan);
   const estDoneMap = Object.fromEntries(estDoneByAssignment);
   const needsHardCapMap = Object.fromEntries(needsHardCap);
-  return NextResponse.json({ assignments, loadPlan, estDoneMap, needsHardCapMap });
+  return NextResponse.json({ assignments, loadPlan, estDoneMap, needsHardCapMap, hoursPerDay });
 }
 
 export async function POST(request: Request) {

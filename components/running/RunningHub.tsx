@@ -113,6 +113,7 @@ export default function RunningHub() {
 
   // Run detail modal
   const [selectedRun, setSelectedRun] = useState<RunLog | null>(null);
+  const [showAllRuns, setShowAllRuns] = useState(false);
 
   // Strava state
   const [stravaConnected, setStravaConnected] = useState(false);
@@ -792,7 +793,35 @@ export default function RunningHub() {
       )}
 
       {/* Run log */}
-      <h3 className="font-semibold mb-3">Run Log</h3>
+      <div className="flex items-center gap-3 mb-3">
+        <h3 className="font-semibold">Run Log</h3>
+        {runs.length > 5 && (
+          <div className="ml-auto flex gap-1">
+            <button
+              onClick={() => setShowAllRuns(false)}
+              className="px-3 py-1 rounded-lg text-xs"
+              style={{
+                background: !showAllRuns ? "var(--accent-green)" : "var(--surface)",
+                color: !showAllRuns ? "#fff" : "var(--text-muted)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              Recent (5)
+            </button>
+            <button
+              onClick={() => setShowAllRuns(true)}
+              className="px-3 py-1 rounded-lg text-xs"
+              style={{
+                background: showAllRuns ? "var(--accent-green)" : "var(--surface)",
+                color: showAllRuns ? "#fff" : "var(--text-muted)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              All Runs ({runs.length})
+            </button>
+          </div>
+        )}
+      </div>
       {loading ? (
         <p style={{ color: "var(--text-muted)" }}>Loading…</p>
       ) : runs.length === 0 ? (
@@ -825,7 +854,7 @@ export default function RunningHub() {
               </tr>
             </thead>
             <tbody>
-              {runs.map((run) => (
+              {(showAllRuns ? runs : runs.slice(0, 5)).map((run) => (
                 <tr
                   key={run.id}
                   onClick={() => setSelectedRun(run)}

@@ -128,6 +128,7 @@ function GradientBorder({
         padding: borderWidth,
         borderRadius: innerRadius + borderWidth,
         boxShadow: shadow,
+        height: "100%",
       }}
     >
       <div
