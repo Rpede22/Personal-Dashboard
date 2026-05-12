@@ -13,7 +13,7 @@ The home screen is a 2-column grid of widgets, each linking to a full hub page:
 | 🏆 **Sports** | Rainbow stripe | 2×2 grid of live data for EDM, Esbjerg fB, FC Barcelona, Esbjerg Energy |
 | 📚 **School** | Indigo | Upcoming deadlines sorted by urgency; overdue items glow red |
 | 🧙 **World of Warcraft** | Purple | Per-character ilvl, RIO score, weekly M+/raid/custom task progress |
-| 🏃 **Running** | Green | This week's km, last 30-day km, recent runs, 7-day plan, days to race |
+| 🏃 **Running** | Green | This week's km, last 30-day km, recent runs, 7-day plan, days to race, race distance |
 | 📅 **Calendar** | Pink | Upcoming events pulled live from iCloud CalDAV |
 | 💼 **Work Hours** | Cyan | Two links side by side: register daily hours at profil.cand.dk and view payslips at intect.app |
 
@@ -71,6 +71,8 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Team box gradient borders** use real club colours — the GradientBorder wrapper component (outer div = gradient background + 3 px padding, inner div = surface colour) is the only reliable way to get gradient borders with `border-radius` in React inline styles.
 
+**Dashboard widget heights** are equalised per row — CSS grid stretches each pair of widgets to match the taller one so neither column looks sparse.
+
 ---
 
 ## World of Warcraft
@@ -91,14 +93,18 @@ Characters are stored in SQLite and enriched via **Raider.IO** (public API, no k
 Run logs and training plans are stored in SQLite. Strava sync is optional.
 
 - **Manual logging:** add runs directly in the hub.
-- **Strava sync:** connects via OAuth (tokens stored in `.strava-config.json`, git-ignored). Imports last 30 days of activities, deduplicates by date + distance.
-- **Race countdown:** set a race date in the hub; the widget shows days remaining.
-- **7-day planner:** assign `easy` / `tempo` / `long` / `rest` days with optional target distance. Shown as a mini weekly grid on both the widget and hub.
+- **Strava sync:** connects via OAuth (tokens stored in `.strava-config.json`, git-ignored). Imports the last 30 days of activities, deduplicates by date + distance, and stores the Strava activity ID (`stravaId`) on each run. When a Strava run is synced for a day that already has a run plan, the plan is automatically removed.
+- **Run log:** shows the 5 most recent runs by default. Click **All Runs (N)** to see the full history. Click any row to open the run detail popup.
+- **Run detail popup:** for Strava-imported runs, shows a Leaflet route map (decoded from the encoded polyline), core stats (distance, duration, pace, elevation), heart rate and cadence (if recorded), and a per-km splits table. Manually logged runs show basic stats only. Hit **Sync runs** once after updating to backfill `stravaId` on existing Strava imports.
+- **Training progress:** two bar charts appear once you have runs logged — *Weekly Kilometers* (last 12 weeks, current week highlighted) and *Longest Run* (best run per month for the last 6 months).
+- **Race target:** set a race date and/or race distance in the hub. The widget and stats bar show days remaining and the target distance label.
+- **7-day planner:** assign `easy` / `tempo` / `long` / `rest` days with optional target distance. Switch to **Month view** for a full calendar overview. Plans on days where a run has been logged are automatically cleared on sync.
 
 ### Strava setup
 1. Create an app at [strava.com/settings/api](https://www.strava.com/settings/api). Set **Authorization Callback Domain** to `localhost`.
 2. Add `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET` to `.env.local`.
 3. Click **Connect Strava** in the Running hub.
+4. After first sync, click **Sync runs** once more — this backfills the Strava activity ID on runs that were imported before the detail popup was added.
 
 ---
 
@@ -109,10 +115,12 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 - `GET /api/school` auto-marks any non-done assignment as **overdue** the moment its deadline passes (date + time combined), with no manual action needed.
 - The widget shows overdue items first with a glowing red dot. The due-date label shows an exact countdown (`2d 14h`, `3h 20m`) when a due time is set.
 - Overdue status can only be cleared by marking the assignment **Done**.
-- **Estimated hours** — optionally set how many hours an assignment will take when creating it.
+- **Estimated hours** — optionally set how many hours an assignment will take when creating it (editable inline on non-done tasks).
 - **Hours spent** — log actual hours spent so far on in-progress tasks directly in the School Hub. The scheduler subtracts spent hours from the estimate and reschedules automatically.
-- **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears in both the hub and the dashboard widget. A sequential scheduler completes one assignment fully before scheduling the next (sorted by deadline). If an assignment finishes with time left on its last day, the next one begins that same day. Each assignment targets 3 h/day (soft cap, green). **Look-ahead:** before scheduling each assignment the scheduler checks whether future assignments can fit at 3 h/day after it finishes at its natural pace. If they can't, the current assignment is automatically compressed to a higher daily rate, freeing the extra days for later tasks. No compression happens when future work already fits comfortably. The cap escalates smoothly up to 10 h/day (red) as the absolute maximum. All displayed hours are rounded up to the nearest 0.5 h. The last scheduled day for each assignment is shown as "Est. done".
-- **Schedule-aware colours** — priority dots reflect the schedule: green = fits within 3 h/day, orange = tight (needs hard cap), red = overdue. Tasks without estimates use days-to-deadline proximity instead.
+- **Study days** — toggle which days of the week count as study days (Mon–Sun, indigo = active). Non-study days are skipped entirely by the scheduler. Persists to `.school-settings.json`.
+- **Hours per day** — set your preferred daily study target with the **h/day** input next to the day toggles (default 3 h, step 0.5). This becomes the scheduler's soft cap. Days in the Work Plan are green when at or under the target, red when over.
+- **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears in both the hub and the dashboard widget. A sequential scheduler completes one assignment fully before scheduling the next (sorted by deadline). If an assignment finishes with time left on its last day, the next one begins that same day. **Look-ahead:** before scheduling each assignment the scheduler checks whether future assignments can fit at the configured h/day rate after it finishes at its natural pace. If they can't, the current assignment is automatically compressed to a higher daily rate, freeing the extra days for later tasks. The cap escalates smoothly up to 10 h/day as the absolute maximum. All displayed hours are rounded up to the nearest 0.5 h. The last scheduled day for each assignment is shown as "Est. done". Due-time cap: if a due time is set, the due day itself is capped at `(dueHour − 9)` available hours.
+- **Schedule-aware colours** — priority dots reflect the schedule: green = fits within the h/day target, orange = tight (needs hard cap), red = overdue. Tasks without estimates use days-to-deadline proximity instead.
 - **Dashboard widget** mirrors the full hub view (estimated hours, due date, countdown, read-only hours spent) — navigate to the hub only to add tasks or update hours spent.
 
 ---
@@ -202,4 +210,18 @@ Created automatically on first use:
 |------|----------|
 | `.strava-config.json` | Strava OAuth tokens |
 | `.wow-raid-baseline.json` | Weekly raid kill baselines |
-| `.race-config.json` | Running race target date |
+| `.race-config.json` | Running race target date and distance |
+| `.school-settings.json` | School scheduler settings: study days + h/day soft cap |
+
+---
+
+## Security
+
+Dependencies are kept up to date. As of the last audit:
+
+| Package | Status |
+|---------|--------|
+| `next` | Updated to 16.2.6 — patches DoS (Server Components) and XSS (CSP nonces) CVEs |
+| transitive deps (`axios`, `@xmldom/xmldom`, `fast-uri`, `hono`, `ip-address`) | Patched via `npm audit fix` |
+| `postcss` inside Next.js | Moderate — awaiting a Next.js upstream release |
+| `@hono/node-server` inside Prisma CLI | Moderate — awaiting a Prisma 7.x upstream release; only reachable locally via `npx prisma` commands, not in runtime |
