@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
+
+const RunDetailModal = dynamic(() => import("./RunDetailModal"), { ssr: false });
 
 interface RunLog {
   id: number;
@@ -9,6 +12,7 @@ interface RunLog {
   distance: number;
   duration: number;
   notes: string | null;
+  stravaId: string | null;
 }
 
 interface RunPlan {
@@ -87,6 +91,8 @@ export default function RunningHub() {
   const [showForm, setShowForm] = useState(false);
   const [raceDate, setRaceDate] = useState("");
   const [raceDateInput, setRaceDateInput] = useState("");
+  const [raceDistance, setRaceDistance] = useState<number | null>(null);
+  const [raceDistanceInput, setRaceDistanceInput] = useState("");
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     distanceKm: "",
@@ -98,9 +104,15 @@ export default function RunningHub() {
   // Planner state
   const [plans, setPlans] = useState<RunPlan[]>([]);
   const [weekStart, setWeekStart] = useState<Date>(() => getMondayOf(new Date()));
+  const [monthViewDate, setMonthViewDate] = useState<Date>(
+    () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  );
   const [showMonthView, setShowMonthView] = useState(false);
   const [addPlanDay, setAddPlanDay] = useState<string | null>(null); // date string for inline form
   const [planForm, setPlanForm] = useState({ type: "easy", distance: "", notes: "" });
+
+  // Run detail modal
+  const [selectedRun, setSelectedRun] = useState<RunLog | null>(null);
 
   // Strava state
   const [stravaConnected, setStravaConnected] = useState(false);
@@ -124,6 +136,8 @@ export default function RunningHub() {
     const data = await res.json();
     setRaceDate(data.raceDate ?? "");
     setRaceDateInput(data.raceDate ?? "");
+    setRaceDistance(data.raceDistance ?? null);
+    setRaceDistanceInput(data.raceDistance != null ? String(data.raceDistance) : "");
   }
 
   async function loadPlans(from: Date, to: Date) {
@@ -177,17 +191,15 @@ export default function RunningHub() {
   useEffect(() => {
     // Load plans for visible range
     if (showMonthView) {
-      // Current month
-      const now = new Date();
-      const from = new Date(now.getFullYear(), now.getMonth(), 1);
-      const to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const from = new Date(monthViewDate.getFullYear(), monthViewDate.getMonth(), 1);
+      const to = new Date(monthViewDate.getFullYear(), monthViewDate.getMonth() + 1, 0);
       loadPlans(from, to);
     } else {
       const to = new Date(weekStart);
       to.setDate(weekStart.getDate() + 6);
       loadPlans(weekStart, to);
     }
-  }, [weekStart, showMonthView]);
+  }, [weekStart, showMonthView, monthViewDate]);
 
   async function logRun(e: React.FormEvent) {
     e.preventDefault();
@@ -226,6 +238,16 @@ export default function RunningHub() {
       body: JSON.stringify({ raceDate: raceDateInput }),
     });
     setRaceDate(raceDateInput);
+  }
+
+  async function saveRaceDistance() {
+    const val = raceDistanceInput ? parseFloat(raceDistanceInput) : null;
+    await fetch("/api/running/summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raceDistance: val }),
+    });
+    setRaceDistance(val);
   }
 
   async function addPlan(dateStr: string) {
@@ -296,6 +318,45 @@ export default function RunningHub() {
 
   const totalKm = runs.reduce((sum, r) => sum + r.distance, 0);
 
+  // A: Weekly mileage — last 12 weeks, oldest first
+  const weeklyProgress = Array.from({ length: 12 }, (_, i) => {
+    const wMonday = getMondayOf(new Date(now));
+    wMonday.setDate(wMonday.getDate() - i * 7);
+    const wSunday = new Date(wMonday);
+    wSunday.setDate(wMonday.getDate() + 6);
+    const wMondayStr = toLocalDateStr(wMonday);
+    const wSundayStr = toLocalDateStr(wSunday);
+    const km = runs
+      .filter((r) => { const d = toUTCDateStr(new Date(r.date)); return d >= wMondayStr && d <= wSundayStr; })
+      .reduce((sum, r) => sum + r.distance, 0);
+    return {
+      label: wMonday.toLocaleDateString("en-GB", { month: "short", day: "numeric" }),
+      km,
+      isCurrent: i === 0,
+    };
+  }).reverse();
+  const maxWeeklyKm = Math.max(...weeklyProgress.map((w) => w.km), 1);
+
+  // B: Longest run per month — last 6 months, oldest first
+  const longestByMonth = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const monthStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const monthRuns = runs.filter((r) => toUTCDateStr(new Date(r.date)).startsWith(monthStr));
+    const longest = monthRuns.reduce<RunLog | null>(
+      (max, r) => (!max || r.distance > max.distance ? r : max),
+      null
+    );
+    return {
+      label: d.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }),
+      km: longest?.distance ?? 0,
+      date: longest
+        ? new Date(longest.date).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })
+        : null,
+      isCurrent: i === 0,
+    };
+  }).reverse();
+  const maxLongestKm = Math.max(...longestByMonth.map((m) => m.km), 1);
+
   const weekDays = getWeekDays(weekStart);
   const weekEnd = weekDays[6];
 
@@ -314,10 +375,9 @@ export default function RunningHub() {
     plansByDate.get(key)!.push(p);
   });
 
-  // Month view helpers
-  const monthDate = new Date(weekStart.getFullYear(), weekStart.getMonth(), 1);
-  const monthFirstDay = monthDate.getDay(); // 0=Sun
-  const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
+  // Month view helpers — use independent monthViewDate, not weekStart
+  const monthFirstDay = monthViewDate.getDay(); // 0=Sun
+  const daysInMonth = new Date(monthViewDate.getFullYear(), monthViewDate.getMonth() + 1, 0).getDate();
   // Offset: Monday-based calendar
   const startOffset = monthFirstDay === 0 ? 6 : monthFirstDay - 1;
 
@@ -348,11 +408,6 @@ export default function RunningHub() {
           { label: "This year",    value: `${thisYearKm.toFixed(1)} km`,  color: "var(--accent-purple)" },
           { label: "Total logged", value: `${totalKm.toFixed(1)} km`,    color: "var(--accent-blue)" },
           { label: "Total runs",   value: runs.length.toString(),          color: "var(--accent-purple)" },
-          {
-            label: "Days to race",
-            value: daysToRace !== null ? `${daysToRace}d` : "—",
-            color: "var(--accent-orange)",
-          },
         ].map((stat) => (
           <div
             key={stat.label}
@@ -367,7 +422,113 @@ export default function RunningHub() {
             </div>
           </div>
         ))}
+        {/* Race stat — shown only when race date is set */}
+        <div
+          className="rounded-2xl p-4 text-center"
+          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+        >
+          <div className="text-2xl font-bold" style={{ color: "var(--accent-orange)" }}>
+            {daysToRace !== null ? `${daysToRace}d` : "—"}
+          </div>
+          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {raceDistance ? `to ${raceDistance} km race` : "days to race"}
+          </div>
+        </div>
       </div>
+
+      {/* Training Progress */}
+      {runs.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          {/* A: Weekly kilometers */}
+          <div
+            className="rounded-2xl p-4"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+          >
+            <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--accent-green)" }}>
+              Weekly Kilometers — last 12 weeks
+            </h3>
+            <div className="space-y-2">
+              {weeklyProgress.map((w) => (
+                <div key={w.label} className="flex items-center gap-2 text-xs">
+                  <span className="w-14 text-right flex-shrink-0" style={{ color: "var(--text-muted)" }}>
+                    {w.label}
+                  </span>
+                  <div
+                    className="flex-1 rounded-full overflow-hidden relative"
+                    style={{ background: "var(--surface-2)", height: "12px" }}
+                  >
+                    {w.km > 0 && (
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${(w.km / maxWeeklyKm) * 100}%`,
+                          background: w.isCurrent ? "var(--accent-green)" : "#3a7d55",
+                          minWidth: "6px",
+                          transition: "width 0.4s",
+                        }}
+                      />
+                    )}
+                  </div>
+                  <span
+                    className="w-16 flex-shrink-0 font-medium"
+                    style={{ color: w.isCurrent ? "var(--accent-green)" : "var(--text-muted)" }}
+                  >
+                    {w.km > 0 ? `${w.km.toFixed(1)} km` : "—"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* B: Longest run by month */}
+          <div
+            className="rounded-2xl p-4"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+          >
+            <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--accent-blue)" }}>
+              Longest Run — last 6 months
+            </h3>
+            <div className="space-y-2">
+              {longestByMonth.map((m) => (
+                <div key={m.label} className="flex items-center gap-2 text-xs">
+                  <span className="w-14 text-right flex-shrink-0" style={{ color: "var(--text-muted)" }}>
+                    {m.label}
+                  </span>
+                  <div
+                    className="flex-1 rounded-full overflow-hidden"
+                    style={{ background: "var(--surface-2)", height: "12px" }}
+                  >
+                    {m.km > 0 && (
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${(m.km / maxLongestKm) * 100}%`,
+                          background: m.isCurrent ? "var(--accent-blue)" : "#2a5a8c",
+                          minWidth: "6px",
+                          transition: "width 0.4s",
+                        }}
+                      />
+                    )}
+                  </div>
+                  <div className="w-28 flex-shrink-0">
+                    <span
+                      className="font-medium"
+                      style={{ color: m.isCurrent ? "var(--accent-blue)" : "var(--text-muted)" }}
+                    >
+                      {m.km > 0 ? `${m.km.toFixed(1)} km` : "—"}
+                    </span>
+                    {m.date && (
+                      <span className="block" style={{ color: "var(--text-muted)", fontSize: "10px" }}>
+                        {m.date}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Race date config */}
       <div
@@ -391,6 +552,26 @@ export default function RunningHub() {
             }}
           />
         </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+            Race distance (km)
+          </label>
+          <input
+            type="number"
+            min="0.1"
+            step="0.1"
+            placeholder="e.g. 21.1"
+            value={raceDistanceInput}
+            onChange={(e) => setRaceDistanceInput(e.target.value)}
+            onBlur={saveRaceDistance}
+            className="rounded-lg px-3 py-1.5 text-sm w-28"
+            style={{
+              background: "var(--surface-2)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+            }}
+          />
+        </div>
         <button
           onClick={saveRaceDate}
           className="px-4 py-1.5 rounded-lg text-sm"
@@ -398,16 +579,18 @@ export default function RunningHub() {
         >
           Save
         </button>
-        {raceDate && (
+        {(raceDate || raceDistance) && (
           <button
             onClick={async () => {
               await fetch("/api/running/summary", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ raceDate: "" }),
+                body: JSON.stringify({ raceDate: "", raceDistance: null }),
               });
               setRaceDate("");
               setRaceDateInput("");
+              setRaceDistance(null);
+              setRaceDistanceInput("");
             }}
             className="px-4 py-1.5 rounded-lg text-sm"
             style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
@@ -645,7 +828,9 @@ export default function RunningHub() {
               {runs.map((run) => (
                 <tr
                   key={run.id}
-                  style={{ borderBottom: "1px solid var(--border)" }}
+                  onClick={() => setSelectedRun(run)}
+                  style={{ borderBottom: "1px solid var(--border)", cursor: "pointer" }}
+                  className="hover:bg-[var(--surface-2)]"
                 >
                   <td className="px-4 py-3">
                     {new Date(run.date).toLocaleDateString("en-GB", {
@@ -668,8 +853,13 @@ export default function RunningHub() {
                     {run.notes ?? "—"}
                   </td>
                   <td className="px-4 py-3">
+                    {run.stravaId && (
+                      <span className="text-xs px-1.5 py-0.5 rounded-full mr-2" style={{ background: "var(--accent-orange)22", color: "var(--accent-orange)" }}>
+                        Strava
+                      </span>
+                    )}
                     <button
-                      onClick={() => deleteRun(run.id)}
+                      onClick={(e) => { e.stopPropagation(); deleteRun(run.id); }}
                       className="text-xs px-2 py-1 rounded-md font-medium"
                       style={{
                         color: "var(--accent-red)",
@@ -711,25 +901,25 @@ export default function RunningHub() {
         >
           <div className="flex items-center justify-between mb-4">
             <button
-              onClick={() => {
-                const d = new Date(weekStart);
-                d.setMonth(d.getMonth() - 1);
-                setWeekStart(getMondayOf(new Date(d.getFullYear(), d.getMonth(), 1)));
-              }}
+              onClick={() =>
+                setMonthViewDate(
+                  new Date(monthViewDate.getFullYear(), monthViewDate.getMonth() - 1, 1)
+                )
+              }
               className="px-3 py-1 rounded-lg text-sm"
               style={{ background: "var(--surface-2)", color: "var(--text)" }}
             >
               ‹
             </button>
             <span className="font-semibold">
-              {MONTH_NAMES[monthDate.getMonth()]} {monthDate.getFullYear()}
+              {MONTH_NAMES[monthViewDate.getMonth()]} {monthViewDate.getFullYear()}
             </span>
             <button
-              onClick={() => {
-                const d = new Date(weekStart);
-                d.setMonth(d.getMonth() + 1);
-                setWeekStart(getMondayOf(new Date(d.getFullYear(), d.getMonth(), 1)));
-              }}
+              onClick={() =>
+                setMonthViewDate(
+                  new Date(monthViewDate.getFullYear(), monthViewDate.getMonth() + 1, 1)
+                )
+              }
               className="px-3 py-1 rounded-lg text-sm"
               style={{ background: "var(--surface-2)", color: "var(--text)" }}
             >
@@ -749,7 +939,7 @@ export default function RunningHub() {
             ))}
             {Array.from({ length: daysInMonth }, (_, i) => {
               const dayNum = i + 1;
-              const dateStr = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+              const dateStr = `${monthViewDate.getFullYear()}-${String(monthViewDate.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
               const dayPlans = plansByDate.get(dateStr) ?? [];
               const run = runsByDate.get(dateStr);
               return (
@@ -979,6 +1169,11 @@ export default function RunningHub() {
             })}
           </div>
         </div>
+      )}
+
+      {/* Run detail modal */}
+      {selectedRun && (
+        <RunDetailModal run={selectedRun} onClose={() => setSelectedRun(null)} />
       )}
     </div>
   );

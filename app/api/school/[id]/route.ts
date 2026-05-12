@@ -17,6 +17,7 @@ export async function PATCH(
   if (body.priority !== undefined)   data.priority   = body.priority;
   if (body.status !== undefined)     data.status     = body.status;
   if (body.hoursSpent !== undefined) data.hoursSpent = Number(body.hoursSpent);
+  if (body.estimatedHours !== undefined) data.estimatedHours = body.estimatedHours === null ? null : Number(body.estimatedHours);
 
   const assignment = await prisma.assignment.update({
     where: { id: parseInt(id) },

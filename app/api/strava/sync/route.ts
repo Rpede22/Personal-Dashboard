@@ -24,6 +24,7 @@ export async function POST() {
 
   // Filter to Run activities only
   const runs = (activities as Array<{
+    id: number;
     type: string;
     start_date: string;
     distance: number;
@@ -50,6 +51,13 @@ export async function POST() {
     });
 
     if (existing) {
+      // Backfill stravaId if it was imported before that field existed
+      if (!existing.stravaId) {
+        await prisma.runLog.update({
+          where: { id: existing.id },
+          data: { stravaId: String(run.id) },
+        });
+      }
       skipped++;
       continue;
     }
@@ -60,8 +68,11 @@ export async function POST() {
         distance: distKm,
         duration: durationSec,
         notes: `Strava: ${run.name}`,
+        stravaId: String(run.id),
       },
     });
+    // Remove any run plans for this day — the run covers it
+    await prisma.runPlan.deleteMany({ where: { date: dateUTC } });
     imported++;
   }
 

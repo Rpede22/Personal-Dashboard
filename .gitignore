@@ -40,6 +40,7 @@ prisma/dev.db-journal
 .wow-raid-baseline.json
 .race-config.json
 .strava-tokens.json
+.school-settings.json
 
 # ── Claude Code / AI assistant files ─────────────────────────────────────────
 .claude/

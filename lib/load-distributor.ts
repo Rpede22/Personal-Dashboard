@@ -2,6 +2,7 @@ export interface AssignmentLoad {
   id: number;
   title: string;
   dueDate: Date;
+  dueTime?: string; // HH:MM local — caps available hours on due day (work starts 09:00)
   estimatedHours: number;
   hoursSpent?: number; // hours already logged — subtracted from remaining work
 }
@@ -20,8 +21,9 @@ export interface LoadResult {
   needsHardCap: Map<number, boolean>;
 }
 
-const SOFT_CAP = 3;  // preferred hours per day (green)
-const HARD_CAP = 10; // absolute max hours per day (red above this)
+const SOFT_CAP = 3;   // preferred hours per day (green)
+const HARD_CAP = 10;  // absolute max hours per day
+const WORK_START_HOUR = 9; // work begins at 09:00
 
 function dateKey(d: Date): string {
   // Use local date parts — toISOString() is UTC and shifts the date in UTC+1/+2
@@ -31,14 +33,25 @@ function dateKey(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+// Advance d (in-place) to the next day that is in workDays.
+// If workDays is empty (all days disabled) this is a no-op to avoid infinite loops.
+function advanceToWorkDay(d: Date, workDays: number[]): void {
+  if (workDays.length === 0) return;
+  while (!workDays.includes(d.getDay())) {
+    d.setDate(d.getDate() + 1);
+  }
+}
+
 // Sequential scheduler: finishes one assignment completely before starting the next.
 // Assignments sorted by deadline (soonest first).
-// Daily target = SOFT_CAP (3h) so each assignment finishes as fast as possible,
-// freeing the most days for later ones. When a tight deadline forces more than
-// SOFT_CAP, escalates smoothly up to HARD_CAP (10h). All block sizes rounded up
-// to the nearest 0.5h. If a day still has capacity after an assignment finishes,
-// the next assignment begins on that same day.
-export function distributeLoad(assignments: AssignmentLoad[]): LoadResult {
+// workDays: JS day numbers (0=Sun … 6=Sat) that are available for school work.
+//   Defaults to all 7 days. Non-work days are skipped entirely.
+// Due-time cap: when dueTime is set on an assignment, the due-day itself can only
+//   receive (dueHour - WORK_START_HOUR) hours (e.g. due 12:00 → 3 h, due 15:00 → 6 h).
+export function distributeLoad(
+  assignments: AssignmentLoad[],
+  workDays: number[] = [0, 1, 2, 3, 4, 5, 6]
+): LoadResult {
   const plan = new Map<string, DaySlot[]>();
   const estDoneByAssignment = new Map<number, string>();
   const needsHardCap = new Map<number, boolean>();
@@ -60,8 +73,12 @@ export function distributeLoad(assignments: AssignmentLoad[]): LoadResult {
     Math.max(0, a.estimatedHours - (a.hoursSpent ?? 0))
   );
 
-  // nextStart advances as each assignment finishes
+  // Ratio used to approximate calendar days from work days in look-ahead
+  const calDaysPerWorkDay = workDays.length > 0 ? 7 / workDays.length : 1;
+
+  // nextStart advances as each assignment finishes; always lands on a work day
   let nextStart = new Date(today);
+  advanceToWorkDay(nextStart, workDays);
 
   for (let idx = 0; idx < sorted.length; idx++) {
     const assignment = sorted[idx];
@@ -79,24 +96,26 @@ export function distributeLoad(assignments: AssignmentLoad[]): LoadResult {
     // after it finishes at SOFT_CAP.
     const futureWork = remainingHours.slice(idx + 1).reduce((s, h) => s + h, 0);
 
-    // How many days would this assignment take at SOFT_CAP (natural pace)?
-    const daysAtSoftCap = Math.ceil(remaining / SOFT_CAP);
+    // Calendar-day estimate for this assignment at natural pace (adjusted for work days)
+    const daysAtSoftCap = Math.ceil(remaining / SOFT_CAP) * calDaysPerWorkDay;
     const naturalFinishMs = nextStart.getTime() + daysAtSoftCap * 86400000;
 
-    // Days remaining for future work after natural finish → last deadline
+    // Calendar days remaining for future work after natural finish → last deadline
     const lastDeadline = sorted[sorted.length - 1].dueDate;
     const msAfterFinish = Math.max(0, lastDeadline.getTime() - naturalFinishMs);
     const daysAfterFinish = Math.floor(msAfterFinish / 86400000);
+    // Approximate work days available for future work
+    const workDaysAfterFinish = Math.floor(daysAfterFinish / calDaysPerWorkDay);
 
-    // Future work that can't fit at SOFT_CAP in the remaining time
-    const overflowWork = Math.max(0, futureWork - daysAfterFinish * SOFT_CAP);
+    // Future work that can't fit at SOFT_CAP in the remaining work days
+    const overflowWork = Math.max(0, futureWork - workDaysAfterFinish * SOFT_CAP);
 
     // Only raise the rate above SOFT_CAP when there's genuine overflow
     let lookaheadRate = SOFT_CAP;
     if (overflowWork > 0) {
-      const extraDaysNeeded = Math.ceil(overflowWork / SOFT_CAP);
-      const daysForCurrent = Math.max(1, daysAtSoftCap - extraDaysNeeded);
-      lookaheadRate = remaining / daysForCurrent;
+      const extraWorkDaysNeeded = Math.ceil(overflowWork / SOFT_CAP);
+      const workDaysForCurrent = Math.max(1, Math.ceil(remaining / SOFT_CAP) - extraWorkDaysNeeded);
+      lookaheadRate = remaining / workDaysForCurrent;
     }
 
     let rem = remaining;
@@ -107,17 +126,24 @@ export function distributeLoad(assignments: AssignmentLoad[]): LoadResult {
       const key = dateKey(cursor);
       const alreadyUsed = hoursUsed(key);
       const msLeft = assignment.dueDate.getTime() - cursor.getTime();
-      const daysLeft = Math.max(1, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));
+      // Count remaining work days (including today) up to deadline
+      const calDaysLeft = Math.max(1, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));
+      const workDaysLeft = Math.max(1, Math.round(calDaysLeft / calDaysPerWorkDay));
 
       // Minimum hours needed today to finish exactly on deadline
-      const idealToday = rem / daysLeft;
+      const idealToday = rem / workDaysLeft;
 
       // Use the higher of: SOFT_CAP, deadline-driven rate, and look-ahead rate.
-      // Look-ahead rate compresses earlier assignments so later ones get enough days.
       const dailyTarget = Math.min(Math.max(SOFT_CAP, idealToday, lookaheadRate), HARD_CAP);
 
-      // Space left on this day (accounts for hours already used by a prior assignment)
-      const available = Math.max(0, dailyTarget - alreadyUsed);
+      // Due-time cap: on the actual due date, work is limited to (dueHour - WORK_START_HOUR)
+      let dayCapacity = HARD_CAP;
+      if (dateKey(cursor) === dateKey(assignment.dueDate) && assignment.dueTime) {
+        const [hh] = assignment.dueTime.split(":").map(Number);
+        dayCapacity = Math.max(0, hh - WORK_START_HOUR);
+      }
+
+      const available = Math.max(0, Math.min(dailyTarget, dayCapacity) - alreadyUsed);
       const block = Math.min(rem, available);
       // Round up to nearest 0.5h
       const rounded = Math.ceil(block * 2) / 2;
@@ -139,6 +165,8 @@ export function distributeLoad(assignments: AssignmentLoad[]): LoadResult {
       }
 
       cursor.setDate(cursor.getDate() + 1);
+      // Skip non-work days
+      advanceToWorkDay(cursor, workDays);
     }
 
     if (rem > 0.05 && !estDoneByAssignment.has(assignment.id)) {
@@ -146,13 +174,14 @@ export function distributeLoad(assignments: AssignmentLoad[]): LoadResult {
     }
 
     // If the last scheduled day still has capacity, the next assignment can
-    // start there. Otherwise it starts the following day.
+    // start there. Otherwise advance to the next work day after cursor.
     if (lastKey && hoursUsed(lastKey) < SOFT_CAP) {
       const [y, mo, d] = lastKey.split("-").map(Number);
       nextStart = new Date(y, mo - 1, d);
       nextStart.setHours(0, 0, 0, 0);
     } else {
       nextStart = new Date(cursor);
+      advanceToWorkDay(nextStart, workDays);
     }
   }
 

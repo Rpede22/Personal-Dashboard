@@ -72,6 +72,9 @@ export default function SchoolHub() {
   const [estDoneMap, setEstDoneMap] = useState<Record<number, string>>({});
   const [needsHardCapMap, setNeedsHardCapMap] = useState<Record<number, boolean>>({});
   const [hoursSpentEdits, setHoursSpentEdits] = useState<Record<number, string>>({});
+  const [estimatedHoursEdits, setEstimatedHoursEdits] = useState<Record<number, string>>({});
+  // workDays: JS day numbers (0=Sun…6=Sat) available for school work
+  const [workDays, setWorkDays] = useState<number[]>([1, 2, 3, 4, 5]);
 
   async function load(silent = false) {
     if (!silent) setLoading(true);
@@ -89,6 +92,10 @@ export default function SchoolHub() {
 
   useEffect(() => {
     load();
+    fetch("/api/school/settings")
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d.workDays)) setWorkDays(d.workDays); })
+      .catch(() => {});
   }, []);
 
   async function submit(e: React.FormEvent) {
@@ -133,7 +140,34 @@ export default function SchoolHub() {
 
   async function deleteAssignment(id: number) {
     await fetch(`/api/school/${id}`, { method: "DELETE" });
-    setAssignments((prev) => prev.filter((a) => a.id !== id));
+    load(true);
+  }
+
+  async function saveEstimatedHours(id: number, rawValue: string) {
+    const val = rawValue === "" ? null : parseFloat(rawValue);
+    if (val !== null && (isNaN(val) || val <= 0)) return;
+    await fetch(`/api/school/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ estimatedHours: val }),
+    });
+    setAssignments((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, estimatedHours: val } : a))
+    );
+    load(true);
+  }
+
+  async function toggleWorkDay(day: number) {
+    const next = workDays.includes(day)
+      ? workDays.filter((d) => d !== day)
+      : [...workDays, day].sort((a, b) => a - b);
+    setWorkDays(next);
+    await fetch("/api/school/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workDays: next }),
+    });
+    load(true);
   }
 
   async function saveHoursSpent(id: number, rawValue: string) {
@@ -184,7 +218,7 @@ export default function SchoolHub() {
 
   const filtered =
     filterStatus === "all"
-      ? assignments
+      ? assignments.filter((a) => a.status !== "done")
       : assignments.filter((a) => a.status === filterStatus);
 
   // Sort: overdue first, then by dueDate asc; done tasks at end
@@ -333,6 +367,41 @@ export default function SchoolHub() {
         </form>
       )}
 
+      {/* Work days picker */}
+      {(() => {
+        const DAYS = [
+          { label: "Mon", day: 1 },
+          { label: "Tue", day: 2 },
+          { label: "Wed", day: 3 },
+          { label: "Thu", day: 4 },
+          { label: "Fri", day: 5 },
+          { label: "Sat", day: 6 },
+          { label: "Sun", day: 0 },
+        ];
+        return (
+          <div className="flex items-center gap-2 mb-4 flex-wrap">
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Study days:</span>
+            {DAYS.map(({ label, day }) => {
+              const active = workDays.includes(day);
+              return (
+                <button
+                  key={day}
+                  onClick={() => toggleWorkDay(day)}
+                  className="w-9 py-1 rounded-lg text-xs font-medium transition-colors"
+                  style={{
+                    background: active ? "var(--accent-indigo)" : "var(--surface-2)",
+                    color: active ? "#fff" : "var(--text-muted)",
+                    border: active ? "1px solid var(--accent-indigo)" : "1px solid var(--border)",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {/* Filter */}
       <div className="flex gap-2 mb-4 flex-wrap">
         {ALL_FILTER_OPTIONS.map((s) => (
@@ -417,7 +486,7 @@ export default function SchoolHub() {
                     <p className="text-xs" style={{ color: "var(--text-muted)" }}>{a.subject}</p>
                   )}
 
-                  {/* Hours spent + est done — only when estimate exists and task is in progress */}
+                  {/* Hours spent row — only for in_progress with estimate */}
                   {a.estimatedHours && a.status === "in_progress" && (
                     <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                       <label className="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -452,16 +521,43 @@ export default function SchoolHub() {
                       )}
                     </div>
                   )}
+                  {/* Est done for pending tasks with an estimate */}
+                  {a.estimatedHours && a.status === "pending" && estDoneMap[a.id] && (
+                    <p className="text-xs font-medium mt-1" style={{ color: "var(--accent-indigo)" }}>
+                      Est. done{" "}
+                      {new Date(estDoneMap[a.id]).toLocaleDateString("en-GB", {
+                        weekday: "short",
+                        day: "numeric",
+                        month: "short",
+                      })}
+                    </p>
+                  )}
                 </div>
 
-                {/* Right-side info block — est hours · due date · countdown */}
+                {/* Right-side info block — est hours (editable) · due date · countdown */}
                 {a.status !== "done" && (
                   <div className="flex-shrink-0 text-right space-y-0.5">
-                    {a.estimatedHours && (
-                      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        Estimated: {a.estimatedHours}h
-                      </p>
-                    )}
+                    <div className="flex items-center justify-end gap-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                      <span>Est:</span>
+                      <input
+                        type="number"
+                        min="0.5"
+                        step="0.5"
+                        placeholder="—"
+                        value={estimatedHoursEdits[a.id] ?? (a.estimatedHours ?? "")}
+                        onChange={(e) =>
+                          setEstimatedHoursEdits((prev) => ({ ...prev, [a.id]: e.target.value }))
+                        }
+                        onBlur={(e) => saveEstimatedHours(a.id, e.target.value)}
+                        className="w-12 rounded px-1 py-0.5 text-xs text-right"
+                        style={{
+                          background: "var(--surface-2)",
+                          color: "var(--text)",
+                          border: "1px solid var(--border)",
+                        }}
+                      />
+                      <span>h</span>
+                    </div>
                     <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                       Due: {formatDueDate(a.dueDate)}
                     </p>

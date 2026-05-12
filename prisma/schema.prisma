@@ -27,6 +27,7 @@ model RunLog {
   distance  Float    // km
   duration  Int      // seconds
   notes     String?
+  stravaId  String?  // Strava activity ID — null for manually logged runs
   createdAt DateTime @default(now())
 }
 

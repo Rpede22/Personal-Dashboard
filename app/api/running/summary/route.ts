@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 const RACE_DATE_KEY = "race_date";
+const RACE_DISTANCE_KEY = "race_distance";
 
 // Simple key-value store via the filesystem for race date config
 // (avoids adding another DB table for a single value)
@@ -21,6 +22,7 @@ function loadConfig(): Record<string, string> {
 export async function GET() {
   const config = loadConfig();
   const raceDate = config[RACE_DATE_KEY] ?? null;
+  const raceDistance = config[RACE_DISTANCE_KEY] ? parseFloat(config[RACE_DISTANCE_KEY]) : null;
 
   const now = new Date();
 
@@ -87,21 +89,38 @@ export async function GET() {
     totalKm,
     totalRuns,
     raceDate,
+    raceDistance,
     upcomingPlans: upcomingPlans.map((p) => ({ date: p.date, type: p.type, distance: p.distance })),
   });
 }
 
 export async function POST(request: Request) {
   const body = await request.json();
+  const config = loadConfig();
+  let changed = false;
+
   if (body.raceDate !== undefined) {
-    const config = loadConfig();
     if (body.raceDate) {
       config[RACE_DATE_KEY] = body.raceDate;
     } else {
       delete config[RACE_DATE_KEY];
     }
-    writeFileSync(CONFIG_PATH, JSON.stringify(config));
-    return NextResponse.json({ ok: true });
+    changed = true;
   }
-  return NextResponse.json({ error: "raceDate required" }, { status: 400 });
+
+  if (body.raceDistance !== undefined) {
+    if (body.raceDistance) {
+      config[RACE_DISTANCE_KEY] = String(body.raceDistance);
+    } else {
+      delete config[RACE_DISTANCE_KEY];
+    }
+    changed = true;
+  }
+
+  if (!changed) {
+    return NextResponse.json({ error: "raceDate or raceDistance required" }, { status: 400 });
+  }
+
+  writeFileSync(CONFIG_PATH, JSON.stringify(config));
+  return NextResponse.json({ ok: true });
 }

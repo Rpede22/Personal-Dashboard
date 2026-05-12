@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { distributeLoad } from "@/lib/load-distributor";
+import { readSettings } from "./settings/route";
 
 // Returns a Date for when an assignment becomes overdue, respecting dueTime if set.
 function overdueThreshold(dueDate: Date, dueTime: string | null): Date {
@@ -50,18 +51,22 @@ export async function GET(request: Request) {
     }
   }
   await Promise.all(updates);
-  // Build load plan from assignments that have estimates and aren't done
+  // Load work day settings
+  const { workDays } = readSettings();
+
+  // Build load plan from assignments that have estimates and aren't done/overdue
   const withEstimates = assignments
     .filter((a) => a.estimatedHours && a.status !== "done" && a.status !== "overdue")
     .map((a) => ({
       id: a.id,
       title: a.title,
       dueDate: new Date(a.dueDate),
+      dueTime: a.dueTime ?? undefined,
       estimatedHours: a.estimatedHours!,
       hoursSpent: a.hoursSpent ?? 0,
     }));
 
-  const { plan, estDoneByAssignment, needsHardCap } = distributeLoad(withEstimates);
+  const { plan, estDoneByAssignment, needsHardCap } = distributeLoad(withEstimates, workDays);
   const loadPlan = Object.fromEntries(plan);
   const estDoneMap = Object.fromEntries(estDoneByAssignment);
   const needsHardCapMap = Object.fromEntries(needsHardCap);
