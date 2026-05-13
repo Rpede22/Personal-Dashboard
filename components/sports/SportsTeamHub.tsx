@@ -365,13 +365,18 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const displayRankLabel = promoRow ? "Opryk." : cfg?.leagueName ?? "";
 
   return (
-    <div className="min-h-screen p-6" style={{ background: "var(--background)", color: "var(--text)" }}>
-      <Link href="/" className="inline-flex items-center gap-1 text-sm mb-6" style={{ color: "var(--text-muted)" }}>
+    <div className="min-h-screen p-6 page-bg" style={{ color: "var(--text)" }}>
+
+      {/* ── Sticky header: back link + team info + tabs ── */}
+      <div
+        className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg"
+      >
+      <Link href="/" className="inline-flex items-center gap-1 text-sm mb-4" style={{ color: "var(--text-muted)" }}>
         ← Dashboard
       </Link>
 
       {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
+      <div className="flex items-center gap-3 mb-4">
         <span className="text-4xl">{cfg?.emoji ?? "🏆"}</span>
         <div>
           <h1 className="text-2xl font-bold" style={{ color: accent }}>{cfg?.name ?? teamSlug}</h1>
@@ -403,7 +408,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6">
+      <div className="flex gap-2">
         {tabs.map((t) => (
           <button
             key={t}
@@ -419,6 +424,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
           </button>
         ))}
       </div>
+      </div> {/* end sticky header */}
 
       {loading ? (
         <p style={{ color: "var(--text-muted)" }}>Loading…</p>

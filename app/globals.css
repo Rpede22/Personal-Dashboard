@@ -52,6 +52,12 @@ html {
   border-radius: 3px;
 }
 
+/* ── Sticky header / titlebar: viewport-anchored gradient so it blends with the page background ── */
+.page-bg {
+  background: linear-gradient(135deg, #1a2240 0%, #131926 45%, #1c1438 100%);
+  background-attachment: fixed;
+}
+
 /* ── Electron title bar drag region ── */
 .titlebar-drag {
   -webkit-app-region: drag;
@@ -62,6 +68,8 @@ html {
   height: 28px;
   z-index: 1000;
   pointer-events: all;
+  background: linear-gradient(135deg, #1a2240 0%, #131926 45%, #1c1438 100%);
+  background-attachment: fixed;
 }
 
 /* Interactive elements inside the drag bar must NOT be draggable */

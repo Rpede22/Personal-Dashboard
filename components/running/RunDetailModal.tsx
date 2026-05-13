@@ -90,12 +90,16 @@ export default function RunDetailModal({
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
-        className="rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
-        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+        className="rounded-2xl w-full max-w-3xl flex flex-col overflow-hidden"
+        style={{
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          maxHeight: "88vh",
+        }}
       >
-        {/* Header */}
+        {/* Header — always visible, never scrolls */}
         <div
-          className="flex items-center justify-between px-5 py-4 sticky top-0"
+          className="flex-shrink-0 flex items-center justify-between px-5 py-4 rounded-t-2xl"
           style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)" }}
         >
           <div>
@@ -117,7 +121,8 @@ export default function RunDetailModal({
           </button>
         </div>
 
-        <div className="p-5 space-y-5">
+        {/* Scrollable content */}
+        <div className="overflow-y-auto flex-1 p-5 space-y-5">
           {/* Map */}
           {loading && (
             <div className="text-sm text-center py-8" style={{ color: "var(--text-muted)" }}>

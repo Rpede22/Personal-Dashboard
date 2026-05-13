@@ -44,6 +44,7 @@ export default function SchoolWidget() {
   const [loadPlan, setLoadPlan] = useState<Record<string, DaySlot[]>>({});
   const [estDoneMap, setEstDoneMap] = useState<Record<number, string>>({});
   const [needsHardCapMap, setNeedsHardCapMap] = useState<Record<number, boolean>>({});
+  const [hoursPerDay, setHoursPerDay] = useState(3);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -60,6 +61,7 @@ export default function SchoolWidget() {
         setLoadPlan(d.loadPlan ?? {});
         setEstDoneMap(d.estDoneMap ?? {});
         setNeedsHardCapMap(d.needsHardCapMap ?? {});
+        setHoursPerDay(d.hoursPerDay ?? 3);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -240,7 +242,7 @@ export default function SchoolWidget() {
             <div className="space-y-1.5">
               {planDays.map(([date, slots]) => {
                 const totalHours = Math.ceil(slots.reduce((s, sl) => s + sl.hours, 0) * 2) / 2;
-                const planColor = totalHours > 3 ? "var(--accent-red)" : "var(--accent-green)";
+                const planColor = totalHours > hoursPerDay ? "var(--accent-red)" : "var(--accent-green)";
                 const dayLabel = new Date(date).toLocaleDateString("en-GB", {
                   weekday: "short",
                   day: "numeric",

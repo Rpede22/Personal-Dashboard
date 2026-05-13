@@ -383,25 +383,30 @@ export default function RunningHub() {
   const startOffset = monthFirstDay === 0 ? 6 : monthFirstDay - 1;
 
   return (
-    <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
-          ← Dashboard
-        </Link>
-        <h1 className="text-2xl font-bold" style={{ color: "var(--accent-green)" }}>
-          🏃 Running Hub
-        </h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="ml-auto px-4 py-2 rounded-xl text-sm font-medium"
-          style={{ background: "var(--accent-green)", color: "#fff" }}
-        >
-          + Log Run
-        </button>
-      </div>
+    <div className="min-h-screen p-6 page-bg">
 
-      {/* Stats bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-7 gap-3 mb-6">
+      {/* ── Sticky header: title + stats bar ── */}
+      <div
+        className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-4 mb-4 page-bg"
+      >
+        <div className="flex items-center gap-4 mb-4">
+          <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+            ← Dashboard
+          </Link>
+          <h1 className="text-2xl font-bold" style={{ color: "var(--accent-green)" }}>
+            🏃 Running Hub
+          </h1>
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="ml-auto px-4 py-2 rounded-xl text-sm font-medium"
+            style={{ background: "var(--accent-green)", color: "#fff" }}
+          >
+            + Log Run
+          </button>
+        </div>
+
+        {/* Stats bar */}
+        <div className="grid grid-cols-2 sm:grid-cols-7 gap-3">
         {[
           { label: "This week",    value: `${weeklyKm.toFixed(1)} km`,   color: "var(--accent-green)" },
           { label: "Last 30 days", value: `${monthlyKm.toFixed(1)} km`,  color: "var(--accent-green)" },
@@ -435,7 +440,8 @@ export default function RunningHub() {
             {raceDistance ? `to ${raceDistance} km race` : "days to race"}
           </div>
         </div>
-      </div>
+        </div> {/* end stats grid */}
+      </div> {/* end sticky header */}
 
       {/* Training Progress */}
       {runs.length > 0 && (

@@ -264,8 +264,13 @@ export default function SchoolHub() {
   const priorityIndexMap = new Map(activeSorted.map((a, i) => [a.id, i]));
 
   return (
-    <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
-      <div className="flex items-center gap-4 mb-6">
+    <div className="min-h-screen p-6 page-bg">
+
+      {/* ── Sticky header: title + study days + filter ── */}
+      <div
+        className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg"
+      >
+      <div className="flex items-center gap-4 mb-4">
         <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
           ← Dashboard
         </Link>
@@ -469,6 +474,7 @@ export default function SchoolHub() {
           {sortedFiltered.length} item{sortedFiltered.length !== 1 ? "s" : ""}
         </span>
       </div>
+      </div> {/* end sticky header */}
 
       {/* Assignment list */}
       {loading ? (

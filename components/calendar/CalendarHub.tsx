@@ -138,41 +138,45 @@ export default function CalendarHub() {
   const selectedEvents = selectedDay ? (eventsByDay.get(selectedDay) ?? []) : [];
 
   return (
-    <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-5">
-        <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
-          ← Dashboard
-        </Link>
-        <h1 className="text-2xl font-bold" style={{ color: "var(--accent-purple)" }}>📅 Calendar</h1>
-      </div>
-
-      {/* Calendar filter toggles */}
-      {calendarNames.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-5">
-          {calendarNames.map((name) => {
-            const color = calColor(name);
-            const on = enabledCals.has(name);
-            return (
-              <button
-                key={name}
-                onClick={() => toggleCal(name)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium"
-                style={{
-                  background: on ? `${color}22` : "var(--surface-2)",
-                  border: `1px solid ${on ? color : "var(--border)"}`,
-                  color: on ? color : "var(--text-muted)",
-                  opacity: on ? 1 : 0.5,
-                  transition: "all 0.15s",
-                }}
-              >
-                <div className="w-2 h-2 rounded-full" style={{ background: on ? color : "var(--border)" }} />
-                {name}
-              </button>
-            );
-          })}
+    <div className="min-h-screen p-6 page-bg">
+      {/* Sticky header: title + filter toggles */}
+      <div
+        className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg"
+      >
+        <div className="flex items-center gap-4 mb-3">
+          <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+            ← Dashboard
+          </Link>
+          <h1 className="text-2xl font-bold" style={{ color: "var(--accent-purple)" }}>📅 Calendar</h1>
         </div>
-      )}
+
+        {/* Calendar filter toggles */}
+        {calendarNames.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {calendarNames.map((name) => {
+              const color = calColor(name);
+              const on = enabledCals.has(name);
+              return (
+                <button
+                  key={name}
+                  onClick={() => toggleCal(name)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium"
+                  style={{
+                    background: on ? `${color}22` : "var(--surface-2)",
+                    border: `1px solid ${on ? color : "var(--border)"}`,
+                    color: on ? color : "var(--text-muted)",
+                    opacity: on ? 1 : 0.5,
+                    transition: "all 0.15s",
+                  }}
+                >
+                  <div className="w-2 h-2 rounded-full" style={{ background: on ? color : "var(--border)" }} />
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <p style={{ color: "var(--text-muted)" }}>Loading calendar…</p>

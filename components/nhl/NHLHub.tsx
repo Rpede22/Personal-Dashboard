@@ -355,19 +355,23 @@ export default function NHLHub() {
   }
 
   return (
-    <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
-          ← Dashboard
-        </Link>
-        <h1 className="text-2xl font-bold" style={{ color: "var(--accent-blue)" }}>
-          🏒 NHL Hub
-        </h1>
-      </div>
+    <div className="min-h-screen p-6 page-bg">
+
+      {/* ── Sticky header: title + tabs ── */}
+      <div
+        className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg"
+      >
+        <div className="flex items-center gap-4 mb-4">
+          <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+            ← Dashboard
+          </Link>
+          <h1 className="text-2xl font-bold" style={{ color: "var(--accent-blue)" }}>
+            🏒 NHL Hub
+          </h1>
+        </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-4 flex-wrap">
+      <div className="flex gap-1 flex-wrap">
         {([
           ["standings", "Standings"],
           ["schedule", "Schedule"],
@@ -394,6 +398,7 @@ export default function NHLHub() {
           </button>
         ))}
       </div>
+      </div> {/* end sticky header */}
 
       {/* Scope controls — standings only, below tabs */}
       {tab === "standings" && (

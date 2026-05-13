@@ -506,14 +506,18 @@ export default function WoWHub() {
   );
 
   return (
-    <div className="min-h-screen p-6" style={{ background: "var(--background)" }}>
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
-          ← Dashboard
-        </Link>
-        <h1 className="text-2xl font-bold" style={{ color: "var(--accent-purple)" }}>
-          🧙 WoW Hub
-        </h1>
+    <div className="min-h-screen p-6 page-bg">
+      <div
+        className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg"
+      >
+        <div className="flex items-center gap-4">
+          <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+            ← Dashboard
+          </Link>
+          <h1 className="text-2xl font-bold" style={{ color: "var(--accent-purple)" }}>
+            🧙 WoW Hub
+          </h1>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
