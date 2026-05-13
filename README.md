@@ -73,6 +73,8 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Dashboard widget heights** are equalised per row — CSS grid stretches each pair of widgets to match the taller one so neither column looks sparse.
 
+**Sticky headers** — every hub page and the dashboard itself has a sticky header that stays pinned below the Electron title bar (`top: 28px`) while you scroll. Headers use a viewport-anchored background gradient (`background-attachment: fixed`) that matches the page background exactly, making them visually seamless rather than showing as a solid box.
+
 ---
 
 ## World of Warcraft
@@ -95,7 +97,7 @@ Run logs and training plans are stored in SQLite. Strava sync is optional.
 - **Manual logging:** add runs directly in the hub.
 - **Strava sync:** connects via OAuth (tokens stored in `.strava-config.json`, git-ignored). Imports the last 30 days of activities, deduplicates by date + distance, and stores the Strava activity ID (`stravaId`) on each run. When a Strava run is synced for a day that already has a run plan, the plan is automatically removed.
 - **Run log:** shows the 5 most recent runs by default. Click **All Runs (N)** to see the full history. Click any row to open the run detail popup.
-- **Run detail popup:** for Strava-imported runs, shows a Leaflet route map (decoded from the encoded polyline), core stats (distance, duration, pace, elevation), heart rate and cadence (if recorded), and a per-km splits table. Manually logged runs show basic stats only. Hit **Sync runs** once after updating to backfill `stravaId` on existing Strava imports.
+- **Run detail popup:** for Strava-imported runs, shows a Leaflet route map (decoded from the encoded polyline), core stats (distance, duration, pace, elevation), heart rate and cadence (if recorded), and a per-km splits table. Manually logged runs show basic stats only. The popup has a fixed header (title + close button always visible) with the rest scrollable below. Hit **Sync runs** once after updating to backfill `stravaId` on existing Strava imports.
 - **Training progress:** two bar charts appear once you have runs logged — *Weekly Kilometers* (last 12 weeks, current week highlighted) and *Longest Run* (best run per month for the last 6 months).
 - **Race target:** set a race date and/or race distance in the hub. The widget and stats bar show days remaining and the target distance label.
 - **7-day planner:** assign `easy` / `tempo` / `long` / `rest` days with optional target distance. Switch to **Month view** for a full calendar overview. Plans on days where a run has been logged are automatically cleared on sync.
@@ -121,7 +123,7 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 - **Hours per day** — set your preferred daily study target with the **h/day** input next to the day toggles (default 3 h, step 0.5). This becomes the scheduler's soft cap. Days in the Work Plan are green when at or under the target, red when over.
 - **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears in both the hub and the dashboard widget. A sequential scheduler completes one assignment fully before scheduling the next (sorted by deadline). If an assignment finishes with time left on its last day, the next one begins that same day. **Look-ahead:** before scheduling each assignment the scheduler checks whether future assignments can fit at the configured h/day rate after it finishes at its natural pace. If they can't, the current assignment is automatically compressed to a higher daily rate, freeing the extra days for later tasks. The cap escalates smoothly up to 10 h/day as the absolute maximum. All displayed hours are rounded up to the nearest 0.5 h. The last scheduled day for each assignment is shown as "Est. done". Due-time cap: if a due time is set, the due day itself is capped at `(dueHour − 9)` available hours.
 - **Schedule-aware colours** — priority dots reflect the schedule: green = fits within the h/day target, orange = tight (needs hard cap), red = overdue. Tasks without estimates use days-to-deadline proximity instead.
-- **Dashboard widget** mirrors the full hub view (estimated hours, due date, countdown, read-only hours spent) — navigate to the hub only to add tasks or update hours spent.
+- **Dashboard widget** mirrors the full hub view (estimated hours, due date, countdown, read-only hours spent) — navigate to the hub only to add tasks or update hours spent. Work Plan day colours always match the hub: the widget reads `hoursPerDay` from the API (not a hardcoded value).
 
 ---
 
