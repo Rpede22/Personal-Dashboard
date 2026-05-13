@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, nativeImage } = require("electron");
+const { app, BrowserWindow, shell, nativeImage, dialog } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -60,26 +60,40 @@ function startNextServer(dbPath) {
       return;
     }
 
-    // In production the standalone server lives in the app resources folder
-    const serverPath = path.join(
-      process.resourcesPath,
-      "standalone",
-      "server.js"
-    );
+    const serverPath = path.join(process.resourcesPath, "standalone", "server.js");
+    const staticPath  = path.join(process.resourcesPath, "static");
+    const publicPath  = path.join(process.resourcesPath, "public");
 
-    // Static files location (also in resources)
-    const staticPath = path.join(process.resourcesPath, "static");
-    const publicPath = path.join(process.resourcesPath, "public");
+    // Log file so we can diagnose crashes even after the app quits
+    const logPath = path.join(app.getPath("userData"), "server.log");
+    const logStream = fs.createWriteStream(logPath, { flags: "a" });
+    const logLine = (tag, msg) => {
+      const line = `[${new Date().toISOString()}] [${tag}] ${msg}\n`;
+      logStream.write(line);
+      console.log(line.trimEnd());
+    };
+
+    logLine("INFO", `Starting server: ${serverPath}`);
+    logLine("INFO", `DB path: ${dbPath}`);
+    logLine("INFO", `execPath: ${process.execPath}`);
+
+    if (!fs.existsSync(serverPath)) {
+      const err = new Error(`server.js not found at:\n${serverPath}`);
+      logLine("ERROR", err.message);
+      reject(err);
+      return;
+    }
+
+    // Collect stderr so we can show it in the error dialog
+    const stderrLines = [];
 
     nextProcess = spawn(process.execPath, [serverPath], {
       env: {
         ...process.env,
         PORT: String(PORT),
         NODE_ENV: "production",
-        // Point Next.js static/public files to the resources folder
         __NEXT_PRIVATE_STANDALONE_CONFIG: JSON.stringify({}),
         NEXT_MANUAL_SIG_HANDLE: "true",
-        // Database path passed to the API routes
         DATABASE_PATH: dbPath,
         DATABASE_URL: `file:${dbPath}`,
         NEXTJS_STATIC_DIR: staticPath,
@@ -90,29 +104,37 @@ function startNextServer(dbPath) {
     });
 
     nextProcess.stdout?.on("data", (d) => {
-      const line = d.toString();
-      if (
-        line.includes("Ready") ||
-        line.includes("started server") ||
-        line.includes("Listening")
-      ) {
+      const line = d.toString().trim();
+      logLine("STDOUT", line);
+      if (line.includes("Ready") || line.includes("started server") || line.includes("Listening")) {
         resolve();
       }
     });
 
     nextProcess.stderr?.on("data", (d) => {
-      console.error("[next]", d.toString());
+      const line = d.toString().trim();
+      logLine("STDERR", line);
+      stderrLines.push(line);
     });
 
-    nextProcess.on("error", reject);
+    nextProcess.on("error", (err) => {
+      logLine("ERROR", err.message);
+      reject(err);
+    });
+
     nextProcess.on("exit", (code) => {
+      logLine("EXIT", `code=${code}`);
       if (code !== 0 && code !== null) {
-        reject(new Error(`Next.js server exited with code ${code}`));
+        const detail = stderrLines.slice(-10).join("\n") || "(no stderr output)";
+        reject(new Error(`Next.js server exited with code ${code}\n\n${detail}`));
       }
     });
 
-    // Safety net: resolve once HTTP actually responds
-    waitForServer(`http://localhost:${PORT}`).then(resolve).catch(reject);
+    // Safety net: reject after timeout with any collected stderr
+    waitForServer(`http://localhost:${PORT}`).then(resolve).catch(() => {
+      const detail = stderrLines.slice(-10).join("\n") || "(no stderr — server may not have started at all)";
+      reject(new Error(`Server at http://localhost:${PORT} timed out after 30s\n\nLog: ${logPath}\n\n${detail}`));
+    });
   });
 }
 
@@ -172,28 +194,46 @@ async function createWindow() {
 // ------------------------------------------------------------------
 app.setName("Dashboard");
 
-app.whenReady().then(async () => {
-  try {
-    const dbPath = DEV
-      ? path.join(process.cwd(), "dev.db")
-      : ensureDatabase();
+// Enforce a single instance — if a second instance launches, focus the
+// existing window and quit the new one immediately.
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
 
-    await startNextServer(dbPath);
+  app.whenReady().then(async () => {
+    try {
+      const dbPath = DEV
+        ? path.join(process.cwd(), "dev.db")
+        : ensureDatabase();
 
-    if (!DEV) {
-      await waitForServer(`http://localhost:${PORT}`);
+      await startNextServer(dbPath);
+
+      if (!DEV) {
+        await waitForServer(`http://localhost:${PORT}`);
+      }
+
+      await createWindow();
+    } catch (err) {
+      console.error("Failed to start dashboard:", err);
+      dialog.showErrorBox(
+        "Dashboard failed to start",
+        String(err?.message ?? err)
+      );
+      app.quit();
     }
 
-    await createWindow();
-  } catch (err) {
-    console.error("Failed to start dashboard:", err);
-    app.quit();
-  }
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   });
-});
+}
 
 app.on("window-all-closed", () => {
   if (nextProcess) {

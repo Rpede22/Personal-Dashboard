@@ -50,7 +50,7 @@ AGENTS.md
 PROJECT_STRUCTURE.md
 
 # ── Build resources (seeded DB used during Electron packaging) ────────────────
-build-resources/seed.db
+build-resources/
 
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
