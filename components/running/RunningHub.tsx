@@ -111,6 +111,9 @@ export default function RunningHub() {
   const [addPlanDay, setAddPlanDay] = useState<string | null>(null); // date string for inline form
   const [planForm, setPlanForm] = useState({ type: "easy", distance: "", notes: "" });
 
+  // Tabs
+  const [activeTab, setActiveTab] = useState<"overview" | "log">("overview");
+
   // Run detail modal
   const [selectedRun, setSelectedRun] = useState<RunLog | null>(null);
   const [showAllRuns, setShowAllRuns] = useState(false);
@@ -385,10 +388,8 @@ export default function RunningHub() {
   return (
     <div className="min-h-screen p-6 page-bg">
 
-      {/* ── Sticky header: title + stats bar ── */}
-      <div
-        className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-4 mb-4 page-bg"
-      >
+      {/* ── Sticky header: title + stats bar + tabs ── */}
+      <div className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-0 mb-4 page-bg">
         <div className="flex items-center gap-4 mb-4">
           <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
             ← Dashboard
@@ -396,52 +397,62 @@ export default function RunningHub() {
           <h1 className="text-2xl font-bold" style={{ color: "var(--accent-green)" }}>
             🏃 Running Hub
           </h1>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="ml-auto px-4 py-2 rounded-xl text-sm font-medium"
-            style={{ background: "var(--accent-green)", color: "#fff" }}
-          >
-            + Log Run
-          </button>
         </div>
 
         {/* Stats bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-7 gap-3">
-        {[
-          { label: "This week",    value: `${weeklyKm.toFixed(1)} km`,   color: "var(--accent-green)" },
-          { label: "Last 30 days", value: `${monthlyKm.toFixed(1)} km`,  color: "var(--accent-green)" },
-          { label: "This month",   value: `${thisMonthKm.toFixed(1)} km`, color: "var(--accent-blue)" },
-          { label: "This year",    value: `${thisYearKm.toFixed(1)} km`,  color: "var(--accent-purple)" },
-          { label: "Total logged", value: `${totalKm.toFixed(1)} km`,    color: "var(--accent-blue)" },
-          { label: "Total runs",   value: runs.length.toString(),          color: "var(--accent-purple)" },
-        ].map((stat) => (
+        <div className="grid grid-cols-2 sm:grid-cols-7 gap-3 mb-4">
+          {[
+            { label: "This week",    value: `${weeklyKm.toFixed(1)} km`,    color: "var(--accent-green)" },
+            { label: "Last 30 days", value: `${monthlyKm.toFixed(1)} km`,   color: "var(--accent-green)" },
+            { label: "This month",   value: `${thisMonthKm.toFixed(1)} km`, color: "var(--accent-blue)" },
+            { label: "This year",    value: `${thisYearKm.toFixed(1)} km`,  color: "var(--accent-purple)" },
+            { label: "Total logged", value: `${totalKm.toFixed(1)} km`,     color: "var(--accent-blue)" },
+            { label: "Total runs",   value: runs.length.toString(),          color: "var(--accent-purple)" },
+          ].map((stat) => (
+            <div
+              key={stat.label}
+              className="rounded-2xl p-4 text-center"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+            >
+              <div className="text-2xl font-bold" style={{ color: stat.color }}>{stat.value}</div>
+              <div className="text-xs" style={{ color: "var(--text-muted)" }}>{stat.label}</div>
+            </div>
+          ))}
+          {/* Race stat */}
           <div
-            key={stat.label}
             className="rounded-2xl p-4 text-center"
             style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
           >
-            <div className="text-2xl font-bold" style={{ color: stat.color }}>
-              {stat.value}
+            <div className="text-2xl font-bold" style={{ color: "var(--accent-orange)" }}>
+              {daysToRace !== null ? `${daysToRace}d` : "—"}
             </div>
             <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-              {stat.label}
+              {raceDistance ? `to ${raceDistance} km race` : "days to race"}
             </div>
           </div>
-        ))}
-        {/* Race stat — shown only when race date is set */}
-        <div
-          className="rounded-2xl p-4 text-center"
-          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-        >
-          <div className="text-2xl font-bold" style={{ color: "var(--accent-orange)" }}>
-            {daysToRace !== null ? `${daysToRace}d` : "—"}
-          </div>
-          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {raceDistance ? `to ${raceDistance} km race` : "days to race"}
-          </div>
         </div>
-        </div> {/* end stats grid */}
+
+        {/* Tabs */}
+        <div className="flex gap-1 border-b" style={{ borderColor: "var(--border)" }}>
+          {(["overview", "log"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className="px-5 py-2 text-sm font-medium capitalize transition-colors"
+              style={{
+                color: activeTab === tab ? "var(--accent-green)" : "var(--text-muted)",
+                borderBottom: activeTab === tab ? "2px solid var(--accent-green)" : "2px solid transparent",
+                marginBottom: "-1px",
+              }}
+            >
+              {tab === "overview" ? "Overview" : "Run Log"}
+            </button>
+          ))}
+        </div>
       </div> {/* end sticky header */}
+
+      {/* ── Overview tab ── */}
+      {activeTab === "overview" && (<>
 
       {/* Training Progress */}
       {runs.length > 0 && (
@@ -685,122 +696,20 @@ export default function RunningHub() {
         )}
       </div>
 
-      {/* Log run form */}
-      {showForm && (
-        <form
-          onSubmit={logRun}
-          className="rounded-2xl p-5 mb-6 space-y-3"
-          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-        >
-          <h3 className="font-semibold">Log a Run</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
-                Date
-              </label>
-              <input
-                required
-                type="date"
-                value={form.date}
-                onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-                className="w-full rounded-lg px-3 py-2 text-sm"
-                style={{
-                  background: "var(--surface-2)",
-                  color: "var(--text)",
-                  border: "1px solid var(--border)",
-                  colorScheme: "dark",
-                }}
-              />
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
-                Distance (km)
-              </label>
-              <input
-                required
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="e.g. 10.5"
-                value={form.distanceKm}
-                onChange={(e) => setForm((f) => ({ ...f, distanceKm: e.target.value }))}
-                className="w-full rounded-lg px-3 py-2 text-sm"
-                style={{
-                  background: "var(--surface-2)",
-                  color: "var(--text)",
-                  border: "1px solid var(--border)",
-                }}
-              />
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
-                Duration
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  min="0"
-                  placeholder="min"
-                  value={form.durationMin}
-                  onChange={(e) => setForm((f) => ({ ...f, durationMin: e.target.value }))}
-                  className="flex-1 rounded-lg px-3 py-2 text-sm"
-                  style={{
-                    background: "var(--surface-2)",
-                    color: "var(--text)",
-                    border: "1px solid var(--border)",
-                  }}
-                />
-                <input
-                  type="number"
-                  min="0"
-                  max="59"
-                  placeholder="sec"
-                  value={form.durationSec}
-                  onChange={(e) => setForm((f) => ({ ...f, durationSec: e.target.value }))}
-                  className="flex-1 rounded-lg px-3 py-2 text-sm"
-                  style={{
-                    background: "var(--surface-2)",
-                    color: "var(--text)",
-                    border: "1px solid var(--border)",
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-          <input
-            placeholder="Notes (optional)"
-            value={form.notes}
-            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-            className="w-full rounded-lg px-3 py-2 text-sm"
-            style={{
-              background: "var(--surface-2)",
-              color: "var(--text)",
-              border: "1px solid var(--border)",
-            }}
-          />
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              className="px-4 py-2 rounded-lg text-sm font-medium"
-              style={{ background: "var(--accent-green)", color: "#fff" }}
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowForm(false)}
-              className="px-4 py-2 rounded-lg text-sm"
-              style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
+      </>)}
 
-      {/* Run log */}
-      <div className="flex items-center gap-3 mb-3">
-        <h3 className="font-semibold">Run Log</h3>
+      {/* ── Run Log tab ── */}
+      {activeTab === "log" && (<>
+
+      {/* Log run button + toggle */}
+      <div className="flex items-center gap-3 mb-4 mt-1">
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="px-4 py-2 rounded-xl text-sm font-medium"
+          style={{ background: "var(--accent-green)", color: "#fff" }}
+        >
+          + Log Run
+        </button>
         {runs.length > 5 && (
           <div className="ml-auto flex gap-1">
             <button
@@ -828,6 +737,66 @@ export default function RunningHub() {
           </div>
         )}
       </div>
+
+      {/* Log run form */}
+      {showForm && (
+        <form
+          onSubmit={logRun}
+          className="rounded-2xl p-5 mb-6 space-y-3"
+          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+        >
+          <h3 className="font-semibold">Log a Run</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Date</label>
+              <input
+                required type="date" value={form.date}
+                onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                className="w-full rounded-lg px-3 py-2 text-sm"
+                style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)", colorScheme: "dark" }}
+              />
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Distance (km)</label>
+              <input
+                required type="number" step="0.01" min="0" placeholder="e.g. 10.5"
+                value={form.distanceKm}
+                onChange={(e) => setForm((f) => ({ ...f, distanceKm: e.target.value }))}
+                className="w-full rounded-lg px-3 py-2 text-sm"
+                style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+              />
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Duration</label>
+              <div className="flex gap-2">
+                <input
+                  type="number" min="0" placeholder="min" value={form.durationMin}
+                  onChange={(e) => setForm((f) => ({ ...f, durationMin: e.target.value }))}
+                  className="flex-1 rounded-lg px-3 py-2 text-sm"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+                />
+                <input
+                  type="number" min="0" max="59" placeholder="sec" value={form.durationSec}
+                  onChange={(e) => setForm((f) => ({ ...f, durationSec: e.target.value }))}
+                  className="flex-1 rounded-lg px-3 py-2 text-sm"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+                />
+              </div>
+            </div>
+          </div>
+          <input
+            placeholder="Notes (optional)" value={form.notes}
+            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+            className="w-full rounded-lg px-3 py-2 text-sm"
+            style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+          />
+          <div className="flex gap-2">
+            <button type="submit" className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: "var(--accent-green)", color: "#fff" }}>Save</button>
+            <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg text-sm" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>Cancel</button>
+          </div>
+        </form>
+      )}
+
       {loading ? (
         <p style={{ color: "var(--text-muted)" }}>Loading…</p>
       ) : runs.length === 0 ? (
@@ -911,6 +880,11 @@ export default function RunningHub() {
           </table>
         </div>
       )}
+
+      </>)}
+
+      {/* ─── Run Planner (Overview tab) ─── */}
+      {activeTab === "overview" && (<>
 
       {/* ─── Run Planner ─── */}
       <div className="flex items-center gap-3 mb-4">
@@ -1205,6 +1179,8 @@ export default function RunningHub() {
           </div>
         </div>
       )}
+
+      </>)}
 
       {/* Run detail modal */}
       {selectedRun && (

@@ -10,7 +10,7 @@
     "lint": "eslint",
     "db:seed": "tsx prisma/seed.ts",
     "electron:dev": "concurrently -n next,electron -c blue,green \"next dev\" \"wait-on http://localhost:3000 && NODE_ENV=development electron .\"",
-    "electron:build": "next build && node scripts/prepare-build.js && electron-builder --mac --arm64",
+    "electron:build": "next build && node scripts/prepare-build.js && electron-builder --mac --arm64 && node scripts/restore-dev-binary.js",
     "electron:build:win": "next build && node scripts/prepare-build.js && electron-builder --win",
     "electron:build:linux": "next build && node scripts/prepare-build.js && electron-builder --linux"
   },
@@ -30,7 +30,15 @@
     "extraResources": [
       {
         "from": ".next/standalone",
-        "to": "standalone"
+        "to": "standalone",
+        "filter": [
+          "**/*",
+          "!node_modules/**"
+        ]
+      },
+      {
+        "from": ".next/standalone/node_modules",
+        "to": "standalone/node_modules"
       },
       {
         "from": ".next/static",
@@ -68,7 +76,7 @@
     "@prisma/adapter-better-sqlite3": "^7.7.0",
     "@prisma/client": "^7.7.0",
     "@types/leaflet": "^1.9.21",
-    "better-sqlite3": "^12.9.0",
+    "better-sqlite3": "^12.10.0",
     "leaflet": "^1.9.4",
     "next": "16.2.6",
     "node-ical": "^0.26.0",
@@ -77,6 +85,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",

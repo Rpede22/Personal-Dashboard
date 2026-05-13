@@ -1,11 +1,26 @@
-const { app, BrowserWindow, shell, nativeImage, dialog } = require("electron");
-const { spawn } = require("child_process");
+const { app, BrowserWindow, shell, nativeImage, dialog, utilityProcess } = require("electron");
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
 
 const PORT = 3001;
 const DEV = process.env.NODE_ENV === "development";
+
+// Parse a .env file and return key/value pairs (ignores comments + blank lines)
+function loadEnvFile(envPath) {
+  if (!fs.existsSync(envPath)) return {};
+  const vars = {};
+  for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, "");
+    vars[key] = val;
+  }
+  return vars;
+}
 
 let mainWindow = null;
 let nextProcess = null;
@@ -32,19 +47,17 @@ function waitForServer(url, timeout = 30000) {
 }
 
 // ------------------------------------------------------------------
-// Ensure the user's data directory has a fresh database on first run
+// Ensure the user's data directory has a fresh database.
+// Always overwrites so a rebuilt app gets the latest seed schema/data.
 // ------------------------------------------------------------------
 function ensureDatabase() {
   const userData = app.getPath("userData");
   const dbDest = path.join(userData, "dashboard.db");
+  const dbSrc = path.join(process.resourcesPath, "db", "seed.db");
 
-  if (!fs.existsSync(dbDest)) {
-    // Copy the seed database from the app resources on first launch
-    const dbSrc = path.join(process.resourcesPath, "db", "seed.db");
-    if (fs.existsSync(dbSrc)) {
-      fs.mkdirSync(userData, { recursive: true });
-      fs.copyFileSync(dbSrc, dbDest);
-    }
+  fs.mkdirSync(userData, { recursive: true });
+  if (fs.existsSync(dbSrc)) {
+    fs.copyFileSync(dbSrc, dbDest);
   }
 
   return dbDest;
@@ -87,9 +100,15 @@ function startNextServer(dbPath) {
     // Collect stderr so we can show it in the error dialog
     const stderrLines = [];
 
-    nextProcess = spawn(process.execPath, [serverPath], {
+    // Load .env.local bundled alongside server.js so API keys reach the server
+    const envVars = loadEnvFile(path.join(process.resourcesPath, "standalone", ".env.local"));
+    logLine("INFO", `Loaded ${Object.keys(envVars).length} vars from .env.local`);
+
+    // utilityProcess.fork runs as a hidden Node.js child — no dock icon, no Electron lifecycle
+    nextProcess = utilityProcess.fork(serverPath, [], {
       env: {
         ...process.env,
+        ...envVars,          // API keys from bundled .env.local
         PORT: String(PORT),
         NODE_ENV: "production",
         __NEXT_PRIVATE_STANDALONE_CONFIG: JSON.stringify({}),
@@ -100,7 +119,8 @@ function startNextServer(dbPath) {
         NEXTJS_PUBLIC_DIR: publicPath,
       },
       cwd: path.join(process.resourcesPath, "standalone"),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: "pipe",
+      serviceName: "next-server",
     });
 
     nextProcess.stdout?.on("data", (d) => {
@@ -115,11 +135,6 @@ function startNextServer(dbPath) {
       const line = d.toString().trim();
       logLine("STDERR", line);
       stderrLines.push(line);
-    });
-
-    nextProcess.on("error", (err) => {
-      logLine("ERROR", err.message);
-      reject(err);
     });
 
     nextProcess.on("exit", (code) => {

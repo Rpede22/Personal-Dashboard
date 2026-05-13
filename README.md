@@ -96,7 +96,10 @@ Run logs and training plans are stored in SQLite. Strava sync is optional.
 
 - **Manual logging:** add runs directly in the hub.
 - **Strava sync:** connects via OAuth (tokens stored in `.strava-config.json`, git-ignored). Imports the last 30 days of activities, deduplicates by date + distance, and stores the Strava activity ID (`stravaId`) on each run. When a Strava run is synced for a day that already has a run plan, the plan is automatically removed.
-- **Run log:** shows the 5 most recent runs by default. Click **All Runs (N)** to see the full history. Click any row to open the run detail popup.
+The Running Hub has two tabs:
+- **Overview** — training progress charts, race config, Strava integration, run planner.
+- **Run Log** — the full run table with `+ Log Run` button. Shows 5 most recent by default; click **All Runs (N)** to see the full history. Click any row to open the run detail popup.
+
 - **Run detail popup:** for Strava-imported runs, shows a Leaflet route map (decoded from the encoded polyline), core stats (distance, duration, pace, elevation), heart rate and cadence (if recorded), and a per-km splits table. Manually logged runs show basic stats only. The popup has a fixed header (title + close button always visible) with the rest scrollable below. Hit **Sync runs** once after updating to backfill `stravaId` on existing Strava imports.
 - **Training progress:** two bar charts appear once you have runs logged — *Weekly Kilometers* (last 12 weeks, current week highlighted) and *Longest Run* (best run per month for the last 6 months).
 - **Race target:** set a race date and/or race distance in the hub. The widget and stats bar show days remaining and the target distance label.
@@ -141,12 +144,13 @@ Events are pulled from **iCloud CalDAV** using Apple's PROPFIND/REPORT protocol.
 ## Setup
 
 ### Prerequisites
-- Node.js 20+
-- macOS (Electron titlebar drag is macOS-specific; other OS may need adjustments)
+- **Node.js 22 (arm64)** via nvm — required for correct native module compilation on Apple Silicon
+- macOS Apple Silicon (arm64). Other platforms may need adjustments to the Electron titlebar drag strip.
 
 ### Install
 
 ```bash
+nvm use 22
 git clone https://github.com/Rpede22/Personal-Dashboard.git
 cd Personal-Dashboard
 npm install
@@ -167,9 +171,18 @@ npm run dev            # Next.js only on :3000
 ### Build (Electron app bundle)
 
 ```bash
-npm run build          # Next.js production build
-npm run electron:build # packages into /dist
+nvm use 22 && npm run electron:build
+# Output: dist/Dashboard-0.1.0-arm64.dmg
 ```
+
+**Must use Node 22 (arm64).** The system Homebrew Node runs under Rosetta (x64) and would produce the wrong binary. The build command runs four steps automatically:
+
+1. `next build` — compile the Next.js app
+2. `scripts/prepare-build.js` — copy static files, download the Electron arm64 prebuilt of `better-sqlite3` into standalone, merge Turbopack hashed modules, bundle `.env.local` and `dev.db`
+3. `electron-builder` — package the DMG
+4. `scripts/restore-dev-binary.js` — restore the Node 22 arm64 binary in the project root so dev mode keeps working after the build
+
+After switching Node versions for the first time, run `npm install` once to reinstall native deps for arm64.
 
 ---
 
