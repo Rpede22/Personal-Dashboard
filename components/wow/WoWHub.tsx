@@ -185,11 +185,10 @@ export default function WoWHub() {
     }
   }
 
-  async function fetchCharStats(char: WowCharacter): Promise<CharacterStats | null> {
+  async function fetchCharStats(char: WowCharacter, bustCache = false): Promise<CharacterStats | null> {
     try {
-      const res = await fetch(
-        `/api/wow/character?name=${encodeURIComponent(char.name)}&realm=${encodeURIComponent(char.realm)}&region=${char.region}`
-      );
+      const url = `/api/wow/character?name=${encodeURIComponent(char.name)}&realm=${encodeURIComponent(char.realm)}&region=${char.region}${bustCache ? "&bust=1" : ""}`;
+      const res = await fetch(url);
       const data = await res.json();
       setCharStats((prev) => new Map(prev).set(char.id, data));
       return data;
@@ -385,6 +384,9 @@ export default function WoWHub() {
         setSyncResult(`${selectedChar.name}: M+ ${data.synced.mplusCount}/8 · N ${data.synced.normalKills}/${n} · H ${data.synced.heroicKills}/${n} · M ${data.synced.mythicKills}/${n}${source}${crawled}${updatedNote}${staleNote}`);
         refreshChecklist(selectedChar);
       }
+      // Always refresh ilvl on sync with cache bust so the latest gear is shown
+      setLoadingStats(true);
+      fetchCharStats(selectedChar, true).then(setStats).finally(() => setLoadingStats(false));
     } catch {
       setSyncResult("Sync failed");
     } finally {

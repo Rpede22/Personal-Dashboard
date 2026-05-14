@@ -55,10 +55,23 @@ async function fetchDecimalIlvl(name: string, realm: string, region: string): Pr
     );
     if (!res.ok) return null;
     const data = await res.json();
-    const items: Array<{ level?: { value?: number } }> = data.equipped_items ?? [];
+
+    // WoW ilvl formula: 16-slot average, excluding Shirt and Tabard.
+    // If a 2H weapon is equipped (no Off Hand), Main Hand counts twice.
+    const EXCLUDED_SLOTS = new Set(["SHIRT", "TABARD"]);
+    const items: Array<{ slot?: { type?: string }; level?: { value?: number } }> =
+      (data.equipped_items ?? []).filter(
+        (item: { slot?: { type?: string } }) => !EXCLUDED_SLOTS.has(item.slot?.type ?? "")
+      );
     if (items.length === 0) return null;
+
     const total = items.reduce((sum, item) => sum + (item.level?.value ?? 0), 0);
-    return total / items.length;
+    const hasOffHand = items.some(item => item.slot?.type === "OFF_HAND");
+    const mainHand = items.find(item => item.slot?.type === "MAIN_HAND");
+
+    // If using a 2H weapon, add main hand ilvl a second time to fill the missing off-hand slot
+    const adjustedTotal = (!hasOffHand && mainHand) ? total + (mainHand.level?.value ?? 0) : total;
+    return adjustedTotal / 16;
   } catch { return null; }
 }
 
@@ -121,12 +134,13 @@ async function lookupCharacter(name: string, realm: string, region: string) {
   return result;
 }
 
-// GET /api/wow/character?name=X&realm=Y&region=eu
+// GET /api/wow/character?name=X&realm=Y&region=eu&bust=1  (bust=1 clears cache for this char)
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const name = searchParams.get("name");
   const realm = searchParams.get("realm");
   const region = searchParams.get("region") ?? "eu";
+  const bust = searchParams.get("bust") === "1";
 
   if (!name || !realm) {
     // Return list of saved characters, ordered by sortOrder
@@ -134,6 +148,11 @@ export async function GET(request: Request) {
       orderBy: { sortOrder: "asc" },
     });
     return NextResponse.json({ characters });
+  }
+
+  if (bust) {
+    const cacheKey = `${region}-${realm}-${name}`.toLowerCase();
+    lookupCache.delete(cacheKey);
   }
 
   const data = await lookupCharacter(name, realm, region);
