@@ -47,8 +47,9 @@ function waitForServer(url, timeout = 30000) {
 }
 
 // ------------------------------------------------------------------
-// Ensure the user's data directory has a fresh database.
-// Always overwrites so a rebuilt app gets the latest seed schema/data.
+// Ensure the user's data directory has a database.
+// Only copies seed.db on first run — subsequent launches reuse the
+// existing dashboard.db so user data is preserved across restarts.
 // ------------------------------------------------------------------
 function ensureDatabase() {
   const userData = app.getPath("userData");
@@ -56,7 +57,7 @@ function ensureDatabase() {
   const dbSrc = path.join(process.resourcesPath, "db", "seed.db");
 
   fs.mkdirSync(userData, { recursive: true });
-  if (fs.existsSync(dbSrc)) {
+  if (!fs.existsSync(dbDest) && fs.existsSync(dbSrc)) {
     fs.copyFileSync(dbSrc, dbDest);
   }
 

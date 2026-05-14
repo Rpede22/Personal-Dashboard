@@ -208,7 +208,7 @@ Sports (NHL, FotMob, TheSportsDB, ESPN) and WoW (Raider.IO) use free public APIs
 
 SQLite file lives at `dev.db` in the project root. Prisma schema: `prisma/schema.prisma`.
 
-**Dev vs. app data are separate.** Dev mode reads/writes `dev.db` in the project root. The packaged app reads/writes `dashboard.db` in `~/Library/Application Support/Dashboard/`. Data entered in the app does **not** flow back to `dev.db` automatically. To carry app data back into dev mode:
+**Dev vs. app data are separate.** Dev mode reads/writes `dev.db` in the project root. The packaged app reads/writes `dashboard.db` in `~/Library/Application Support/Dashboard/` — this file is created once on first launch and reused on every subsequent launch, so your data persists. Data entered in the app does **not** flow back to `dev.db` automatically. To carry app data back into dev mode:
 
 ```bash
 cp ~/Library/Application\ Support/Dashboard/dashboard.db /path/to/project/dev.db
