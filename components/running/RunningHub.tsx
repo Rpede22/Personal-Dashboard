@@ -8,6 +8,8 @@ import {
   generateNextWeekPlan,
   formatPace,
   type SessionType,
+  type DayName,
+  type RunDaysPerWeek,
 } from "@/lib/training-planner";
 
 const RunDetailModal = dynamic(() => import("./RunDetailModal"), { ssr: false });
@@ -30,13 +32,14 @@ interface RunPlan {
   completed: boolean;
 }
 
-const PLAN_TYPE_OPTIONS = ["easy", "tempo", "long", "rest"] as const;
+const PLAN_TYPE_OPTIONS = ["easy", "tempo", "speed", "long", "rest"] as const;
 
 const PLAN_TYPE_COLOR: Record<string, string> = {
-  easy: "var(--accent-green)",
+  easy:  "var(--accent-green)",
   tempo: "var(--accent-orange)",
-  long: "var(--accent-blue)",
-  rest: "var(--text-muted)",
+  speed: "var(--accent-red)",
+  long:  "var(--accent-blue)",
+  rest:  "var(--text-muted)",
 };
 
 function formatDuration(seconds: number): string {
@@ -119,6 +122,13 @@ export default function RunningHub() {
 
   // Tabs
   const [activeTab, setActiveTab] = useState<"overview" | "log" | "training">("overview");
+
+  // Training tab → planner apply
+  const [applyingPlan, setApplyingPlan] = useState(false);
+  const [applyPlanResult, setApplyPlanResult] = useState<string | null>(null);
+  // Training tab manual overrides — empty means "use auto-suggested"
+  const [targetKmInput, setTargetKmInput] = useState<string>("");
+  const [runDaysInput, setRunDaysInput] = useState<RunDaysPerWeek | null>(null);
 
   // Run detail modal
   const [selectedRun, setSelectedRun] = useState<RunLog | null>(null);
@@ -294,6 +304,22 @@ export default function RunningHub() {
       prev.map((p) => (p.id === plan.id ? { ...p, completed: !p.completed } : p))
     );
   }
+
+  // Move a plan to a different date (used by drag-drop between day cards).
+  // Passes the local YYYY-MM-DD; the API turns it into UTC midnight.
+  async function movePlan(planId: number, newDateStr: string) {
+    setPlans((prev) =>
+      prev.map((p) => (p.id === planId ? { ...p, date: new Date(newDateStr).toISOString() } : p))
+    );
+    await fetch(`/api/running/plans/${planId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date: newDateStr }),
+    });
+  }
+
+  // Track which day is currently a drag target so we can highlight it
+  const [dragOverDay, setDragOverDay] = useState<string | null>(null);
 
   const daysToRace = raceDate
     ? Math.ceil((new Date(raceDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
@@ -1047,15 +1073,42 @@ export default function RunningHub() {
               const run = runsByDate.get(dateStr);
               const isToday = toLocalDateStr(new Date()) === dateStr;
 
+              const isDragTarget = dragOverDay === dateStr;
               return (
                 <div
                   key={dateStr}
                   className="rounded-xl p-3 flex flex-col gap-1.5 min-h-28 relative"
+                  onDragOver={(e) => {
+                    // Required to allow a drop
+                    if (e.dataTransfer.types.includes("application/x-runplan")) {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dragOverDay !== dateStr) setDragOverDay(dateStr);
+                    }
+                  }}
+                  onDragLeave={() => {
+                    if (dragOverDay === dateStr) setDragOverDay(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverDay(null);
+                    const raw = e.dataTransfer.getData("application/x-runplan");
+                    if (!raw) return;
+                    const { id, from } = JSON.parse(raw) as { id: number; from: string };
+                    if (from === dateStr) return; // same day
+                    movePlan(id, dateStr);
+                  }}
                   style={{
-                    background: isToday ? "var(--accent-green)11" : "var(--surface-2)",
-                    border: isToday
-                      ? "1px solid var(--accent-green)"
-                      : "1px solid var(--border)",
+                    background: isDragTarget
+                      ? "var(--accent-green)22"
+                      : isToday
+                        ? "var(--accent-green)11"
+                        : "var(--surface-2)",
+                    border: isDragTarget
+                      ? "2px dashed var(--accent-green)"
+                      : isToday
+                        ? "1px solid var(--accent-green)"
+                        : "1px solid var(--border)",
                   }}
                 >
                   <div className="flex items-center justify-between">
@@ -1067,16 +1120,26 @@ export default function RunningHub() {
                     </span>
                   </div>
 
-                  {/* Plans */}
+                  {/* Plans (draggable — grab and drop on another day to move) */}
                   {dayPlans.map((p) => (
                     <div
                       key={p.id}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData(
+                          "application/x-runplan",
+                          JSON.stringify({ id: p.id, from: dateStr })
+                        );
+                      }}
+                      title="Drag to another day to move"
                       className="rounded-md px-2 py-1 text-xs"
                       style={{
                         background: `${PLAN_TYPE_COLOR[p.type]}22`,
                         color: PLAN_TYPE_COLOR[p.type],
                         border: `1px solid ${PLAN_TYPE_COLOR[p.type]}44`,
                         opacity: p.completed ? 0.5 : 1,
+                        cursor: "grab",
                       }}
                     >
                       <div className="flex items-center justify-between gap-1">
@@ -1212,7 +1275,11 @@ export default function RunningHub() {
           runs.map((r) => ({ date: r.date, distance: r.distance, duration: r.duration })),
           8
         );
-        const plan = generateNextWeekPlan(weeklyStats);
+        const parsedTarget = targetKmInput.trim() === "" ? undefined : parseFloat(targetKmInput);
+        const plan = generateNextWeekPlan(weeklyStats, {
+          targetKmOverride: parsedTarget !== undefined && !isNaN(parsedTarget) ? parsedTarget : undefined,
+          runDaysPerWeek: runDaysInput ?? undefined,
+        });
         const lastCompleted = weeklyStats[weeklyStats.length - 2];
         const currentWeek   = weeklyStats[weeklyStats.length - 1];
         const maxWeekly = Math.max(...weeklyStats.map((w) => w.totalKm), plan.targetKm, 1);
@@ -1224,6 +1291,66 @@ export default function RunningHub() {
           easy:  { color: "var(--accent-green)",  label: "Easy",               icon: "🌱" },
           rest:  { color: "var(--text-muted)",    label: "Rest",               icon: "💤" },
         };
+
+        // Map DayName → next-week date. If today is already Sunday, next Mon is tomorrow.
+        const DAY_INDEX: Record<DayName, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+        function dateOfNextWeek(day: DayName): Date {
+          const today = new Date();
+          const thisMonday = getMondayOf(today);
+          const nextMonday = new Date(thisMonday);
+          nextMonday.setDate(thisMonday.getDate() + 7);
+          const d = new Date(nextMonday);
+          d.setDate(nextMonday.getDate() + DAY_INDEX[day]);
+          return d;
+        }
+
+        async function applyTrainingPlan() {
+          setApplyingPlan(true);
+          setApplyPlanResult(null);
+          try {
+            // Only push actual workouts to the planner. Rest days are the absence
+            // of a plan; adding "rest" rows would clutter the calendar.
+            const workouts = plan.sessions.filter((s) => s.type !== "rest");
+
+            // Delete any existing next-week plans first so re-applying replaces cleanly.
+            const nextMonday = dateOfNextWeek("Mon");
+            const nextSunday = dateOfNextWeek("Sun");
+            const existingRes = await fetch(
+              `/api/running/plans?from=${toLocalDateStr(nextMonday)}&to=${toLocalDateStr(nextSunday)}`
+            );
+            const existing = (await existingRes.json()).plans ?? [];
+            await Promise.all(
+              existing.map((p: { id: number }) => fetch(`/api/running/plans/${p.id}`, { method: "DELETE" }))
+            );
+
+            // Create one plan per workout, tagged with a short note explaining the framework role.
+            await Promise.all(
+              workouts.map((s) =>
+                fetch("/api/running/plans", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    date: toLocalDateStr(dateOfNextWeek(s.day)),
+                    type: s.type,
+                    distance: s.distanceKm > 0 ? s.distanceKm : null,
+                    notes: `${SESSION_META[s.type].label} — ${s.description}`,
+                  }),
+                })
+              )
+            );
+
+            // Refresh plans if the user has this week / next week loaded
+            const to = new Date(weekStart);
+            to.setDate(weekStart.getDate() + 6);
+            loadPlans(weekStart, to);
+
+            setApplyPlanResult(`Added ${workouts.length} sessions to next week — swap days in the Overview planner if needed.`);
+          } catch (err) {
+            setApplyPlanResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            setApplyingPlan(false);
+          }
+        }
 
         return (
           <div className="space-y-6 max-w-4xl">
@@ -1355,6 +1482,77 @@ export default function RunningHub() {
               </div>
             )}
 
+            {/* ── Customise the plan ── */}
+            <div
+              className="rounded-2xl p-4 flex flex-wrap items-end gap-4"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+            >
+              <div>
+                <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                  Weekly target (km)
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  placeholder={`Auto: ${plan.suggestedTargetKm.toFixed(1)}`}
+                  value={targetKmInput}
+                  onChange={(e) => setTargetKmInput(e.target.value)}
+                  className="rounded-lg px-3 py-1.5 text-sm w-32"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+                />
+                {targetKmInput && (
+                  <button
+                    onClick={() => setTargetKmInput("")}
+                    className="ml-2 text-xs underline"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    reset
+                  </button>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                  Run days per week
+                </label>
+                <div className="flex gap-1">
+                  {([3, 4, 5, 6] as const).map((n) => {
+                    const active = (runDaysInput ?? plan.runDaysPerWeek) === n;
+                    const isAutoValue = runDaysInput === null && plan.runDaysPerWeek === n;
+                    return (
+                      <button
+                        key={n}
+                        onClick={() => setRunDaysInput(n)}
+                        className="px-3 py-1.5 rounded-lg text-sm font-medium"
+                        title={isAutoValue ? "Auto (based on weekly volume)" : undefined}
+                        style={{
+                          background: active ? "var(--accent-green)" : "var(--surface-2)",
+                          color: active ? "#fff" : "var(--text-muted)",
+                          border: "1px solid var(--border)",
+                        }}
+                      >
+                        {n}
+                      </button>
+                    );
+                  })}
+                  {runDaysInput !== null && (
+                    <button
+                      onClick={() => setRunDaysInput(null)}
+                      className="ml-1 text-xs underline"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      auto
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <p className="text-xs flex-1 min-w-[15rem]" style={{ color: "var(--text-muted)" }}>
+                Tip: start at <strong>3–4</strong> days/week to build the aerobic base, then bump to <strong>5–6</strong> once you feel steady. Auto-picks 3 (starter), 4 (≤24 km), 5 (≤40 km), 6 (&gt;40 km).
+              </p>
+            </div>
+
             {/* ── Next-week plan headline ── */}
             <div
               className="rounded-2xl p-5"
@@ -1391,35 +1589,95 @@ export default function RunningHub() {
               </div>
             </div>
 
-            {/* ── Session breakdown ── */}
+            {/* ── Weekly schedule (Mon-Sun) ── */}
             <div>
-              <h3 className="text-sm font-semibold mb-3 uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
-                Suggested sessions ({plan.sessions.filter((s) => s.distanceKm > 0 || s.type === "rest").length})
-              </h3>
-              <div className="space-y-2">
-                {plan.sessions
-                  .filter((s) => s.distanceKm > 0 || s.type === "rest")
-                  .map((s, i) => {
-                    const meta = SESSION_META[s.type];
-                    return (
-                      <div
-                        key={i}
-                        className="rounded-xl p-3 flex items-start gap-3"
-                        style={{ background: "var(--surface)", border: `1px solid ${meta.color}33` }}
-                      >
-                        <span className="text-xl flex-shrink-0 mt-0.5">{meta.icon}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-baseline justify-between gap-3 mb-0.5">
-                            <span className="font-semibold" style={{ color: meta.color }}>{meta.label}</span>
-                            <span className="text-sm font-bold" style={{ color: "var(--text)" }}>
-                              {s.distanceKm > 0 ? `${s.distanceKm.toFixed(1)} km` : "—"}
-                            </span>
-                          </div>
-                          <div className="text-xs" style={{ color: "var(--text-muted)" }}>{s.description}</div>
-                        </div>
+              <div className="flex items-baseline justify-between mb-3">
+                <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                  Weekly schedule
+                </h3>
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Rule: never two hard days in a row · hard sessions ≥ 48 h apart
+                </span>
+              </div>
+
+              {/* Apply-to-planner action */}
+              <div className="mb-3 flex gap-2 flex-wrap items-center">
+                <button
+                  onClick={applyTrainingPlan}
+                  disabled={applyingPlan}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold"
+                  style={{ background: "var(--accent-green)", color: "#fff" }}
+                >
+                  {applyingPlan ? "Applying…" : "→ Apply to next week's planner"}
+                </button>
+                {applyPlanResult && (
+                  <span className="text-xs" style={{ color: applyPlanResult.startsWith("Error") ? "var(--accent-red)" : "var(--text-muted)" }}>
+                    {applyPlanResult}
+                  </span>
+                )}
+                <span className="text-xs ml-auto" style={{ color: "var(--text-muted)" }}>
+                  Days can be swapped in the Overview tab planner after applying.
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-7 gap-2">
+                {plan.sessions.map((s) => {
+                  const meta = SESSION_META[s.type];
+                  const isHard = s.type === "speed" || s.type === "tempo";
+                  return (
+                    <div
+                      key={s.day}
+                      className="rounded-xl p-3 flex flex-col gap-1"
+                      style={{
+                        background: "var(--surface)",
+                        border: `1px solid ${meta.color}${isHard ? "66" : "33"}`,
+                        minHeight: "110px",
+                      }}
+                    >
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                          {s.day}
+                        </span>
+                        <span className="text-lg">{meta.icon}</span>
                       </div>
-                    );
-                  })}
+                      <div className="font-semibold text-sm" style={{ color: meta.color }}>
+                        {meta.label}
+                      </div>
+                      {s.distanceKm > 0 && (
+                        <div className="text-sm font-bold" style={{ color: "var(--text)" }}>
+                          {s.distanceKm.toFixed(1)} km
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Full descriptions below the grid */}
+              <div className="mt-4 space-y-2">
+                {plan.sessions.filter((s) => s.type !== "rest").map((s) => {
+                  const meta = SESSION_META[s.type];
+                  return (
+                    <div
+                      key={s.day}
+                      className="rounded-xl p-3 flex items-start gap-3"
+                      style={{ background: "var(--surface)", border: `1px solid ${meta.color}33` }}
+                    >
+                      <span className="text-xl flex-shrink-0 mt-0.5">{meta.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline justify-between gap-3 mb-0.5">
+                          <span className="font-semibold" style={{ color: meta.color }}>
+                            {s.day} · {meta.label}
+                          </span>
+                          <span className="text-sm font-bold" style={{ color: "var(--text)" }}>
+                            {s.distanceKm.toFixed(1)} km
+                          </span>
+                        </div>
+                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>{s.description}</div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

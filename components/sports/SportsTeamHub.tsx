@@ -99,6 +99,7 @@ function toCopenhagenDate(dateStr: string, timeStr: string): string {
 }
 
 type Tab = "standings" | "schedule" | "playoffs";
+type PlayoffMode = "projected" | "live";
 
 function gameResult(e: SportsEvent, keyword: string): "W" | "D" | "L" | null {
   if (!e.finished || e.homeScore === null || e.awayScore === null) return null;
@@ -300,6 +301,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const [data, setData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("standings");
+  const [playoffMode, setPlayoffMode] = useState<PlayoffMode>("projected");
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[] | "loading" | "error">>({});
 
@@ -595,7 +597,41 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
 
         /* ── PLAYOFFS (hockey only) ── */
         <div>
-          {!bracket || bracket.rounds.length === 0 ? (
+          {/* Sub-tabs: Projected (if playoffs started today) | Live (real bracket) */}
+          <div className="flex gap-1 mb-4 rounded-lg p-1" style={{ background: "var(--surface-2)", width: "fit-content" }}>
+            {([
+              ["projected", "If playoffs started today"],
+              ["live",      "Live playoffs"],
+            ] as const).map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => setPlayoffMode(m)}
+                className="px-4 py-1.5 rounded-md text-sm font-medium"
+                style={{
+                  background: playoffMode === m ? accent : "transparent",
+                  color: playoffMode === m ? "#fff" : "var(--text-muted)",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {playoffMode === "live" ? (
+            /* Live playoffs — data-source work still open. See ToDo.md. */
+            <div className="rounded-2xl p-8 text-center space-y-3" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <p className="text-base font-medium" style={{ color: "var(--text)" }}>Live playoff bracket not yet available</p>
+              <p className="text-sm max-w-lg mx-auto" style={{ color: "var(--text-muted)" }}>
+                TheSportsDB&apos;s free tier doesn&apos;t include Metal Ligaen playoff round metadata (only 5 events per season, no round tags).
+                Need to wire up an alternative source — SportAPI7 (already used for goal timelines) or Metal Ligaen&apos;s own JSON — before this view can populate.
+                Progress tracked in <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>ToDo.md</code>.
+              </p>
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                In the meantime, the <button onClick={() => setPlayoffMode("projected")} className="underline" style={{ color: accent }}>Projected</button> tab
+                shows the bracket you&apos;d get if the playoffs started today.
+              </p>
+            </div>
+          ) : !bracket || bracket.rounds.length === 0 ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <p style={{ color: "var(--text-muted)" }}>Need top 8 standings to build bracket</p>
             </div>

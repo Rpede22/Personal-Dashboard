@@ -47,6 +47,14 @@ export default function RunMap({
 
     map.fitBounds(line.getBounds(), { padding: [16, 16] });
 
+    // Defensive: browsers may report the container size after a couple of frames
+    // (flex layouts). Schedule an explicit re-measure so tiles load at the real size.
+    const rafId = requestAnimationFrame(() => {
+      if (!mapRef.current) return;
+      mapRef.current.invalidateSize();
+      mapRef.current.fitBounds(line.getBounds(), { padding: [16, 16] });
+    });
+
     // Watch the container for size changes (flex layouts settle async, fullscreen
     // toggles resize instantly) — invalidateSize + re-fit so tiles fill the view.
     const ro = new ResizeObserver(() => {
@@ -57,6 +65,7 @@ export default function RunMap({
     ro.observe(containerRef.current);
 
     return () => {
+      cancelAnimationFrame(rafId);
       ro.disconnect();
       map.remove();
       mapRef.current = null;

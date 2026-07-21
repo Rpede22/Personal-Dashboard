@@ -172,7 +172,7 @@ export default function RunDetailModal({
               )}
             </div>
           )}
-          {polyline && (
+          {polyline && !mapFullscreen && (
             <div className="relative">
               <RunMap polyline={polyline} height={400} />
               <button
@@ -326,7 +326,14 @@ export default function RunDetailModal({
           onWheel={(e) => e.stopPropagation()}
           onTouchMove={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between px-4 py-2 flex-shrink-0" style={{ background: "#000" }}>
+          {/*
+            Top offset accounts for the 28 px Electron titlebar drag strip that
+            sits above every window; without it the title + Exit button get clipped.
+          */}
+          <div
+            className="flex items-center justify-between px-4 py-2 flex-shrink-0"
+            style={{ background: "#000", paddingTop: "36px" }}
+          >
             <span className="text-sm font-semibold truncate pr-3" style={{ color: "var(--accent-green)" }}>
               {activity?.name ?? "Run route"}
             </span>

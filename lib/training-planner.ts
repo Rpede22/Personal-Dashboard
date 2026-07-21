@@ -47,6 +47,8 @@ export interface TrainingPlan {
   reason: string;          // human-readable explanation
   isCutback: boolean;
   isStarter: boolean;      // true when we have no baseline to grow from
+  runDaysPerWeek: RunDaysPerWeek; // how many actual run days (rest days fill the rest)
+  suggestedTargetKm: number;      // auto-computed target BEFORE any override (for placeholder UI)
   sessions: PlannedSession[];
   warnings: string[];
 }
@@ -139,6 +141,19 @@ function shouldCutBack(weeks: WeeklyStats[]): boolean {
  */
 const BASELINE_WEEKS = 3;
 
+/** How many days per week the user actually wants to run. 3–6 supported. */
+export type RunDaysPerWeek = 3 | 4 | 5 | 6;
+
+export interface PlanOptions {
+  /** Override the auto-suggested weekly volume (km). Undefined = use the algorithm. */
+  targetKmOverride?: number;
+  /**
+   * How many run days you want next week (3–6). Undefined = auto-choose based on
+   * volume: starter → 3, regular ≤ 24 km → 4, ≤ 40 km → 5, > 40 km → 6.
+   */
+  runDaysPerWeek?: RunDaysPerWeek;
+}
+
 /**
  * Generate a recommendation for next week's training. Called with the output of
  * computeWeeklyStats(runs, N) — the last entry is the current in-progress week.
@@ -147,7 +162,7 @@ const BASELINE_WEEKS = 3;
  * BASELINE_WEEKS *completed* weeks (not just last week), which is more stable
  * when training has been inconsistent. `lastWeekKm` is still returned for display.
  */
-export function generateNextWeekPlan(recent: WeeklyStats[]): TrainingPlan {
+export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = {}): TrainingPlan {
   const warnings: string[] = [];
   const completed = recent.slice(0, -1); // drop the in-progress week
   const lastCompleted = completed[completed.length - 1];
@@ -183,7 +198,24 @@ export function generateNextWeekPlan(recent: WeeklyStats[]): TrainingPlan {
     reason = `+10% on your ${baselineWeeks}-week rolling average (${baselineKm.toFixed(1)} km) — smoothed baseline is more stable than "last week only" when training is uneven.`;
   }
 
+  // Snapshot the auto-suggestion before an override rewrites `targetKm`
+  const suggestedTargetKm = targetKm;
+
+  // Manual override wins over the auto-suggestion.
+  if (opts.targetKmOverride !== undefined && opts.targetKmOverride >= 0) {
+    targetKm = round05(opts.targetKmOverride);
+    reason = `Custom target: ${targetKm.toFixed(1)} km (auto-suggestion ${isStarter ? "was" : "would be"} shown as placeholder).`;
+    isStarter = targetKm < 5;
+  }
+
   const changePct = baselineKm > 0 ? ((targetKm - baselineKm) / baselineKm) * 100 : 0;
+
+  // Auto-choose runDaysPerWeek if not specified: starter → 3, then scale with volume.
+  const runDays: RunDaysPerWeek = opts.runDaysPerWeek ?? (
+    isStarter    ? 3 :
+    targetKm <= 24 ? 4 :
+    targetKm <= 40 ? 5 : 6
+  );
 
   // 2. Warn if last week's structure looked off
   if (!isStarter && lastCompleted) {
@@ -199,7 +231,7 @@ export function generateNextWeekPlan(recent: WeeklyStats[]): TrainingPlan {
   }
 
   // 3. Build the session breakdown from the target volume
-  const sessions = buildSessions(targetKm, isCutback);
+  const sessions = buildSessions(targetKm, isCutback, isStarter, runDays);
 
   return {
     targetKm,
@@ -210,6 +242,8 @@ export function generateNextWeekPlan(recent: WeeklyStats[]): TrainingPlan {
     reason,
     isCutback,
     isStarter,
+    runDaysPerWeek: runDays,
+    suggestedTargetKm,
     sessions,
     warnings,
   };
@@ -220,29 +254,127 @@ function round05(x: number): number {
   return Math.round(x * 2) / 2;
 }
 
-function buildSessions(targetKm: number, isCutback: boolean): PlannedSession[] {
-  // Distribute total volume into 4–5 sessions following the 80/20 framework:
-  //   long ≈ 30%   (long slow distance — endurance)
-  //   speed ≈ 10%  (short + fast — reps)
-  //   tempo ≈ 15%  (medium + comfortably hard)
-  //   easy  ≈ 45%  (split into 2–3 days)
-  //   → hard portion (speed + tempo) ≈ 25%, easy (long + easy days) ≈ 75%.
-  //
-  // On a cutback week, drop the speed session (only keep tempo as the quality
-  // stimulus) and shift everything toward easy to maximise recovery.
+const DAYS: DayName[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/**
+ * Build a Mon–Sun schedule following the "never do two hard sessions back-to-back"
+ * rule and putting the long run on the weekend. Returns exactly 7 sessions, one per
+ * day (rest days included). Filter out `type === "rest"` if you only want workouts.
+ *
+ * Templates by runDays:
+ *   3 (beginner):    Tue Easy · Thu Easy · Sun Long                            (no quality — build the base first)
+ *   4 (build):       Mon Easy · Wed Tempo · Fri Easy · Sun Long                (one quality session)
+ *   5 (standard):    Mon Easy · Tue Speed · Wed Easy · Thu Tempo · Sun Long
+ *   6 (advanced):    Mon Easy · Tue Speed · Wed Easy · Thu Tempo · Fri Easy · Sun Long
+ *
+ * Cutback (any runDays): drops the speed session, keeps tempo as the one quality
+ *   stimulus, adds an extra rest day.
+ * Starter (baseline < 5 km): always 3 easy runs, no quality regardless of runDays.
+ */
+function buildSessions(
+  targetKm: number,
+  isCutback: boolean,
+  isStarter: boolean,
+  runDays: RunDaysPerWeek,
+): PlannedSession[] {
+  const REST_DESC = "Full rest day — walk, mobility, sleep. Recovery is when adaptation happens.";
+  const rest = (day: DayName): PlannedSession => ({
+    type: "rest", distanceKm: 0, description: REST_DESC, day,
+  });
+  const easyDesc = "Truly easy — nasal-breathing pace. This is where most of your fitness is actually built.";
+
+  // ── Starter: 3 easy runs, no quality, generous rest ─────────────────────────
+  //    Overrides runDays — building the base is the priority.
+  if (isStarter) {
+    const easyDaysArr: DayName[] = ["Tue", "Thu", "Sun"];
+    const easyEach = round05(targetKm / easyDaysArr.length);
+    return DAYS.map((d): PlannedSession => {
+      if (easyDaysArr.includes(d)) {
+        return {
+          type: "easy",
+          distanceKm: easyEach,
+          description: "Easy conversational pace. Build the aerobic base before adding harder work.",
+          day: d,
+        };
+      }
+      return rest(d);
+    });
+  }
+
+  const longSession = (km: number, day: DayName = "Sun", note?: string): PlannedSession => ({
+    type: "long",
+    distanceKm: km,
+    description: note ?? "Easy conversational pace. Where most of your distance progress comes from.",
+    day,
+  });
+  const speedSession = (km: number, day: DayName = "Tue"): PlannedSession => ({
+    type: "speed",
+    distanceKm: km,
+    description: "Warm up, then intervals — e.g. 6–8 × 400 m fast with equal jog recovery, or 4 × 800 m at 5K pace. Total distance including warm-up/cool-down.",
+    day,
+  });
+  const tempoSession = (km: number, day: DayName): PlannedSession => ({
+    type: "tempo",
+    distanceKm: km,
+    description: '20–30 min at "comfortably hard" pace. You should be able to speak short sentences, not full ones.',
+    day,
+  });
+  const easyOn = (day: DayName, km: number, desc: string = easyDesc): PlannedSession => ({
+    type: "easy", distanceKm: km, description: desc, day,
+  });
+
+  // ── Cutback: one quality (tempo) session + easy + long, extra rest ──────────
   if (isCutback) {
     const longKm  = round05(targetKm * 0.30);
     const tempoKm = round05(targetKm * 0.20);
     const remaining = Math.max(0, targetKm - longKm - tempoKm);
-    const easyEach = round05(remaining / 3);
+    // Cutback keeps the same runDays count minus the speed slot (already dropped).
+    const cutbackEasy = Math.max(1, runDays - 2); // 1 tempo + 1 long + N easy
+    const easyEach = round05(remaining / cutbackEasy);
+
+    // Standard cutback layout for 5-run week; scale easy count for others
+    const sessions: PlannedSession[] = [
+      easyOn("Mon", easyEach),
+      rest("Tue"),
+      tempoSession(tempoKm, "Wed"),
+      rest("Thu"),
+      easyOn("Fri", easyEach),
+      cutbackEasy >= 3 ? easyOn("Sat", Math.max(0, remaining - easyEach * 2), "Truly easy. Optional if legs feel heavy.") : rest("Sat"),
+      longSession(longKm, "Sun", "Easy conversational pace. Shorter than usual — recovery focus."),
+    ];
+    return sessions;
+  }
+
+  // ── Regular week — layout depends on runDays ────────────────────────────────
+  if (runDays === 3) {
+    // 3 easy runs: Tue, Thu, Sun (long) — beginner-friendly, no quality yet
+    const longKm = round05(targetKm * 0.35);
+    const remaining = Math.max(0, targetKm - longKm);
+    const easyEach = round05(remaining / 2);
     return [
-      { type: "long",  distanceKm: longKm,  description: "Easy conversational pace. Shorter than usual — recovery focus." },
-      { type: "tempo", distanceKm: tempoKm, description: "Comfortably hard — the quality stimulus for the week." },
-      { type: "easy",  distanceKm: easyEach, description: "Truly easy — nasal-breathing pace." },
-      { type: "easy",  distanceKm: easyEach, description: "Truly easy — nasal-breathing pace." },
-      { type: "easy",  distanceKm: Math.max(0, remaining - easyEach * 2), description: "Truly easy. Optional if legs feel heavy." },
-      { type: "rest",  distanceKm: 0,       description: "Full rest day — walk, mobility, sleep." },
+      rest("Mon"),
+      easyOn("Tue", easyEach, "Easy conversational pace. Building your aerobic base."),
+      rest("Wed"),
+      easyOn("Thu", easyEach, "Easy conversational pace. Building your aerobic base."),
+      rest("Fri"),
+      rest("Sat"),
+      longSession(longKm, "Sun"),
+    ];
+  }
+  if (runDays === 4) {
+    // 4 runs: one quality (tempo), 2 easy, 1 long — build phase before adding intervals
+    const longKm  = round05(targetKm * 0.32);
+    const tempoKm = round05(targetKm * 0.18);
+    const remaining = Math.max(0, targetKm - longKm - tempoKm);
+    const easyEach = round05(remaining / 2);
+    return [
+      easyOn("Mon", easyEach),
+      rest("Tue"),
+      tempoSession(tempoKm, "Wed"),
+      rest("Thu"),
+      easyOn("Fri", easyEach),
+      rest("Sat"),
+      longSession(longKm, "Sun"),
     ];
   }
 
@@ -250,36 +382,31 @@ function buildSessions(targetKm: number, isCutback: boolean): PlannedSession[] {
   const speedKm = round05(targetKm * 0.10);
   const tempoKm = round05(targetKm * 0.15);
   const remaining = Math.max(0, targetKm - longKm - speedKm - tempoKm);
-  const easyDays = remaining >= 12 ? 3 : 2;
-  const easyEach = round05(remaining / easyDays);
 
-  const sessions: PlannedSession[] = [
-    {
-      type: "long",
-      distanceKm: longKm,
-      description: "Easy conversational pace. Where most of your distance progress comes from.",
-    },
-    {
-      type: "speed",
-      distanceKm: speedKm,
-      description: `Warm up, then intervals — e.g. 6–8 × 400 m fast with equal jog recovery, or 4 × 800 m at 5K pace. Total distance including warm-up/cool-down.`,
-    },
-    {
-      type: "tempo",
-      distanceKm: tempoKm,
-      description: `20–30 min at "comfortably hard" pace. You should be able to speak short sentences, not full ones.`,
-    },
-  ];
-
-  for (let i = 0; i < easyDays; i++) {
-    sessions.push({
-      type: "easy",
-      distanceKm: easyEach,
-      description: "Truly easy — nasal-breathing pace. This is where most of your fitness is actually built.",
-    });
+  if (runDays === 5) {
+    const easyEach = round05(remaining / 2);
+    return [
+      easyOn("Mon", easyEach),
+      speedSession(speedKm, "Tue"),
+      easyOn("Wed", easyEach),
+      tempoSession(tempoKm, "Thu"),
+      rest("Fri"),
+      rest("Sat"),
+      longSession(longKm, "Sun"),
+    ];
   }
 
-  return sessions;
+  // runDays === 6
+  const easyEach = round05(remaining / 3);
+  return [
+    easyOn("Mon", easyEach),
+    speedSession(speedKm, "Tue"),
+    easyOn("Wed", easyEach),
+    tempoSession(tempoKm, "Thu"),
+    easyOn("Fri", Math.max(0, remaining - easyEach * 2)),
+    rest("Sat"),
+    longSession(longKm, "Sun"),
+  ];
 }
 
 /** Human-readable pace like "5:12/km" from seconds-per-km, or "—" if null. */

@@ -8,13 +8,14 @@ export async function PATCH(
 ) {
   const { id } = await params;
   const body = await request.json();
-  const { completed, distance, type, notes } = body;
+  const { completed, distance, type, notes, date } = body;
 
   const data: Record<string, unknown> = {};
   if (completed !== undefined) data.completed = completed;
   if (distance !== undefined) data.distance = distance !== null ? parseFloat(distance) : null;
   if (type !== undefined) data.type = type;
   if (notes !== undefined) data.notes = notes;
+  if (date !== undefined) data.date = new Date(date);
 
   const plan = await prisma.runPlan.update({
     where: { id: parseInt(id) },
