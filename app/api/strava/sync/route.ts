@@ -17,7 +17,16 @@ export async function POST() {
   );
 
   if (!res.ok) {
-    return NextResponse.json({ error: `Strava API ${res.status}` }, { status: res.status });
+    // Return a friendlier message so the UI can explain the fix
+    const bodyText = await res.text().catch(() => "");
+    let hint = "";
+    if (res.status === 401) hint = "Token invalid or expired — click Disconnect then Connect Strava again.";
+    else if (res.status === 403) hint = "Missing scope. Disconnect and reconnect Strava so it re-requests activity:read_all.";
+    else if (res.status === 429) hint = "Rate limit hit (100 req / 15 min · 1000 / day). Wait a few minutes.";
+    return NextResponse.json(
+      { error: `Strava API ${res.status}${hint ? ` — ${hint}` : ""}`, body: bodyText.slice(0, 200) },
+      { status: res.status }
+    );
   }
 
   const activities = await res.json();

@@ -19,7 +19,13 @@ function decodePolyline(encoded: string): [number, number][] {
   return coords;
 }
 
-export default function RunMap({ polyline }: { polyline: string }) {
+export default function RunMap({
+  polyline,
+  height = 400,
+}: {
+  polyline: string;
+  height?: number | string;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
 
@@ -41,7 +47,17 @@ export default function RunMap({ polyline }: { polyline: string }) {
 
     map.fitBounds(line.getBounds(), { padding: [16, 16] });
 
+    // Watch the container for size changes (flex layouts settle async, fullscreen
+    // toggles resize instantly) — invalidateSize + re-fit so tiles fill the view.
+    const ro = new ResizeObserver(() => {
+      if (!mapRef.current) return;
+      mapRef.current.invalidateSize();
+      mapRef.current.fitBounds(line.getBounds(), { padding: [16, 16] });
+    });
+    ro.observe(containerRef.current);
+
     return () => {
+      ro.disconnect();
       map.remove();
       mapRef.current = null;
     };
@@ -50,7 +66,11 @@ export default function RunMap({ polyline }: { polyline: string }) {
   return (
     <div
       ref={containerRef}
-      style={{ height: "220px", borderRadius: "12px", overflow: "hidden" }}
+      style={{
+        height: typeof height === "number" ? `${height}px` : height,
+        borderRadius: "12px",
+        overflow: "hidden",
+      }}
     />
   );
 }

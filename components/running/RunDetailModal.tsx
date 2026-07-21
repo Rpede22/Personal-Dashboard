@@ -58,20 +58,40 @@ export default function RunDetailModal({
   const [activity, setActivity] = useState<StravaActivity | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
+  const [mapFullscreen, setMapFullscreen] = useState(false);
 
   useEffect(() => {
     if (!run.stravaId) return;
     setLoading(true);
     setError(null);
+    setErrorStatus(null);
     fetch(`/api/strava/activity/${run.stravaId}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Strava API ${r.status}`);
+      .then(async (r) => {
+        if (!r.ok) {
+          setErrorStatus(r.status);
+          throw new Error(`Strava API ${r.status}`);
+        }
         return r.json();
       })
       .then((data) => setActivity(data))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [run.stravaId]);
+
+  // Close fullscreen map with Escape (before the modal itself closes), and
+  // lock body scroll so the modal underneath doesn't scroll behind the overlay.
+  useEffect(() => {
+    if (!mapFullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setMapFullscreen(false); } };
+    window.addEventListener("keydown", onKey, { capture: true });
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey, { capture: true });
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [mapFullscreen]);
 
   const polyline = activity?.map?.polyline ?? activity?.map?.summary_polyline ?? "";
   const distKm = run.distance;
@@ -130,11 +150,46 @@ export default function RunDetailModal({
             </div>
           )}
           {error && (
-            <div className="text-sm text-center py-4" style={{ color: "var(--accent-red)" }}>
-              Could not load Strava details: {error}
+            <div
+              className="rounded-xl px-4 py-3 text-sm space-y-1"
+              style={{ background: "var(--surface-2)", border: "1px solid var(--accent-red)44" }}
+            >
+              <div style={{ color: "var(--accent-red)" }}>
+                Could not load Strava details: {error}
+              </div>
+              {errorStatus === 403 && (
+                <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Strava returned 403. Common causes: token missing the{" "}
+                  <code className="px-1 rounded" style={{ background: "var(--surface)" }}>activity:read_all</code>{" "}
+                  scope (reconnect Strava from the Running hub) or hitting the API rate limit
+                  (100 req / 15 min · 1000 / day).
+                </div>
+              )}
+              {errorStatus === 429 && (
+                <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Rate limit hit (100 req / 15 min). Wait a few minutes and try again.
+                </div>
+              )}
             </div>
           )}
-          {polyline && <RunMap polyline={polyline} />}
+          {polyline && (
+            <div className="relative">
+              <RunMap polyline={polyline} height={400} />
+              <button
+                onClick={() => setMapFullscreen(true)}
+                title="Fullscreen map"
+                className="absolute top-2 right-2 rounded-lg px-2 py-1 text-xs font-medium"
+                style={{
+                  background: "var(--surface)",
+                  color: "var(--text)",
+                  border: "1px solid var(--border)",
+                  zIndex: 401,
+                }}
+              >
+                ⛶ Fullscreen
+              </button>
+            </div>
+          )}
 
           {/* Core stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -144,7 +199,7 @@ export default function RunDetailModal({
               { label: "Avg Pace", value: pace(distKm, durationSec), color: "var(--accent-blue)" },
               {
                 label: "Elevation",
-                value: activity ? `${Math.round(activity.total_elevation_gain)} m` : "—",
+                value: activity ? `${activity.total_elevation_gain.toFixed(1)} m` : "—",
                 color: "var(--accent-orange)",
               },
             ].map((s) => (
@@ -260,6 +315,38 @@ export default function RunDetailModal({
           )}
         </div>
       </div>
+
+      {/* Fullscreen map overlay */}
+      {mapFullscreen && polyline && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col"
+          style={{ background: "#000" }}
+          // Swallow all pointer/scroll events so the modal underneath doesn't respond
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between px-4 py-2 flex-shrink-0" style={{ background: "#000" }}>
+            <span className="text-sm font-semibold truncate pr-3" style={{ color: "var(--accent-green)" }}>
+              {activity?.name ?? "Run route"}
+            </span>
+            <button
+              onClick={() => setMapFullscreen(false)}
+              className="rounded-lg px-3 py-1.5 text-sm font-bold flex-shrink-0"
+              style={{
+                background: "#ef4444",
+                color: "#fff",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
+              }}
+            >
+              ✕ Exit fullscreen
+            </button>
+          </div>
+          <div className="flex-1 min-h-0" style={{ background: "#000" }}>
+            <RunMap polyline={polyline} height="100%" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

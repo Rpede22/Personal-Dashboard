@@ -50,6 +50,9 @@ AGENTS.md
 .claudeignore
 PROJECT_STRUCTURE.md
 
+# ── Personal task list ────────────────────────────────────────────────────────
+ToDo.md
+
 # ── Build resources (seeded DB used during Electron packaging) ────────────────
 build-resources/
 

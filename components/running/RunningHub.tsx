@@ -3,6 +3,12 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import {
+  computeWeeklyStats,
+  generateNextWeekPlan,
+  formatPace,
+  type SessionType,
+} from "@/lib/training-planner";
 
 const RunDetailModal = dynamic(() => import("./RunDetailModal"), { ssr: false });
 
@@ -112,7 +118,7 @@ export default function RunningHub() {
   const [planForm, setPlanForm] = useState({ type: "easy", distance: "", notes: "" });
 
   // Tabs
-  const [activeTab, setActiveTab] = useState<"overview" | "log">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "log" | "training">("overview");
 
   // Run detail modal
   const [selectedRun, setSelectedRun] = useState<RunLog | null>(null);
@@ -322,7 +328,7 @@ export default function RunningHub() {
 
   const totalKm = runs.reduce((sum, r) => sum + r.distance, 0);
 
-  // A: Weekly mileage — last 12 weeks, oldest first
+  // A: Weekly mileage — last 12 weeks, oldest first. Label shows Mon–Sun date range.
   const weeklyProgress = Array.from({ length: 12 }, (_, i) => {
     const wMonday = getMondayOf(new Date(now));
     wMonday.setDate(wMonday.getDate() - i * 7);
@@ -333,15 +339,17 @@ export default function RunningHub() {
     const km = runs
       .filter((r) => { const d = toUTCDateStr(new Date(r.date)); return d >= wMondayStr && d <= wSundayStr; })
       .reduce((sum, r) => sum + r.distance, 0);
+    const startFmt = wMonday.toLocaleDateString("en-GB", { month: "short", day: "numeric" });
+    const endFmt   = wSunday.toLocaleDateString("en-GB", { month: "short", day: "numeric" });
     return {
-      label: wMonday.toLocaleDateString("en-GB", { month: "short", day: "numeric" }),
+      label: `${startFmt} – ${endFmt}`,
       km,
       isCurrent: i === 0,
     };
   }).reverse();
   const maxWeeklyKm = Math.max(...weeklyProgress.map((w) => w.km), 1);
 
-  // B: Longest run per month — last 6 months, oldest first
+  // B: Longest run per month — last 6 months, oldest first. Label shows month name only.
   const longestByMonth = Array.from({ length: 6 }, (_, i) => {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const monthStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -351,7 +359,7 @@ export default function RunningHub() {
       null
     );
     return {
-      label: d.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }),
+      label: d.toLocaleDateString("en-GB", { month: "short" }),
       km: longest?.distance ?? 0,
       date: longest
         ? new Date(longest.date).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })
@@ -399,14 +407,14 @@ export default function RunningHub() {
           </h1>
         </div>
 
-        {/* Stats bar */}
+        {/* Stats bar — 2 dp so nothing is rounded away */}
         <div className="grid grid-cols-2 sm:grid-cols-7 gap-3 mb-4">
           {[
-            { label: "This week",    value: `${weeklyKm.toFixed(1)} km`,    color: "var(--accent-green)" },
-            { label: "Last 30 days", value: `${monthlyKm.toFixed(1)} km`,   color: "var(--accent-green)" },
-            { label: "This month",   value: `${thisMonthKm.toFixed(1)} km`, color: "var(--accent-blue)" },
-            { label: "This year",    value: `${thisYearKm.toFixed(1)} km`,  color: "var(--accent-purple)" },
-            { label: "Total logged", value: `${totalKm.toFixed(1)} km`,     color: "var(--accent-blue)" },
+            { label: "This week",    value: `${weeklyKm.toFixed(2)} km`,    color: "var(--accent-green)" },
+            { label: "Last 30 days", value: `${monthlyKm.toFixed(2)} km`,   color: "var(--accent-green)" },
+            { label: "This month",   value: `${thisMonthKm.toFixed(2)} km`, color: "var(--accent-blue)" },
+            { label: "This year",    value: `${thisYearKm.toFixed(2)} km`,  color: "var(--accent-purple)" },
+            { label: "Total logged", value: `${totalKm.toFixed(2)} km`,     color: "var(--accent-blue)" },
             { label: "Total runs",   value: runs.length.toString(),          color: "var(--accent-purple)" },
           ].map((stat) => (
             <div
@@ -434,18 +442,22 @@ export default function RunningHub() {
 
         {/* Tabs */}
         <div className="flex gap-1 border-b" style={{ borderColor: "var(--border)" }}>
-          {(["overview", "log"] as const).map((tab) => (
+          {([
+            ["overview", "Overview"],
+            ["log",      "Run Log"],
+            ["training", "Training"],
+          ] as const).map(([tab, label]) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className="px-5 py-2 text-sm font-medium capitalize transition-colors"
+              className="px-5 py-2 text-sm font-medium transition-colors"
               style={{
                 color: activeTab === tab ? "var(--accent-green)" : "var(--text-muted)",
                 borderBottom: activeTab === tab ? "2px solid var(--accent-green)" : "2px solid transparent",
                 marginBottom: "-1px",
               }}
             >
-              {tab === "overview" ? "Overview" : "Run Log"}
+              {label}
             </button>
           ))}
         </div>
@@ -468,7 +480,7 @@ export default function RunningHub() {
             <div className="space-y-2">
               {weeklyProgress.map((w) => (
                 <div key={w.label} className="flex items-center gap-2 text-xs">
-                  <span className="w-14 text-right flex-shrink-0" style={{ color: "var(--text-muted)" }}>
+                  <span className="w-28 text-right flex-shrink-0 whitespace-nowrap" style={{ color: "var(--text-muted)" }}>
                     {w.label}
                   </span>
                   <div
@@ -971,8 +983,9 @@ export default function RunningHub() {
                         background: `${PLAN_TYPE_COLOR[p.type]}22`,
                         color: PLAN_TYPE_COLOR[p.type],
                       }}
+                      title={p.notes ?? undefined}
                     >
-                      {p.type}{p.distance ? ` ${p.distance}k` : ""}
+                      {p.type}{p.distance ? ` ${p.distance}k` : ""}{p.notes ? " 📝" : ""}
                     </div>
                   ))}
                   {run && (
@@ -1058,7 +1071,7 @@ export default function RunningHub() {
                   {dayPlans.map((p) => (
                     <div
                       key={p.id}
-                      className="rounded-md px-2 py-1 text-xs flex items-center justify-between gap-1"
+                      className="rounded-md px-2 py-1 text-xs"
                       style={{
                         background: `${PLAN_TYPE_COLOR[p.type]}22`,
                         color: PLAN_TYPE_COLOR[p.type],
@@ -1066,16 +1079,26 @@ export default function RunningHub() {
                         opacity: p.completed ? 0.5 : 1,
                       }}
                     >
-                      <span className="capitalize font-medium truncate">
-                        {p.type}{p.distance ? ` ${p.distance}k` : ""}
-                      </span>
-                      <button
-                        onClick={() => deletePlan(p.id)}
-                        title="Remove plan"
-                        style={{ color: "inherit", opacity: 0.7, flexShrink: 0 }}
-                      >
-                        ✕
-                      </button>
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="capitalize font-medium truncate">
+                          {p.type}{p.distance ? ` ${p.distance}k` : ""}
+                        </span>
+                        <button
+                          onClick={() => deletePlan(p.id)}
+                          title="Remove plan"
+                          style={{ color: "inherit", opacity: 0.7, flexShrink: 0 }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      {p.notes && (
+                        <div
+                          className="text-xs mt-1 opacity-80 whitespace-pre-wrap break-words"
+                          style={{ color: "inherit", lineHeight: "1.3" }}
+                        >
+                          {p.notes}
+                        </div>
+                      )}
                     </div>
                   ))}
 
@@ -1181,6 +1204,232 @@ export default function RunningHub() {
       )}
 
       </>)}
+
+      {/* ── Training tab ── */}
+      {activeTab === "training" && (() => {
+        // Derive the last 8 weeks of stats + next-week plan from your run log.
+        const weeklyStats = computeWeeklyStats(
+          runs.map((r) => ({ date: r.date, distance: r.distance, duration: r.duration })),
+          8
+        );
+        const plan = generateNextWeekPlan(weeklyStats);
+        const lastCompleted = weeklyStats[weeklyStats.length - 2];
+        const currentWeek   = weeklyStats[weeklyStats.length - 1];
+        const maxWeekly = Math.max(...weeklyStats.map((w) => w.totalKm), plan.targetKm, 1);
+
+        const SESSION_META: Record<SessionType, { color: string; label: string; icon: string }> = {
+          long:  { color: "var(--accent-blue)",   label: "Long run",           icon: "🏃" },
+          speed: { color: "var(--accent-red)",    label: "Speed / intervals",  icon: "⚡" },
+          tempo: { color: "var(--accent-orange)", label: "Tempo",              icon: "🔥" },
+          easy:  { color: "var(--accent-green)",  label: "Easy",               icon: "🌱" },
+          rest:  { color: "var(--text-muted)",    label: "Rest",               icon: "💤" },
+        };
+
+        return (
+          <div className="space-y-6 max-w-4xl">
+
+            {/* ── Last week + current week snapshot ── */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
+                  Last completed week
+                </div>
+                {lastCompleted && lastCompleted.runCount > 0 ? (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <div className="text-2xl font-bold" style={{ color: "var(--accent-green)" }}>
+                        {lastCompleted.totalKm.toFixed(1)}
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>km total</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold">{lastCompleted.runCount}</div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>runs</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" style={{ color: "var(--accent-blue)" }}>
+                        {lastCompleted.longestKm.toFixed(1)}
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>km longest</div>
+                    </div>
+                    <div className="col-span-3 text-xs" style={{ color: "var(--text-muted)" }}>
+                      Avg pace: {formatPace(lastCompleted.avgPaceSecPerKm)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm" style={{ color: "var(--text-muted)" }}>No runs logged last week.</div>
+                )}
+              </div>
+
+              <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
+                  This week so far
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <div className="text-2xl font-bold" style={{ color: "var(--accent-green)" }}>
+                      {currentWeek.totalKm.toFixed(1)}
+                    </div>
+                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>km logged</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold">{currentWeek.runCount}</div>
+                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>runs</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold" style={{ color: "var(--accent-blue)" }}>
+                      {currentWeek.longestKm.toFixed(1)}
+                    </div>
+                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>km longest</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ── 8-week volume trend ── */}
+            <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--accent-green)" }}>
+                Weekly volume — last 8 weeks + next-week target
+              </h3>
+              <div className="space-y-1.5">
+                {weeklyStats.map((w, idx) => {
+                  const isCurrent = idx === weeklyStats.length - 1;
+                  const label = w.weekStart.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+                  return (
+                    <div key={idx} className="flex items-center gap-2 text-xs">
+                      <span className="w-14 text-right flex-shrink-0" style={{ color: "var(--text-muted)" }}>
+                        {label}
+                      </span>
+                      <div className="flex-1 rounded-full overflow-hidden" style={{ background: "var(--surface-2)", height: "12px" }}>
+                        {w.totalKm > 0 && (
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${(w.totalKm / maxWeekly) * 100}%`,
+                              background: isCurrent ? "var(--accent-green)" : "#3a7d55",
+                              minWidth: "6px",
+                            }}
+                          />
+                        )}
+                      </div>
+                      <span className="w-16 flex-shrink-0 font-medium" style={{ color: isCurrent ? "var(--accent-green)" : "var(--text-muted)" }}>
+                        {w.totalKm > 0 ? `${w.totalKm.toFixed(1)} km` : "—"}
+                      </span>
+                    </div>
+                  );
+                })}
+                {/* Next-week target bar */}
+                <div className="flex items-center gap-2 text-xs pt-1 mt-1 border-t" style={{ borderColor: "var(--border)" }}>
+                  <span className="w-14 text-right flex-shrink-0 font-semibold" style={{ color: "var(--accent-orange)" }}>
+                    Next
+                  </span>
+                  <div className="flex-1 rounded-full overflow-hidden" style={{ background: "var(--surface-2)", height: "12px" }}>
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${(plan.targetKm / maxWeekly) * 100}%`,
+                        background: "var(--accent-orange)",
+                        minWidth: "6px",
+                      }}
+                    />
+                  </div>
+                  <span className="w-16 flex-shrink-0 font-semibold" style={{ color: "var(--accent-orange)" }}>
+                    {plan.targetKm.toFixed(1)} km
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Warnings ── */}
+            {plan.warnings.length > 0 && (
+              <div
+                className="rounded-2xl p-4 space-y-1 text-sm"
+                style={{ background: "var(--surface)", border: "1px solid var(--accent-orange)44", color: "var(--text)" }}
+              >
+                {plan.warnings.map((w, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span style={{ color: "var(--accent-orange)" }}>⚠</span>
+                    <span>{w}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Next-week plan headline ── */}
+            <div
+              className="rounded-2xl p-5"
+              style={{
+                background: "var(--surface)",
+                border: `1px solid ${plan.isCutback ? "var(--accent-purple)" : "var(--accent-orange)"}44`,
+              }}
+            >
+              <div className="flex items-baseline gap-3 mb-2 flex-wrap">
+                <h3 className="text-lg font-semibold" style={{ color: plan.isCutback ? "var(--accent-purple)" : "var(--accent-orange)" }}>
+                  Next week&apos;s plan
+                </h3>
+                <span className="text-3xl font-bold" style={{ color: "var(--text)" }}>
+                  {plan.targetKm.toFixed(1)} km
+                </span>
+                {!plan.isStarter && plan.baselineKm > 0 && (
+                  <span
+                    className="text-sm font-medium"
+                    style={{ color: plan.changePct >= 0 ? "var(--accent-green)" : "var(--accent-red)" }}
+                  >
+                    {plan.changePct >= 0 ? "+" : ""}{plan.changePct.toFixed(1)}%
+                  </span>
+                )}
+              </div>
+              <p className="text-sm mb-2" style={{ color: "var(--text-muted)" }}>{plan.reason}</p>
+              {/* Show both baselines so it's transparent what "smoothed" means */}
+              <div className="flex gap-4 text-xs pt-2 border-t" style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}>
+                <span>
+                  Last week: <strong style={{ color: "var(--text)" }}>{plan.lastWeekKm.toFixed(1)} km</strong>
+                </span>
+                <span>
+                  {plan.baselineWeeks}-week avg: <strong style={{ color: "var(--text)" }}>{plan.baselineKm.toFixed(1)} km</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* ── Session breakdown ── */}
+            <div>
+              <h3 className="text-sm font-semibold mb-3 uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                Suggested sessions ({plan.sessions.filter((s) => s.distanceKm > 0 || s.type === "rest").length})
+              </h3>
+              <div className="space-y-2">
+                {plan.sessions
+                  .filter((s) => s.distanceKm > 0 || s.type === "rest")
+                  .map((s, i) => {
+                    const meta = SESSION_META[s.type];
+                    return (
+                      <div
+                        key={i}
+                        className="rounded-xl p-3 flex items-start gap-3"
+                        style={{ background: "var(--surface)", border: `1px solid ${meta.color}33` }}
+                      >
+                        <span className="text-xl flex-shrink-0 mt-0.5">{meta.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-baseline justify-between gap-3 mb-0.5">
+                            <span className="font-semibold" style={{ color: meta.color }}>{meta.label}</span>
+                            <span className="text-sm font-bold" style={{ color: "var(--text)" }}>
+                              {s.distanceKm > 0 ? `${s.distanceKm.toFixed(1)} km` : "—"}
+                            </span>
+                          </div>
+                          <div className="text-xs" style={{ color: "var(--text-muted)" }}>{s.description}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+
+            <p className="text-xs text-center" style={{ color: "var(--text-muted)" }}>
+              Recommendations follow the 80/20 framework and progress by ~10% per week (cutback every 4th).
+              Real training reacts to how you feel — treat these as a starting point, not a prescription.
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Run detail modal */}
       {selectedRun && (

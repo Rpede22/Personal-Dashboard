@@ -242,6 +242,10 @@ export default function NHLHub() {
       .catch(() => {});
   }, []);
 
+  // Auto-load the playoff predicted bracket on mount so it's ready when the user
+  // clicks the tab (data comes from regular-season standings + H2H only).
+  useEffect(() => { loadPlayoffs(); }, [loadPlayoffs]);
+
   function formatCEST(dateStr: string, startTimeUTC?: string): string {
     // If we have a full ISO timestamp from startTimeUTC, use it
     const d = startTimeUTC ? new Date(startTimeUTC) : new Date(dateStr);

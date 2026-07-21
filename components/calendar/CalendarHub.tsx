@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 interface CalEvent {
@@ -22,12 +22,11 @@ const MONTH_NAMES = [
 ];
 
 function calColor(name: string): string {
-  if (name === "SDU")                       return "var(--accent-red)";
-  if (name === "Cand")                      return "var(--accent-indigo)";
-  if (name === "Arbejde")                   return "var(--accent-green)";
-  if (name === "Skolerelateret")            return "var(--accent-yellow)";
-  if (name === "Kalender")                  return "var(--accent-blue)";
-  if (name === "Rasmus_Arbejde")            return "var(--accent-pink)";
+  if (name === "Rasmus_skole")     return "var(--accent-red)";
+  if (name === "Cand")             return "var(--accent-indigo)";
+  if (name === "Jennifer_arbejde") return "var(--accent-green)";
+  if (name === "Kalender")         return "var(--accent-blue)";
+  if (name === "Rasmus_arbejde")   return "var(--accent-pink)";
   return "var(--accent-blue)";
 }
 
@@ -98,19 +97,32 @@ export default function CalendarHub() {
   });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/api/calendar")
+  // Load calendar data. `bust=true` skips the server cache to force a fresh fetch.
+  const loadCalendar = useCallback((bust = false) => {
+    fetch(`/api/calendar${bust ? "?bust=1" : ""}`)
       .then((r) => r.json())
       .then((d) => {
         setConfigured(d.configured ?? true);
         const evs: CalEvent[] = d.events ?? [];
         setAllEvents(evs);
         if (d.error) setError(d.error);
-        const names = [...new Set(evs.map((e) => e.calendar))];
+        // Prefer the API-provided list of all configured calendars so empty
+        // calendars still get a filter toggle; fall back to names derived from events.
+        const eventNames = [...new Set(evs.map((e) => e.calendar))];
+        const apiNames: string[] = Array.isArray(d.calendars) ? d.calendars : [];
+        const names = [...new Set([...apiNames, ...eventNames])].sort();
         setCalendarNames(names);
         try {
           const raw = localStorage.getItem(FILTER_KEY);
-          setEnabledCals(raw ? new Set(JSON.parse(raw)) : new Set(names));
+          if (!raw) {
+            setEnabledCals(new Set(names));
+          } else {
+            // Migrate old stored filter: keep known names, auto-enable any new/renamed calendars.
+            const stored: string[] = JSON.parse(raw);
+            const kept = stored.filter((n) => names.includes(n));
+            const newNames = names.filter((n) => !stored.includes(n));
+            setEnabledCals(new Set([...kept, ...newNames]));
+          }
         } catch {
           setEnabledCals(new Set(names));
         }
@@ -118,6 +130,13 @@ export default function CalendarHub() {
       .catch(() => setError("Failed to load"))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadCalendar();
+    // Auto-refresh every hour (bust=true so we always get fresh CalDAV data)
+    const interval = setInterval(() => loadCalendar(true), 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [loadCalendar]);
 
   function toggleCal(name: string) {
     setEnabledCals((prev) => {

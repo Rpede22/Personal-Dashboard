@@ -13,6 +13,7 @@ interface UpcomingPlan {
   date: string;
   type: string;
   distance: number | null;
+  notes: string | null;
 }
 
 interface RunSummary {
@@ -145,24 +146,34 @@ export default function RunningWidget() {
                 {data.upcomingPlans.filter(p => p.type !== "rest").map((p, i) => (
                   <div
                     key={i}
-                    className="flex items-center justify-between rounded-lg px-2.5 py-1.5"
+                    className="rounded-lg px-2.5 py-1.5"
                     style={{ background: "var(--surface-2)" }}
                   >
-                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                      {new Date(p.date).toLocaleDateString("en-GB", { weekday: "short", month: "short", day: "numeric" })}
-                    </span>
-                    <span
-                      className="text-xs font-semibold capitalize px-2 py-0.5 rounded-full"
-                      style={{
-                        background: `${PLAN_COLOR[p.type] ?? "var(--text-muted)"}22`,
-                        color: PLAN_COLOR[p.type] ?? "var(--text-muted)",
-                      }}
-                    >
-                      {p.type}
-                    </span>
-                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                      {p.distance ? `${p.distance} km` : "—"}
-                    </span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        {new Date(p.date).toLocaleDateString("en-GB", { weekday: "short", month: "short", day: "numeric" })}
+                      </span>
+                      <span
+                        className="text-xs font-semibold capitalize px-2 py-0.5 rounded-full"
+                        style={{
+                          background: `${PLAN_COLOR[p.type] ?? "var(--text-muted)"}22`,
+                          color: PLAN_COLOR[p.type] ?? "var(--text-muted)",
+                        }}
+                      >
+                        {p.type}
+                      </span>
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        {p.distance ? `${p.distance} km` : "—"}
+                      </span>
+                    </div>
+                    {p.notes && (
+                      <div
+                        className="text-xs mt-1 opacity-80 whitespace-pre-wrap break-words"
+                        style={{ color: "var(--text-muted)", lineHeight: "1.3" }}
+                      >
+                        {p.notes}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

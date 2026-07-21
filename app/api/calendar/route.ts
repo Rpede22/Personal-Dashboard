@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import ical from "node-ical";
 
 const cache = new Map<string, { data: unknown; ts: number }>();
+// Shorter TTL so the auto-refresh in the UI actually pulls fresh data every hour
 const TTL = 15 * 60 * 1000;
+// Look 365 days ahead (was 92) so long-term events like exam dates show up early.
+const DAYS_BACK = 31;
+const DAYS_FORWARD = 365;
 
 export interface CalEvent {
   uid: string;
@@ -18,9 +22,9 @@ export interface CalEvent {
 // ── ICS feed sources ───────────────────────────────────────────────────────────
 
 const ICS_FEEDS = [
-  { name: "SDU",     envKey: "CALENDAR_SDU_URL" },
-  { name: "Cand",    envKey: "CALENDAR_CAND_URL" },
-  { name: "Rasmus_Arbejde", envKey: "CALENDAR_ARBEJDE_URL" },
+  { name: "Rasmus_skole",   envKey: "CALENDAR_SDU_URL" },
+  { name: "Cand",           envKey: "CALENDAR_CAND_URL" },
+  { name: "Rasmus_arbejde", envKey: "CALENDAR_ARBEJDE_URL" },
 ];
 
 async function fetchICSFeed(rawUrl: string, calName: string, from: Date, to: Date): Promise<CalEvent[]> {
@@ -51,19 +55,52 @@ function parseICS(text: string, calName: string, from: Date, to: Date): CalEvent
     const end   = ev.end   instanceof Date ? ev.end   : new Date(((ev.end as Date | undefined) ?? ev.start) as unknown as string);
     if (isNaN(start.getTime())) continue;
     const allDay = (ev as unknown as Record<string, unknown>).datetype === "date";
+
+    const baseUid   = strVal(ev.uid) ?? Math.random().toString(36);
+    const title     = strVal(ev.summary) ?? "(No title)";
+    const location  = strVal(ev.location);
+    const descRaw   = strVal(ev.description);
+    const description = descRaw ? descRaw.replace(/\\n/g, "\n").trim() || undefined : undefined;
+    const durationMs = end.getTime() - start.getTime();
+
+    // If the event has a recurrence rule, expand it into instances that fall inside the window.
+    // Without this, a weekly event whose DTSTART is outside `from` gets dropped even though its
+    // occurrences within `from..to` should show up.
+    const rrule = (ev as unknown as { rrule?: { between: (a: Date, b: Date, inc?: boolean) => Date[] } }).rrule;
+    if (rrule && typeof rrule.between === "function") {
+      // Widen the range by one event duration on each side so an occurrence that starts before
+      // `from` but ends inside the window still shows up.
+      const occurrences = rrule.between(new Date(from.getTime() - durationMs), to, true);
+      for (const occStart of occurrences) {
+        const occEnd = new Date(occStart.getTime() + durationMs);
+        const effectiveEnd = allDay ? new Date(occEnd.getTime() - 1) : occEnd;
+        if (effectiveEnd < from || occStart > to) continue;
+        events.push({
+          uid:         `${baseUid}-${occStart.toISOString()}`,
+          title,
+          start:       occStart.toISOString(),
+          end:         occEnd.toISOString(),
+          allDay,
+          calendar:    calName,
+          location,
+          description,
+        });
+      }
+      continue;
+    }
+
     // DTEND for all-day events is exclusive — subtract 1 ms to get true end
     const effectiveEnd = allDay ? new Date(end.getTime() - 1) : end;
     if (effectiveEnd < from || start > to) continue;
-    const desc = strVal(ev.description);
     events.push({
-      uid:         strVal(ev.uid) ?? Math.random().toString(36),
-      title:       strVal(ev.summary) ?? "(No title)",
+      uid:         baseUid,
+      title,
       start:       start.toISOString(),
       end:         end.toISOString(),
       allDay,
       calendar:    calName,
-      location:    strVal(ev.location),
-      description: desc ? desc.replace(/\\n/g, "\n").trim() || undefined : undefined,
+      location,
+      description,
     });
   }
   return events;
@@ -142,8 +179,15 @@ function extractCalendarData(xml: string): string[] {
   return blocks;
 }
 
-// CalDAV calendars to include (match by display name prefix)
-const CALDAV_INCLUDE = ["Arbejde", "Skolerelateret", "Kalender", "Cand"];
+// CalDAV calendars to include (match by iCloud display name prefix).
+// `Cand` intentionally dropped — the ICS `CALENDAR_CAND_URL` feed covers it.
+const CALDAV_INCLUDE = ["Arbejde", "Kalender"];
+
+// Rename iCloud-side display names to the labels shown in the app.
+// Add rows here if you want a different label than the CalDAV name.
+const CALDAV_DISPLAY_NAME: Record<string, string> = {
+  Arbejde: "Jennifer_arbejde",
+};
 
 async function fetchCalDAVCalendars(auth: string): Promise<{ url: string; name: string }[]> {
   // Discover principal
@@ -186,10 +230,11 @@ async function fetchCalDAVCalendars(auth: string): Promise<{ url: string; name: 
     const names = extractDisplayNames(block);
     const name = names[0] ?? href.split("/").filter(Boolean).pop() ?? "Calendar";
     // Only include calendars whose names start with one of our target prefixes
-    if (!CALDAV_INCLUDE.some((prefix) => name.startsWith(prefix))) continue;
-    // Shorten long names for display
-    const shortName = name.startsWith("Skolerelateret") ? "Skolerelateret" : name;
-    calendars.push({ url: resolveHref(href, cFinal), name: shortName });
+    const matchedPrefix = CALDAV_INCLUDE.find((prefix) => name.startsWith(prefix));
+    if (!matchedPrefix) continue;
+    // Prefer the explicit display-name mapping (matched by prefix); otherwise keep the iCloud name.
+    const displayName = CALDAV_DISPLAY_NAME[matchedPrefix] ?? name;
+    calendars.push({ url: resolveHref(href, cFinal), name: displayName });
   }
   return calendars;
 }
@@ -233,27 +278,38 @@ async function fetchCalDAVEvents(
 
 // ── Route ──────────────────────────────────────────────────────────────────────
 
-export async function GET() {
+export async function GET(request: Request) {
   const hasICS     = ICS_FEEDS.some((f) => !!process.env[f.envKey]);
   const hasCalDAV  = !!(process.env.ICLOUD_CALDAV_USER && process.env.ICLOUD_CALDAV_PASS);
   if (!hasICS && !hasCalDAV) return NextResponse.json({ configured: false, events: [] });
 
+  const bust = new URL(request.url).searchParams.get("bust") === "1";
   const cacheKey = "calendar-all";
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < TTL) return NextResponse.json(cached.data);
+  if (!bust && cached && Date.now() - cached.ts < TTL) return NextResponse.json(cached.data);
 
   const now         = new Date();
-  const oneMonthAgo = new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000);
-  const threeMonths = new Date(now.getTime() + 92 * 24 * 60 * 60 * 1000);
+  const oneMonthAgo = new Date(now.getTime() - DAYS_BACK    * 24 * 60 * 60 * 1000);
+  const threeMonths = new Date(now.getTime() + DAYS_FORWARD * 24 * 60 * 60 * 1000);
   const allEvents: CalEvent[] = [];
   const fetchErrors: string[] = [];
+  // Track every configured calendar name so the UI can show filter toggles even
+  // for calendars that currently have zero events in the window.
+  const allCalendarNames = new Set<string>();
 
-  // 1. ICS feeds
+  // 1. ICS feeds — always register the name even if the feed is empty or failed,
+  //    so the calendar filter chip still appears in the UI.
   await Promise.all(
     ICS_FEEDS.map(async ({ name, envKey }) => {
       const url = process.env[envKey];
+      console.log(`[Calendar] ICS ${name} (${envKey}): url=${url ? url.slice(0, 40) + "..." : "UNSET"}`);
       if (!url) return;
-      try { allEvents.push(...await fetchICSFeed(url, name, oneMonthAgo, threeMonths)); }
+      allCalendarNames.add(name);
+      try {
+        const evs = await fetchICSFeed(url, name, oneMonthAgo, threeMonths);
+        console.log(`[Calendar] ICS ${name}: fetched ${evs.length} events`);
+        allEvents.push(...evs);
+      }
       catch (err) {
         const msg = `ICS ${name}: ${String(err)}`;
         console.error(`[Calendar] ${msg}`);
@@ -262,11 +318,13 @@ export async function GET() {
     })
   );
 
-  // 2. iCloud CalDAV (Arbejde, Skolerelateret, Kalender, Cand)
+  // 2. iCloud CalDAV — same rule: register the display name for every discovered
+  //    calendar, even if fetching its events fails.
   if (hasCalDAV) {
     try {
       const auth = "Basic " + Buffer.from(`${process.env.ICLOUD_CALDAV_USER}:${process.env.ICLOUD_CALDAV_PASS}`).toString("base64");
       const calendars = await fetchCalDAVCalendars(auth);
+      for (const { name } of calendars) allCalendarNames.add(name);
       await Promise.all(
         calendars.map(async ({ url, name }) => {
           try { allEvents.push(...await fetchCalDAVEvents(url, name, auth, oneMonthAgo, threeMonths)); }
@@ -286,7 +344,12 @@ export async function GET() {
   }
 
   allEvents.sort((a, b) => a.start.localeCompare(b.start));
-  const payload = { configured: true, events: allEvents, errors: fetchErrors };
+  const payload = {
+    configured: true,
+    events: allEvents,
+    errors: fetchErrors,
+    calendars: [...allCalendarNames].sort(),
+  };
   cache.set(cacheKey, { data: payload, ts: Date.now() });
   return NextResponse.json(payload);
 }

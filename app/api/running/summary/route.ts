@@ -90,7 +90,7 @@ export async function GET() {
     totalRuns,
     raceDate,
     raceDistance,
-    upcomingPlans: upcomingPlans.map((p) => ({ date: p.date, type: p.type, distance: p.distance })),
+    upcomingPlans: upcomingPlans.map((p) => ({ date: p.date, type: p.type, distance: p.distance, notes: p.notes })),
   });
 }
 

@@ -24,6 +24,9 @@ export interface LoadResult {
 const DEFAULT_softCap = 3; // default preferred hours per day
 const HARD_CAP = 10;        // absolute max hours per day
 const WORK_START_HOUR = 9; // work begins at 09:00
+// Buffer applied so the plan finishes early: assignments with no dueTime end the day
+// BEFORE their deadline; assignments with a dueTime end at least BUFFER_HOURS before it.
+const BUFFER_HOURS = 1;
 
 function dateKey(d: Date): string {
   // Use local date parts — toISOString() is UTC and shifts the date in UTC+1/+2
@@ -86,8 +89,17 @@ export function distributeLoad(
     const remaining = remainingHours[idx];
     if (remaining <= 0) continue;
 
-    // If previous assignments have pushed us past this deadline, flag it but skip
-    if (nextStart >= assignment.dueDate) {
+    // effectiveDueDate: the last moment we're allowed to schedule work.
+    // - No dueTime: finish the day BEFORE dueDate (deadline midnight → last work ends 24h before)
+    // - With dueTime: finish BUFFER_HOURS before the actual due time
+    const effectiveDueDate = new Date(assignment.dueDate);
+    if (!assignment.dueTime) {
+      // shift to midnight of dueDate; work loop uses `<` so this excludes the dueDate itself
+      effectiveDueDate.setHours(0, 0, 0, 0);
+    }
+
+    // If previous assignments have pushed us past this effective deadline, flag it but skip
+    if (nextStart >= effectiveDueDate) {
       estDoneByAssignment.set(assignment.id, dateKey(assignment.dueDate));
       needsHardCap.set(assignment.id, true);
       continue;
@@ -123,25 +135,26 @@ export function distributeLoad(
     const cursor = new Date(nextStart);
     let lastKey = "";
 
-    while (rem > 0.05 && cursor < assignment.dueDate) {
+    while (rem > 0.05 && cursor < effectiveDueDate) {
       const key = dateKey(cursor);
       const alreadyUsed = hoursUsed(key);
-      const msLeft = assignment.dueDate.getTime() - cursor.getTime();
-      // Count remaining work days (including today) up to deadline
+      const msLeft = effectiveDueDate.getTime() - cursor.getTime();
+      // Count remaining work days (including today) up to effective deadline
       const calDaysLeft = Math.max(1, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));
       const workDaysLeft = Math.max(1, Math.round(calDaysLeft / calDaysPerWorkDay));
 
-      // Minimum hours needed today to finish exactly on deadline
+      // Minimum hours needed today to finish exactly on effective deadline
       const idealToday = rem / workDaysLeft;
 
       // Use the higher of: softCap, deadline-driven rate, and look-ahead rate.
       const dailyTarget = Math.min(Math.max(softCap, idealToday, lookaheadRate), HARD_CAP);
 
-      // Due-time cap: on the actual due date, work is limited to (dueHour - WORK_START_HOUR)
+      // Due-time cap: on the actual due date, work is limited to (dueHour - BUFFER_HOURS - WORK_START_HOUR)
+      // so we stop at least BUFFER_HOURS before the deadline.
       let dayCapacity = HARD_CAP;
       if (dateKey(cursor) === dateKey(assignment.dueDate) && assignment.dueTime) {
         const [hh] = assignment.dueTime.split(":").map(Number);
-        dayCapacity = Math.max(0, hh - WORK_START_HOUR);
+        dayCapacity = Math.max(0, hh - BUFFER_HOURS - WORK_START_HOUR);
       }
 
       const available = Math.max(0, Math.min(dailyTarget, dayCapacity) - alreadyUsed);

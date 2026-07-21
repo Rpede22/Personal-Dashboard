@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Card, { CardHeader } from "@/components/Card";
 
 interface CalEvent {
@@ -16,12 +16,11 @@ const FILTER_KEY = "calendarFilter";
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function calColor(name: string): string {
-  if (name === "SDU")                       return "var(--accent-red)";
-  if (name === "Cand")                      return "var(--accent-indigo)";
-  if (name === "Arbejde")                   return "var(--accent-green)";
-  if (name === "Skolerelateret")            return "var(--accent-yellow)";
-  if (name === "Kalender")                  return "var(--accent-blue)";
-  if (name === "Rasmus_Arbejde")            return "var(--accent-pink)";
+  if (name === "Rasmus_skole")     return "var(--accent-red)";
+  if (name === "Cand")             return "var(--accent-indigo)";
+  if (name === "Jennifer_arbejde") return "var(--accent-green)";
+  if (name === "Kalender")         return "var(--accent-blue)";
+  if (name === "Rasmus_arbejde")   return "var(--accent-pink)";
   return "var(--accent-blue)";
 }
 
@@ -63,13 +62,8 @@ export default function CalendarWidget() {
   const [fetchErrors, setFetchErrors] = useState<string[]>([]);
   const [enabledCals, setEnabledCals] = useState<Set<string> | null>(null);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(FILTER_KEY);
-      if (raw) setEnabledCals(new Set(JSON.parse(raw)));
-    } catch { /* ignore */ }
-
-    fetch("/api/calendar")
+  const loadCalendar = useCallback((bust = false) => {
+    fetch(`/api/calendar${bust ? "?bust=1" : ""}`)
       .then((r) => r.json())
       .then((d) => {
         setConfigured(d.configured ?? true);
@@ -80,6 +74,18 @@ export default function CalendarWidget() {
       .catch(() => setError("Failed to load"))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(FILTER_KEY);
+      if (raw) setEnabledCals(new Set(JSON.parse(raw)));
+    } catch { /* ignore */ }
+
+    loadCalendar();
+    // Auto-refresh every hour so long-planned events show up without a manual refresh
+    const interval = setInterval(() => loadCalendar(true), 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [loadCalendar]);
 
   const visible = enabledCals ? events.filter((e) => enabledCals.has(e.calendar)) : events;
   const eventsByDay = buildEventsByDay(visible);

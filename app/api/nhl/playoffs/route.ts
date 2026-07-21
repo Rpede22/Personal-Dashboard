@@ -78,6 +78,8 @@ async function computeH2H(team1: string, team2: string): Promise<H2HRecord & { a
       const awayAbbrev = g.awayTeam?.abbrev ?? "";
       if (homeAbbrev !== team2 && awayAbbrev !== team2) continue;
       if (g.gameState !== "OFF" && g.gameState !== "FINAL") continue;
+      // Regular season only — gameType 2 = regular season, 3 = playoffs, 1 = preseason
+      if (g.gameType !== 2) continue;
       const t1Score = homeAbbrev === team1 ? g.homeTeam.score : g.awayTeam.score;
       const t2Score = homeAbbrev === team2 ? g.homeTeam.score : g.awayTeam.score;
       if (typeof t1Score !== "number" || typeof t2Score !== "number") continue;

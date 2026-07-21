@@ -69,6 +69,8 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Auto-refresh:** The sports widget on the dashboard and every team hub page automatically re-fetch data every 5 minutes while the app is open — no manual refresh needed.
 
+**NHL Playoff Predicted** (tab in the NHL hub) is always populated — the bracket loads on mount using regular-season standings + Monte Carlo win probabilities. Head-to-head records feeding the prediction are filtered to `gameType === 2` (regular season) so live playoff results never bias the pre-playoff forecast.
+
 **Team box gradient borders** use real club colours — the GradientBorder wrapper component (outer div = gradient background + 3 px padding, inner div = surface colour) is the only reliable way to get gradient borders with `border-radius` in React inline styles.
 
 **Dashboard widget heights** are equalised per row — CSS grid stretches each pair of widgets to match the taller one so neither column looks sparse.
@@ -96,20 +98,33 @@ Run logs and training plans are stored in SQLite. Strava sync is optional.
 
 - **Manual logging:** add runs directly in the hub.
 - **Strava sync:** connects via OAuth (tokens stored in `.strava-config.json`, git-ignored). Imports the last 30 days of activities, deduplicates by date + distance, and stores the Strava activity ID (`stravaId`) on each run. When a Strava run is synced for a day that already has a run plan, the plan is automatically removed.
-The Running Hub has two tabs:
+The Running Hub has three tabs:
 - **Overview** — training progress charts, race config, Strava integration, run planner.
 - **Run Log** — the full run table with `+ Log Run` button. Shows 5 most recent by default; click **All Runs (N)** to see the full history. Click any row to open the run detail popup.
+- **Training** — data-driven weekly plan built from your actual run log:
+  - Last-completed-week + this-week snapshots (km, run count, longest run, avg pace).
+  - 8-week volume bar chart with next-week target overlaid in orange.
+  - Automatic warnings if last week looked off (only 1 run, no long run, long run > 55% of volume).
+  - Next-week target: **+10%** on your **rolling 3-week average** (much more stable than "last week" when training is uneven — a skipped week or one big burst doesn't whipsaw the target), **−25% cutback** after 3 up-weeks, or conservative starter volume if the avg is below ~5 km/week. Both the rolling average and last-week totals are shown so you can see what the plan is built on.
+  - Suggested sessions split by 80/20 (~30% long, 10% speed, 15% tempo, ~45% easy over 2–3 days), each with target distance and coaching notes.
+  - All logic lives in [lib/training-planner.ts](lib/training-planner.ts) — pure functions, easy to tweak the framework.
 
-- **Run detail popup:** for Strava-imported runs, shows a Leaflet route map (decoded from the encoded polyline), core stats (distance, duration, pace, elevation), heart rate and cadence (if recorded), and a per-km splits table. Manually logged runs show basic stats only. The popup has a fixed header (title + close button always visible) with the rest scrollable below. Hit **Sync runs** once after updating to backfill `stravaId` on existing Strava imports.
-- **Training progress:** two bar charts appear once you have runs logged — *Weekly Kilometers* (last 12 weeks, current week highlighted) and *Longest Run* (best run per month for the last 6 months).
+- **Run detail popup:** for Strava-imported runs, shows a large Leaflet route map (400 px tall with a **⛶ Fullscreen** button that expands to the full viewport). Fullscreen has a solid black background, a bright red **✕ Exit fullscreen** button (always visible over any map colour), locks body scroll while active, and swallows wheel/touch events so the modal underneath doesn't scroll behind. Escape also exits. The map uses a `ResizeObserver` to re-invalidate Leaflet's tile layout whenever the container resizes, which fixes the half-loaded / partial-tile bug during fullscreen transitions. Popup also shows core stats (distance, duration, pace, elevation), heart rate and cadence (if recorded), and a per-km splits table. Manually logged runs show basic stats only. Fixed header (title + close button always visible), rest scrolls below.
+- **Strava errors** are shown with actionable hints — 403 (missing scope, reconnect Strava), 401 (token expired), 429 (rate limit).
+- **Training progress:** two bar charts appear once you have runs logged — *Weekly Kilometers* (last 12 weeks, current week highlighted; label shows the Mon–Sun date range, e.g. `18 May – 24 May`) and *Longest Run* (best run per month for the last 6 months; label is just the month name, e.g. `Dec`).
+- **Stats bar** at the top of the hub (This week / Last 30 days / etc.) is shown to 2 decimals so nothing is rounded away.
 - **Race target:** set a race date and/or race distance in the hub. The widget and stats bar show days remaining and the target distance label.
 - **7-day planner:** assign `easy` / `tempo` / `long` / `rest` days with optional target distance. Switch to **Month view** for a full calendar overview. Plans on days where a run has been logged are automatically cleared on sync.
 
 ### Strava setup
-1. Create an app at [strava.com/settings/api](https://www.strava.com/settings/api). Set **Authorization Callback Domain** to `localhost`.
+1. Create an app at [strava.com/settings/api](https://www.strava.com/settings/api). Set **Authorization Callback Domain** to exactly `localhost` (no port, no protocol, no slash).
 2. Add `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET` to `.env.local`.
-3. Click **Connect Strava** in the Running hub.
+3. Click **Connect Strava** in the Running hub — you'll always see the consent screen (Strava OAuth is called with `approval_prompt=force`); tick **View data about your private activities** and Authorize.
 4. After first sync, click **Sync runs** once more — this backfills the Strava activity ID on runs that were imported before the detail popup was added.
+
+**Note on API access:** Strava is gating public API access behind a paid subscription. If Connect Strava logs in but nothing happens afterwards, or you see a message about *"API adgang kun for abonnenter"*, that's Strava's paywall — you'll need an eligible subscription for the sync to work.
+
+**How the OAuth callback URL is built:** both `/api/strava/auth` and `/api/strava/callback` derive the origin from the request's `Host` header (not `NEXT_PUBLIC_BASE_URL` or `request.url`) so the callback works on whichever port Next.js is actually running on — 3000 in dev, 3001 in the packaged Electron app. Do NOT set `NEXT_PUBLIC_BASE_URL` for this to work.
 
 ---
 
@@ -124,7 +139,8 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 - **Hours spent** — log actual hours spent so far on in-progress tasks directly in the School Hub. The scheduler subtracts spent hours from the estimate and reschedules automatically.
 - **Study days** — toggle which days of the week count as study days (Mon–Sun, indigo = active). Non-study days are skipped entirely by the scheduler. Persists to `.school-settings.json`.
 - **Hours per day** — set your preferred daily study target with the **h/day** input next to the day toggles (default 3 h, step 0.5). This becomes the scheduler's soft cap. Days in the Work Plan are green when at or under the target, red when over.
-- **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears in both the hub and the dashboard widget. A sequential scheduler completes one assignment fully before scheduling the next (sorted by deadline). If an assignment finishes with time left on its last day, the next one begins that same day. **Look-ahead:** before scheduling each assignment the scheduler checks whether future assignments can fit at the configured h/day rate after it finishes at its natural pace. If they can't, the current assignment is automatically compressed to a higher daily rate, freeing the extra days for later tasks. The cap escalates smoothly up to 10 h/day as the absolute maximum. All displayed hours are rounded up to the nearest 0.5 h. The last scheduled day for each assignment is shown as "Est. done". Due-time cap: if a due time is set, the due day itself is capped at `(dueHour − 9)` available hours.
+- **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears in both the hub and the dashboard widget. A sequential scheduler completes one assignment fully before scheduling the next (sorted by deadline). If an assignment finishes with time left on its last day, the next one begins that same day. **Look-ahead:** before scheduling each assignment the scheduler checks whether future assignments can fit at the configured h/day rate after it finishes at its natural pace. If they can't, the current assignment is automatically compressed to a higher daily rate, freeing the extra days for later tasks. The cap escalates smoothly up to 10 h/day as the absolute maximum. All displayed hours are rounded up to the nearest 0.5 h. The last scheduled day for each assignment is shown as "Est. done".
+- **Finish-early buffer** — the scheduler never puts work on the deadline itself. If no due time is set, the last scheduled day is the day *before* `dueDate`. If a due time is set, the due day is capped at `(dueHour − 1 − 9)` hours instead of `(dueHour − 9)`, leaving a one-hour safety margin (change `BUFFER_HOURS` in `lib/load-distributor.ts` to widen or shrink the margin).
 - **Schedule-aware colours** — priority dots reflect the schedule: green = fits within the h/day target, orange = tight (needs hard cap), red = overdue. Tasks without estimates use days-to-deadline proximity instead.
 - **Dashboard widget** mirrors the full hub view (estimated hours, due date, countdown, read-only hours spent) — navigate to the hub only to add tasks or update hours spent. Work Plan day colours always match the hub: the widget reads `hoursPerDay` from the API (not a hardcoded value).
 
@@ -134,10 +150,15 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 
 Events are pulled from **iCloud CalDAV** using Apple's PROPFIND/REPORT protocol. No third-party calendar service is involved.
 
-- Fetches calendars named: `Arbejde`, `Skolerelateret`, `Kalender`, `Cand` (configurable in `app/api/calendar/route.ts`).
-- Window: 31 days back → 92 days ahead (supports 3 months of navigation in the hub).
+- **Sources & names shown in the app:**
+  - iCloud CalDAV: `Arbejde` (remapped to display as `Jennifer_arbejde`), `Kalender`. Configured in `app/api/calendar/route.ts` via `CALDAV_INCLUDE` + the `CALDAV_DISPLAY_NAME` mapping.
+  - Public ICS URLs: `CALENDAR_SDU_URL` → `Rasmus_skole`, `CALENDAR_CAND_URL` → `Cand`, `CALENDAR_ARBEJDE_URL` → `Rasmus_arbejde`.
+- **Window: 31 days back → 365 days ahead** — long-lead events like exam dates months out show up immediately.
+- **Recurring events (`RRULE`) are expanded** — a weekly event whose base `DTSTART` is outside the window still produces all its individual occurrences inside the window (previously only the base date was checked, so recurring events silently disappeared).
+- **All configured calendars get a filter chip** even if they currently have zero events in the window — the API returns a `calendars[]` list that the hub uses to build the chip row. Empty semester-break feeds like `Rasmus_skole` therefore stay visible instead of vanishing until events return.
+- **Renaming migration:** the hub's stored `calendarFilter` (localStorage) is auto-migrated when a calendar is renamed in the code — known names retain their on/off state and new/renamed names default to enabled.
+- **Auto-sync every hour** — the hub and the dashboard widget both re-fetch (`?bust=1` to skip the server cache) every 60 min, so calendars added upstream never lag behind by more than an hour without a manual reload.
 - **App-specific password required** — never use your main Apple ID password. Generate one at [appleid.apple.com](https://appleid.apple.com) → Security → App-Specific Passwords.
-- Public ICS feed URLs (`CALENDAR_SDU_URL`, `CALENDAR_CAND_URL`, `CALENDAR_ARBEJDE_URL`) are also supported as a simpler alternative.
 
 ---
 
