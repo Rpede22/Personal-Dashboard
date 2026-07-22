@@ -1,8 +1,7 @@
 import Link from "next/link";
 import SportsWidget from "@/components/dashboard/SportsWidget";
 import SchoolWidget from "@/components/dashboard/SchoolWidget";
-import WoWWidget from "@/components/dashboard/WoWWidget";
-import LoLWidget from "@/components/dashboard/LoLWidget";
+import GamesWidget from "@/components/dashboard/GamesWidget";
 import RunningWidget from "@/components/dashboard/RunningWidget";
 import WorkhubWidget from "@/components/dashboard/WorkhubWidget";
 import CalendarWidget from "@/components/dashboard/CalendarWidget";
@@ -39,15 +38,8 @@ export default function DashboardPage() {
           <SchoolWidget />
         </Link>
 
-        {/* Row 2: WoW + LoL (split) | Running */}
-        <div className="h-full grid gap-3" style={{ gridTemplateRows: "1fr 1fr" }}>
-          <Link href="/wow" className="block group">
-            <WoWWidget />
-          </Link>
-          <Link href="/lol" className="block group">
-            <LoLWidget />
-          </Link>
-        </div>
+        {/* Row 2: Games (WoW/LoL tab-switcher) | Running */}
+        <div className="h-full"><GamesWidget /></div>
 
         <Link href="/running" className="block group h-full">
           <RunningWidget />

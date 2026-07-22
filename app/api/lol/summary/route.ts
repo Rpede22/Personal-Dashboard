@@ -4,7 +4,7 @@ import {
   hasRiotKey,
   fetchAccountByRiotId,
   fetchSummonerByPuuid,
-  fetchRanksBySummonerId,
+  fetchRanksByPuuid,
   fetchMatchIds,
   fetchMatch,
   fetchTopMasteries,
@@ -63,9 +63,11 @@ export async function GET(request: Request) {
     await prisma.lolAccount.update({ where: { id: accountId }, data: { puuid } });
   }
 
-  // 2. Fan out the remaining calls in parallel
-  const [summonerRes, matchIdsRes, masteryRes, liveRes, championsById, dragonVersion] = await Promise.all([
+  // 2. Fan out the remaining calls in parallel. Everything keys off puuid now,
+  //    so no serial dependency on the summoner-id (Riot removed that field).
+  const [summonerRes, ranksRes, matchIdsRes, masteryRes, liveRes, championsById, dragonVersion] = await Promise.all([
     fetchSummonerByPuuid(puuid, account.region),
+    fetchRanksByPuuid(puuid, account.region),
     fetchMatchIds(puuid, account.region, 10),
     fetchTopMasteries(puuid, account.region, 5),
     fetchActiveGame(puuid, account.region),
@@ -80,8 +82,6 @@ export async function GET(request: Request) {
     );
   }
   const summoner = summonerRes.data;
-
-  const ranksRes = await fetchRanksBySummonerId(summoner.id, account.region);
   const ranks: RiotLeagueEntry[] = ranksRes.ok ? ranksRes.data : [];
 
   // 3. Fetch match details (up to 10). Riot rate-limits so serialize with small stagger.

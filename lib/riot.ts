@@ -71,8 +71,9 @@ export interface RiotAccount {
 }
 
 export interface RiotSummoner {
-  id: string;               // encrypted summonerId — legacy but still needed for League-v4
-  accountId: string;
+  // Riot removed `id` and `accountId` from Summoner-v4 by-puuid responses in
+  // late 2025 — only these four fields are returned now. Use puuid for
+  // downstream calls (League-v4, Spectator-v5, Mastery-v4).
   puuid: string;
   profileIconId: number;
   summonerLevel: number;
@@ -106,6 +107,7 @@ export interface RiotMatchParticipant {
   win: boolean;
   teamPosition: string;    // "TOP" | "JUNGLE" | "MIDDLE" | "BOTTOM" | "UTILITY"
   visionScore: number;
+  teamId: number;          // 100 = blue side, 200 = red side
 }
 
 export interface RiotMatchInfo {
@@ -162,10 +164,12 @@ export function fetchSummonerByPuuid(puuid: string, platform: string) {
   return riotFetch<RiotSummoner>(url, { revalidate: 60 * 60 }); // 1h — profile icon + level can change
 }
 
-/** Solo/duo + flex ranked entries. Platform endpoint, keyed by summonerId (not puuid). */
-export function fetchRanksBySummonerId(summonerId: string, platform: string) {
-  const url = `https://${platform.toLowerCase()}.api.riotgames.com/lol/league/v4/entries/by-summoner/${encodeURIComponent(summonerId)}`;
-  return riotFetch<RiotLeagueEntry[]>(url, { revalidate: 60 * 5 }); // 5 min after a match rank can shift
+/** Solo/duo + flex ranked entries. Platform endpoint, keyed by puuid (Riot's
+ *  by-summoner variant is deprecated — Summoner-v4 no longer returns the
+ *  encrypted summonerId, so we must use the newer by-puuid path). */
+export function fetchRanksByPuuid(puuid: string, platform: string) {
+  const url = `https://${platform.toLowerCase()}.api.riotgames.com/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`;
+  return riotFetch<RiotLeagueEntry[]>(url, { revalidate: 60 * 5 });
 }
 
 /** Last N match IDs. Regional endpoint. */

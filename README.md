@@ -94,19 +94,26 @@ Characters are stored in SQLite and enriched via **Raider.IO** (public API, no k
 
 ---
 
-## League of Legends
+## Games — WoW + League of Legends
 
-Account tracker with a per-Riot-ID detail pane. Add accounts as `gameName#tagLine` + platform region (`euw1`, `na1`, `kr`, …).
+Both games share a `/games` hub with a WoW/LoL tab switcher. `/wow` and `/lol` are aliases that open the same hub on the right tab, so old bookmarks and dashboard widget links keep working.
 
-- **Dashboard widget** (`LoLWidget`) shows the top 3 saved accounts stacked next to the WoW widget on the Games row.
-- **Hub** (`/lol`) — sidebar of accounts + detail pane. Add with the **+ Add** button, remove from the detail pane.
-- **Live Riot API data** — with `RIOT_API_KEY` set, the detail pane shows:
-  - Profile icon + summoner level, plus a red **🔴 LIVE** badge when the summoner is in an active game.
-  - Ranked cards: Solo/Duo + Flex with tier + LP + wins/losses + win-rate. Tier-colored (iron → challenger).
-  - Last 10 matches: W/L color bar + champion icon + KDA + CS/min + duration + `time ago`.
-  - Top-5 champion masteries with icons and mastery level.
-  - `⟳ Refresh` re-fetches. Errors surface with actionable hints (missing key / rate limit / expired key).
-- Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/) (24-hour dev key or apply for production). Dev tier rate limits: 20 req / 1 s and 100 req / 2 min. Set `RIOT_API_KEY` in `.env.local` and rebuild.
+### League of Legends
+
+Add accounts as `gameName#tagLine` + platform region (`euw1`, `na1`, `kr`, …). With `RIOT_API_KEY` set, the detail pane shows:
+
+- **Profile** — icon + summoner level, plus a red **🔴 LIVE** badge when the summoner is in an active game.
+- **Ranked cards** — Solo/Duo + Flex tier (iron → challenger) with **rank emblem icon**, LP, wins/losses, win-rate.
+- **Match list** — filter by queue (**All / Solo / Flex / ARAM / Other**), each row shows W/L color bar, champion icon, KDA + KDA ratio, CS + CS/min, duration, and time ago. **Click any row** for a full match popover with both team scoreboards (10 players, KDA, CS, gold, damage, vision — your player's row highlighted).
+- **Load more** — "Load 10 more" button under the match list; automatically stops when there are no more matches.
+- **Top-5 champion masteries** with icons.
+- `⟳ Refresh` re-fetches. Errors surface with actionable hints (missing key / rate limit / expired key).
+
+Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/) (24-hour dev key or apply for production). Dev tier rate limits: 20 req / 1 s and 100 req / 2 min. Set `RIOT_API_KEY` in `.env.local` and rebuild.
+
+### Dashboard widget
+
+`WoWWidget` + `LoLWidget` are stacked in a "Games" column on the dashboard. Clicking either widget opens the unified hub on the matching tab.
 
 ---
 

@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
+
+const MatchDetailModal = dynamic(() => import("./MatchDetailModal"), { ssr: false });
 
 interface LolAccount {
   id: number;
@@ -133,7 +136,7 @@ const REGIONS: { value: string; label: string }[] = [
   { value: "ru",   label: "Russia" },
 ];
 
-export default function LoLHub() {
+export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const [accounts, setAccounts] = useState<LolAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -142,15 +145,67 @@ export default function LoLHub() {
 
   // Riot data for the selected account
   const [summary, setSummary] = useState<LoLSummary | null>(null);
+  const [openMatchId, setOpenMatchId] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summaryErrorStatus, setSummaryErrorStatus] = useState<number | null>(null);
+
+  // Match list controls
+  type QueueFilter = "all" | "solo" | "flex" | "aram" | "other";
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [noMoreMatches, setNoMoreMatches] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+
+  async function loadMoreMatches() {
+    if (!summary) return;
+    setLoadingMore(true);
+    setLoadMoreError(null);
+    try {
+      const start = summary.matches.length;
+      const region = accounts.find((a) => a.id === selectedId)?.region;
+      if (!region) throw new Error("No region for selected account");
+      const res = await fetch(`/api/lol/matches?puuid=${encodeURIComponent(summary.puuid)}&region=${encodeURIComponent(region)}&start=${start}&count=10`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const data: { matches: LoLSummary["matches"] } = await res.json();
+      if (!data.matches || data.matches.length === 0) {
+        setNoMoreMatches(true);
+      } else {
+        setSummary({ ...summary, matches: [...summary.matches, ...data.matches] });
+        if (data.matches.length < 10) setNoMoreMatches(true);
+      }
+    } catch (e) {
+      setLoadMoreError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+  const QUEUE_FILTER_CHIPS: { key: QueueFilter; label: string }[] = [
+    { key: "all",   label: "All"   },
+    { key: "solo",  label: "Solo"  },
+    { key: "flex",  label: "Flex"  },
+    { key: "aram",  label: "ARAM"  },
+    { key: "other", label: "Other" },
+  ];
+  function matchInFilter(queueId: number, f: QueueFilter): boolean {
+    if (f === "all")   return true;
+    if (f === "solo")  return queueId === 420;
+    if (f === "flex")  return queueId === 440;
+    if (f === "aram")  return queueId === 450;
+    // "other" = anything not in the recognised main queues
+    return queueId !== 420 && queueId !== 440 && queueId !== 450;
+  }
 
   async function loadSummary(accountId: number) {
     setSummary(null);
     setSummaryError(null);
     setSummaryErrorStatus(null);
     setSummaryLoading(true);
+    setNoMoreMatches(false);
+    setLoadMoreError(null);
     try {
       const res = await fetch(`/api/lol/summary?accountId=${accountId}`);
       if (!res.ok) {
@@ -233,18 +288,19 @@ export default function LoLHub() {
   const selected = accounts.find((a) => a.id === selectedId) ?? null;
 
   return (
-    <div className="min-h-screen p-6 page-bg">
-      {/* ── Sticky header ── */}
-      <div className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
-            ← Dashboard
-          </Link>
-          <h1 className="text-2xl font-bold" style={{ color: "var(--accent-blue)" }}>
-            ⚔️ League of Legends
-          </h1>
+    <div className={hideHeader ? "" : "min-h-screen p-6 page-bg"}>
+      {!hideHeader && (
+        <div className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg">
+          <div className="flex items-center gap-4">
+            <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+              ← Dashboard
+            </Link>
+            <h1 className="text-2xl font-bold" style={{ color: "var(--accent-blue)" }}>
+              ⚔️ League of Legends
+            </h1>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-6">
         {/* ── Accounts sidebar ── */}
@@ -472,19 +528,31 @@ export default function LoLHub() {
                           const games = r.wins + r.losses;
                           const wr = games > 0 ? Math.round((r.wins / games) * 100) : 0;
                           const color = tierColor(r.tier);
+                          const emblem = `https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-static-assets/global/default/images/ranked-emblem/emblem-${r.tier.toLowerCase()}.png`;
                           return (
-                            <div key={r.queueType} className="rounded-2xl p-4" style={{ background: "var(--surface)", border: `1px solid ${color}55` }}>
-                              <div className="text-xs uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>
-                                {label}
-                              </div>
-                              <div className="text-xl font-bold capitalize" style={{ color }}>
-                                {r.tier.toLowerCase()} {r.rank}
-                              </div>
-                              <div className="text-sm" style={{ color: "var(--text)" }}>
-                                {r.leaguePoints} LP · {r.wins}W {r.losses}L ·{" "}
-                                <span style={{ color: wr >= 55 ? "var(--accent-green)" : wr < 45 ? "var(--accent-red)" : "var(--text-muted)" }}>
-                                  {wr}% WR
-                                </span>
+                            <div key={r.queueType} className="rounded-2xl p-4 flex items-center gap-3" style={{ background: "var(--surface)", border: `1px solid ${color}55` }}>
+                              <img
+                                src={emblem}
+                                alt=""
+                                width={56}
+                                height={56}
+                                className="flex-shrink-0"
+                                style={{ objectFit: "contain" }}
+                                onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>
+                                  {label}
+                                </div>
+                                <div className="text-xl font-bold capitalize" style={{ color }}>
+                                  {r.tier.toLowerCase()} {r.rank}
+                                </div>
+                                <div className="text-sm" style={{ color: "var(--text)" }}>
+                                  {r.leaguePoints} LP · {r.wins}W {r.losses}L ·{" "}
+                                  <span style={{ color: wr >= 55 ? "var(--accent-green)" : wr < 45 ? "var(--accent-red)" : "var(--text-muted)" }}>
+                                    {wr}% WR
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           );
@@ -498,13 +566,41 @@ export default function LoLHub() {
                   )}
 
                   {/* ── Recent matches ── */}
-                  {summary.matches.length > 0 && (
+                  {summary.matches.length > 0 && (() => {
+                    const filtered = summary.matches.filter((m) => matchInFilter(m.queueId, queueFilter));
+                    return (
                     <div>
-                      <h3 className="text-sm font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
-                        Recent matches ({summary.matches.length})
-                      </h3>
+                      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-2">
+                        <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                          Recent matches ({filtered.length}{filtered.length !== summary.matches.length ? ` / ${summary.matches.length}` : ""})
+                        </h3>
+                        <div className="flex gap-1">
+                          {QUEUE_FILTER_CHIPS.map((c) => {
+                            const active = queueFilter === c.key;
+                            return (
+                              <button
+                                key={c.key}
+                                onClick={() => setQueueFilter(c.key)}
+                                className="text-xs px-2.5 py-1 rounded-full font-medium"
+                                style={{
+                                  background: active ? "var(--accent-blue)" : "var(--surface-2)",
+                                  color: active ? "#fff" : "var(--text-muted)",
+                                  border: "1px solid var(--border)",
+                                }}
+                              >
+                                {c.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      {filtered.length === 0 ? (
+                        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                          No matches in this queue. Try a different filter.
+                        </p>
+                      ) : (
                       <div className="space-y-1.5">
-                        {summary.matches.map((m) => {
+                        {filtered.map((m) => {
                           if (!m.me) return null;
                           const cs = m.me.totalMinionsKilled + m.me.neutralMinionsKilled;
                           const csPerMin = m.gameDuration > 0 ? (cs / (m.gameDuration / 60)).toFixed(1) : "0";
@@ -513,7 +609,9 @@ export default function LoLHub() {
                           return (
                             <div
                               key={m.id}
-                              className="rounded-lg px-3 py-2 flex items-center gap-3"
+                              onClick={() => setOpenMatchId(m.id)}
+                              title="Click for full match detail"
+                              className="rounded-lg px-3 py-2 flex items-center gap-3 cursor-pointer hover:brightness-110"
                               style={{
                                 background: "var(--surface)",
                                 border: `1px solid ${resultColor}44`,
@@ -548,8 +646,37 @@ export default function LoLHub() {
                           );
                         })}
                       </div>
+                      )}
+
+                      {/* Load more */}
+                      <div className="flex flex-col items-center gap-1 mt-3">
+                        {noMoreMatches ? (
+                          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            No more matches on record.
+                          </p>
+                        ) : (
+                          <button
+                            onClick={loadMoreMatches}
+                            disabled={loadingMore}
+                            className="text-sm px-4 py-1.5 rounded-md font-medium"
+                            style={{
+                              background: loadingMore ? "var(--surface-2)" : "var(--accent-blue)22",
+                              color: "var(--accent-blue)",
+                              border: "1px solid var(--accent-blue)44",
+                            }}
+                          >
+                            {loadingMore ? "Loading…" : "Load 10 more"}
+                          </button>
+                        )}
+                        {loadMoreError && (
+                          <p className="text-xs" style={{ color: "var(--accent-red)" }}>
+                            {loadMoreError}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {/* ── Top masteries ── */}
                   {summary.mastery.length > 0 && (
@@ -597,6 +724,16 @@ export default function LoLHub() {
           )}
         </section>
       </div>
+
+      {/* Match detail popover */}
+      {openMatchId && selected && summary && (
+        <MatchDetailModal
+          matchId={openMatchId}
+          region={selected.region}
+          focusPuuid={summary.puuid}
+          onClose={() => setOpenMatchId(null)}
+        />
+      )}
     </div>
   );
 }
