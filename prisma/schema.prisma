@@ -79,3 +79,19 @@ model WowGearWishlist {
 
   @@unique([characterId, slot])
 }
+
+// League of Legends account tracked in the GameHub. Riot IDs are the modern
+// identifier: `gameName#tagLine` (e.g. "Rasmus#EUW"). Puuid is the immutable
+// Riot player id, populated on first successful lookup via the Riot API.
+model LolAccount {
+  id        Int      @id @default(autoincrement())
+  gameName  String
+  tagLine   String
+  region    String   @default("euw1")  // platform routing value (euw1, na1, kr, …)
+  puuid     String?                    // filled in once Riot API returns it
+  sortOrder Int      @default(0)
+  notes     String   @default("")
+  createdAt DateTime @default(now())
+
+  @@unique([gameName, tagLine, region])
+}

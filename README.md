@@ -60,6 +60,8 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Source priority for football standings:** FotMob → TheSportsDB.
 
+**Esbjerg Energy uses [Metal Ligaen's own JSON](https://s3.dualstack.eu-west-1.amazonaws.com/den.hokejovyzapis.cz)** (via [lib/metalligaen.ts](lib/metalligaen.ts)) instead of TheSportsDB. This is the same data feed metalligaen.dk uses on its own site through the icestats.at widgets. It gives us proper standings, a full match schedule, **and a live playoff bracket** (see the Playoffs tab → Live sub-tab) — with best-of-7 pip rows, per-game scores, and OT/SO markers.
+
 **Danish 1st Division split table:** After round 22, FotMob returns three sub-tables (Promotion Group / Relegation Group / 1. Division). The hub and widget both display the team's Oprykningsspil rank when available.
 
 **Goal timelines:** Click any finished match to expand a goal-by-goal timeline with scorer, assist, and running score.
@@ -89,6 +91,22 @@ Characters are stored in SQLite and enriched via **Raider.IO** (public API, no k
 - **Raid tier changes:** update `CURRENT_RAID_TIER` + `CURRENT_TIER_INSTANCES` + `CURRENT_TIER_BOSS_COUNT` in `app/api/wow/sync/route.ts`, update `CURRENT_RAID_TIER` in `app/api/wow/character/route.ts`, update boss count in `prisma/seed.ts`, then `npx prisma db seed`.
 - **Gear wishlist** — below the weekly checklist, a panel shows all 16 gear slots (Head, Neck, Shoulders, Back, Chest, Wrists, Main Hand, Off Hand on the left; Hands, Waist, Legs, Feet, Ring 1, Ring 2, Trinket 1, Trinket 2 on the right). Type an item name into any slot, then click ✓ to mark it as obtained. The ✓ button is disabled until an item name is entered. Persists to SQLite per character.
 - **Character notes** — a free-text notes area below the gear wishlist, saved automatically on blur. Stored on the `WowCharacter` record so notes are per-character and persist across sessions.
+
+---
+
+## League of Legends
+
+Account tracker with a per-Riot-ID detail pane. Add accounts as `gameName#tagLine` + platform region (`euw1`, `na1`, `kr`, …).
+
+- **Dashboard widget** (`LoLWidget`) shows the top 3 saved accounts stacked next to the WoW widget on the Games row.
+- **Hub** (`/lol`) — sidebar of accounts + detail pane. Add with the **+ Add** button, remove from the detail pane.
+- **Live Riot API data** — with `RIOT_API_KEY` set, the detail pane shows:
+  - Profile icon + summoner level, plus a red **🔴 LIVE** badge when the summoner is in an active game.
+  - Ranked cards: Solo/Duo + Flex with tier + LP + wins/losses + win-rate. Tier-colored (iron → challenger).
+  - Last 10 matches: W/L color bar + champion icon + KDA + CS/min + duration + `time ago`.
+  - Top-5 champion masteries with icons and mastery level.
+  - `⟳ Refresh` re-fetches. Errors surface with actionable hints (missing key / rate limit / expired key).
+- Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/) (24-hour dev key or apply for production). Dev tier rate limits: 20 req / 1 s and 100 req / 2 min. Set `RIOT_API_KEY` in `.env.local` and rebuild.
 
 ---
 

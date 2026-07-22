@@ -20,6 +20,12 @@ import {
   FMFixture,
   FMSubTable,
 } from "@/lib/fotmob";
+import {
+  mlFetchStandings,
+  mlFetchMatches,
+  pickLast5,
+  pickNext5,
+} from "@/lib/metalligaen";
 
 // ── Cache ──────────────────────────────────────────────────────────────────────
 const cache = new Map<string, { data: unknown; ts: number }>();
@@ -41,6 +47,7 @@ export interface SportsStandingRow {
   won: number;
   drawn: number;
   lost: number;
+  otLosses?: number;   // hockey only — regulation-losses vs OT/SO losses are tracked separately
   goalsFor: number;
   goalsAgainst: number;
   goalDiff: number;
@@ -72,7 +79,7 @@ export interface SportsTeamData {
   next5: SportsEvent[];
   allStandings: SportsStandingRow[];
   subTables: SportsSubTable[];   // Populated when league has split tables (e.g. Danish 1st Div post-round 22)
-  source: "fotmob" | "api-football" | "thesportsdb";
+  source: "fotmob" | "api-football" | "thesportsdb" | "metalligaen";
 }
 
 // ── TheSportsDB helpers ────────────────────────────────────────────────────────
@@ -305,10 +312,33 @@ async function fetchTeamData(team: TeamConfig, full: boolean): Promise<{
   next5: SportsEvent[];
   allStandings: SportsStandingRow[];
   subTables: SportsSubTable[];
-  source: "fotmob" | "api-football" | "thesportsdb";
+  source: "fotmob" | "api-football" | "thesportsdb" | "metalligaen";
   resolvedConfig: ResolvedLeague;
 }> {
   const league = await resolveTeamLeague(team);
+
+  // ── Metal Ligaen (Esbjerg Energy) — use their own JSON via icestats.at ─────
+  // Way more reliable than TheSportsDB for Danish hockey and gives us proper
+  // playoff data for a separate /api/sports/playoffs endpoint.
+  if (team.slug === "esbjerg-energy") {
+    const [standings, allMatches] = await Promise.all([
+      mlFetchStandings(),
+      mlFetchMatches(),
+    ]);
+    if (standings.length > 0) {
+      const standing = standings.find((s) => s.team.toLowerCase().includes(team.matchKeyword.toLowerCase())) ?? null;
+      return {
+        standing,
+        last5: pickLast5(allMatches, team.matchKeyword),
+        next5: full ? pickNext5(allMatches, team.matchKeyword) : [],
+        allStandings: standings,
+        subTables: [],
+        source: "metalligaen",
+        resolvedConfig: league,
+      };
+    }
+    // Fall through to legacy sources if Metal Ligaen didn't respond
+  }
 
   // ── Prefer FotMob when configured (free, full standings, correct fixtures) ─
   if (team.fotmobLeagueId && team.fotmobTeamId) {

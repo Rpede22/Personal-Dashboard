@@ -21,6 +21,7 @@ interface StandingRow {
   won: number;
   drawn: number;
   lost: number;
+  otLosses?: number;   // hockey only — populated by Metal Ligaen source
   goalsFor: number;
   goalsAgainst: number;
   goalDiff: number;
@@ -101,6 +102,45 @@ function toCopenhagenDate(dateStr: string, timeStr: string): string {
 type Tab = "standings" | "schedule" | "playoffs";
 type PlayoffMode = "projected" | "live";
 
+// Shape of the live playoffs response from /api/sports/playoffs.
+// Mirrors lib/metalligaen.ts's `MetalLigaenPlayoffs`.
+interface LivePlayoffSide {
+  teamId: string;
+  team: string;
+  shortcut: string;
+  seed: number;
+  wins: number;
+  isWinner: boolean;
+}
+interface LivePlayoffGame {
+  date: string;
+  time: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeScore: number | null;
+  awayScore: number | null;
+  finished: boolean;
+  overtime: boolean;
+  shootout: boolean;
+}
+interface LivePlayoffSeries {
+  round: string;
+  roundOrder: number;
+  top: LivePlayoffSide;
+  bottom: LivePlayoffSide;
+  complete: boolean;
+  games: LivePlayoffGame[];
+}
+interface LivePlayoffs {
+  season: string;
+  rounds: Array<{
+    name: string;
+    order: number;
+    active: boolean;
+    series: LivePlayoffSeries[];
+  }>;
+}
+
 function gameResult(e: SportsEvent, keyword: string): "W" | "D" | "L" | null {
   if (!e.finished || e.homeScore === null || e.awayScore === null) return null;
   const isHome = e.homeTeam.toLowerCase().includes(keyword.toLowerCase());
@@ -133,7 +173,8 @@ const HOCKEY_HEADERS: { label: string; title: string }[] = [
   { label: "Team", title: "Team" },
   { label: "P",    title: "Games Played" },
   { label: "W",    title: "Wins" },
-  { label: "L",    title: "Losses" },
+  { label: "L",    title: "Regulation Losses" },
+  { label: "OTL",  title: "Overtime / Shootout Losses" },
   { label: "Pts",  title: "Points" },
 ];
 
@@ -211,6 +252,7 @@ function StandingsTable({
   rows,
   headers,
   isFootball,
+  isHockey,
   keyword,
   accent,
   colSpan,
@@ -222,6 +264,7 @@ function StandingsTable({
   rows: StandingRow[];
   headers: { label: string; title: string }[];
   isFootball: boolean;
+  isHockey: boolean;
   keyword: string;
   accent: string;
   colSpan: number;
@@ -280,6 +323,11 @@ function StandingsTable({
                     <td className="px-4 py-2">{row.won}</td>
                     {isFootball && <td className="px-4 py-2">{row.drawn}</td>}
                     <td className="px-4 py-2">{row.lost}</td>
+                    {isHockey && (
+                      <td className="px-4 py-2" style={{ color: "var(--text-muted)" }}>
+                        {row.otLosses ?? 0}
+                      </td>
+                    )}
                     {isFootball && (
                       <td className="px-4 py-2" style={{ color: row.goalDiff > 0 ? "var(--accent-green)" : row.goalDiff < 0 ? "var(--accent-red)" : "var(--text-muted)" }}>
                         {row.goalDiff > 0 ? "+" : ""}{row.goalDiff}
@@ -302,6 +350,9 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("standings");
   const [playoffMode, setPlayoffMode] = useState<PlayoffMode>("projected");
+  const [livePlayoffs, setLivePlayoffs] = useState<LivePlayoffs | null>(null);
+  const [livePlayoffsError, setLivePlayoffsError] = useState<string | null>(null);
+  const [livePlayoffsLoading, setLivePlayoffsLoading] = useState(false);
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[] | "loading" | "error">>({});
 
@@ -318,6 +369,25 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
     const interval = setInterval(loadData, 5 * 60 * 1000); // refresh every 5 minutes
     return () => clearInterval(interval);
   }, [teamSlug]);
+
+  // Live playoff bracket — lazy-loaded when the user opens the Live sub-tab.
+  useEffect(() => {
+    if (tab !== "playoffs" || playoffMode !== "live") return;
+    if (livePlayoffs || livePlayoffsLoading) return;
+    setLivePlayoffsLoading(true);
+    setLivePlayoffsError(null);
+    fetch(`/api/sports/playoffs?team=${teamSlug}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then((d: LivePlayoffs) => setLivePlayoffs(d))
+      .catch((err) => setLivePlayoffsError(err.message || "Failed to load playoffs"))
+      .finally(() => setLivePlayoffsLoading(false));
+  }, [tab, playoffMode, teamSlug, livePlayoffs, livePlayoffsLoading]);
 
   async function toggleGoals(matchId: string, date: string) {
     if (expandedMatch === matchId) { setExpandedMatch(null); return; }
@@ -441,6 +511,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
             rows={data.allStandings}
             headers={headers}
             isFootball={isFootball}
+            isHockey={isHockey}
             keyword={keyword}
             accent={accent}
             colSpan={colSpan}
@@ -459,6 +530,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                 rows={sub.rows}
                 headers={headers}
                 isFootball={isFootball}
+            isHockey={isHockey}
                 keyword={keyword}
                 accent={accent}
                 colSpan={colSpan}
@@ -618,19 +690,135 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
           </div>
 
           {playoffMode === "live" ? (
-            /* Live playoffs — data-source work still open. See ToDo.md. */
-            <div className="rounded-2xl p-8 text-center space-y-3" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-              <p className="text-base font-medium" style={{ color: "var(--text)" }}>Live playoff bracket not yet available</p>
-              <p className="text-sm max-w-lg mx-auto" style={{ color: "var(--text-muted)" }}>
-                TheSportsDB&apos;s free tier doesn&apos;t include Metal Ligaen playoff round metadata (only 5 events per season, no round tags).
-                Need to wire up an alternative source — SportAPI7 (already used for goal timelines) or Metal Ligaen&apos;s own JSON — before this view can populate.
-                Progress tracked in <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>ToDo.md</code>.
-              </p>
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                In the meantime, the <button onClick={() => setPlayoffMode("projected")} className="underline" style={{ color: accent }}>Projected</button> tab
-                shows the bracket you&apos;d get if the playoffs started today.
-              </p>
-            </div>
+            /* Live playoffs — Metal Ligaen JSON via icestats.at (Esbjerg Energy only). */
+            livePlayoffsLoading ? (
+              <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <p style={{ color: "var(--text-muted)" }}>Loading playoffs…</p>
+              </div>
+            ) : livePlayoffsError ? (
+              <div className="rounded-2xl p-8 text-center space-y-2" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <p className="font-medium" style={{ color: "var(--text)" }}>Live playoff bracket unavailable</p>
+                <p className="text-sm" style={{ color: "var(--text-muted)" }}>{livePlayoffsError}</p>
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Try the <button onClick={() => setPlayoffMode("projected")} className="underline" style={{ color: accent }}>Projected</button> tab
+                  for the &quot;if playoffs started today&quot; bracket instead.
+                </p>
+              </div>
+            ) : livePlayoffs ? (
+              <div className="space-y-6">
+                <div className="rounded-xl p-3 text-xs" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+                  Live from Metal Ligaen · Season {livePlayoffs.season}/{Number(livePlayoffs.season) + 1} · Best-of-7 series
+                </div>
+
+                {livePlayoffs.rounds.map((r) => (
+                  <div key={r.name}>
+                    <h3 className="font-semibold text-sm mb-3 uppercase tracking-wide" style={{ color: r.active ? accent : "var(--text-muted)" }}>
+                      {r.name}{r.active ? " · active" : ""}
+                    </h3>
+                    <div className={r.series.length === 1 ? "" : "grid grid-cols-1 md:grid-cols-2 gap-3"}>
+                      {r.series.map((s, si) => {
+                        const isThisTeam =
+                          s.top.team.toLowerCase().includes(keyword.toLowerCase()) ||
+                          s.bottom.team.toLowerCase().includes(keyword.toLowerCase());
+                        const topWon = s.complete && s.top.wins > s.bottom.wins;
+                        const bottomWon = s.complete && s.bottom.wins > s.top.wins;
+                        return (
+                          <div
+                            key={si}
+                            className="rounded-xl p-3 space-y-2"
+                            style={{
+                              background: isThisTeam ? `${accent}11` : "var(--surface-2)",
+                              border: `1px solid ${isThisTeam ? `${accent}44` : "var(--border)"}`,
+                            }}
+                          >
+                            {/* Series header — teams + best-of-7 pips */}
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs px-1.5 py-0.5 rounded font-bold" style={{ background: "var(--surface)", color: "var(--text-muted)" }}>
+                                    #{s.top.seed}
+                                  </span>
+                                  <span
+                                    className="font-semibold text-sm truncate"
+                                    style={{ color: s.top.team.toLowerCase().includes(keyword.toLowerCase()) ? accent : "var(--text)" }}
+                                  >
+                                    {s.top.team}
+                                  </span>
+                                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>🏠</span>
+                                </div>
+                              </div>
+                              <div className="text-center shrink-0 flex items-center gap-1">
+                                {[0, 1, 2, 3].map((i) => (
+                                  <div
+                                    key={i}
+                                    className="w-3.5 h-3.5 rounded-sm"
+                                    style={{
+                                      background: i < s.top.wins ? (topWon ? "var(--accent-green)" : accent) : "var(--surface)",
+                                      border: "1px solid var(--border)",
+                                    }}
+                                  />
+                                ))}
+                                <span className="text-sm font-bold mx-1" style={{ color: "var(--text-muted)" }}>
+                                  {s.top.wins}–{s.bottom.wins}
+                                </span>
+                                {[0, 1, 2, 3].map((i) => (
+                                  <div
+                                    key={i}
+                                    className="w-3.5 h-3.5 rounded-sm"
+                                    style={{
+                                      background: i < s.bottom.wins ? (bottomWon ? "var(--accent-green)" : "var(--accent-orange)") : "var(--surface)",
+                                      border: "1px solid var(--border)",
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                              <div className="flex-1 min-w-0 text-right">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <span
+                                    className="font-semibold text-sm truncate"
+                                    style={{ color: s.bottom.team.toLowerCase().includes(keyword.toLowerCase()) ? accent : "var(--text)" }}
+                                  >
+                                    {s.bottom.team}
+                                  </span>
+                                  <span className="text-xs px-1.5 py-0.5 rounded font-bold" style={{ background: "var(--surface)", color: "var(--text-muted)" }}>
+                                    #{s.bottom.seed}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Game-by-game scores */}
+                            {s.games.length > 0 && (
+                              <div className="flex flex-wrap gap-1 text-[11px] pt-1 border-t" style={{ borderColor: "var(--border)" }}>
+                                {s.games.map((g, gi) => {
+                                  const scoreStr = g.finished
+                                    ? `${g.homeScore}–${g.awayScore}${g.overtime ? " OT" : g.shootout ? " SO" : ""}`
+                                    : g.date.slice(5);
+                                  return (
+                                    <span
+                                      key={gi}
+                                      title={`${g.homeTeam} vs ${g.awayTeam} · ${g.date}${g.time ? " " + g.time : ""}`}
+                                      className="px-1.5 py-0.5 rounded"
+                                      style={{
+                                        background: g.finished ? "var(--surface)" : "var(--surface-2)",
+                                        color: g.finished ? "var(--text)" : "var(--text-muted)",
+                                        border: "1px solid var(--border)",
+                                      }}
+                                    >
+                                      G{gi + 1}: {scoreStr}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null
           ) : !bracket || bracket.rounds.length === 0 ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <p style={{ color: "var(--text-muted)" }}>Need top 8 standings to build bracket</p>
@@ -646,7 +834,13 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                   <h3 className="font-semibold text-sm mb-3 uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
                     {ROUND_LABELS[ri]}
                   </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div
+                    className={
+                      round.length === 1
+                        ? "flex justify-center" // Final has a single matchup — center it
+                        : "grid grid-cols-1 md:grid-cols-2 gap-3"
+                    }
+                  >
                     {round.map((m, mi) => {
                       const isThisTeam = m.home.name.includes(keyword) || m.away.name.includes(keyword);
                       const homePct = Math.round(m.homeWinProb * 100);
@@ -659,6 +853,8 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                           style={{
                             background: isThisTeam ? `${accent}11` : "var(--surface-2)",
                             border: `1px solid ${isThisTeam ? `${accent}44` : "var(--border)"}`,
+                            width: round.length === 1 ? "100%" : undefined,
+                            maxWidth: round.length === 1 ? "38rem" : undefined,
                           }}
                         >
                           <div className="flex items-center gap-2">

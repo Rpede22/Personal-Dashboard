@@ -1308,9 +1308,9 @@ export default function RunningHub() {
           setApplyingPlan(true);
           setApplyPlanResult(null);
           try {
-            // Only push actual workouts to the planner. Rest days are the absence
-            // of a plan; adding "rest" rows would clutter the calendar.
-            const workouts = plan.sessions.filter((s) => s.type !== "rest");
+            // Push every session — including rest days — so the planner shows the
+            // full recovery-aware week the training tab recommends.
+            const workouts = plan.sessions;
 
             // Delete any existing next-week plans first so re-applying replaces cleanly.
             const nextMonday = dateOfNextWeek("Mon");
@@ -1353,7 +1353,7 @@ export default function RunningHub() {
         }
 
         return (
-          <div className="space-y-6 max-w-4xl">
+          <div className="space-y-6 max-w-4xl mx-auto">
 
             {/* ── Last week + current week snapshot ── */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
