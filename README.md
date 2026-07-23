@@ -104,16 +104,18 @@ Add accounts as `gameName#tagLine` + platform region (`euw1`, `na1`, `kr`, …).
 
 - **Profile** — icon + summoner level, plus a red **🔴 LIVE** badge when the summoner is in an active game.
 - **Ranked cards** — Solo/Duo + Flex tier (iron → challenger) with **rank emblem icon**, LP, wins/losses, win-rate.
-- **Match list** — filter by queue (**All / Solo / Flex / ARAM / Other**), each row shows W/L color bar, champion icon, KDA + KDA ratio, CS + CS/min, duration, and time ago. **Click any row** for a full match popover with both team scoreboards (10 players, KDA, CS, gold, damage, vision — your player's row highlighted).
-- **Load more** — "Load 10 more" button under the match list; automatically stops when there are no more matches.
-- **Top-5 champion masteries** with icons.
+- **Match list** — filter by champion (dropdown of champs actually in the loaded matches) **and** by queue (**All / Solo / Flex / ARAM / Other**). Each row shows W/L color bar, champion icon, **summoner-spell icons (D/F)**, KDA + KDA ratio, CS + CS/min, duration, and time ago. **Click any row** for a full match popover with both team scoreboards (10 players, KDA, CS, gold, damage, vision — your player's row highlighted).
+- **Load more** — "Load 10 more" button under the match list; automatically stops when there are no more matches. Filters + Champion Performance table adapt to the extended sample.
+- **Champion Performance table** — aggregates the loaded matches per champion: games, KDA (ratio + per-game K/D/A splits), CS/m, WR. Sorted by games played, top 8.
 - `⟳ Refresh` re-fetches. Errors surface with actionable hints (missing key / rate limit / expired key).
 
 Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/) (24-hour dev key or apply for production). Dev tier rate limits: 20 req / 1 s and 100 req / 2 min. Set `RIOT_API_KEY` in `.env.local` and rebuild.
 
 ### Dashboard widget
 
-`WoWWidget` + `LoLWidget` are stacked in a "Games" column on the dashboard. Clicking either widget opens the unified hub on the matching tab.
+Row 2 of the dashboard shows a single **`GamesWidget`** with a WoW/LoL tab bar at the top — only one game is visible at a time and the active tab is persisted to localStorage. Clicking the widget body opens the matching hub.
+
+The **LoL widget** has one expandable card per account. The collapsed header shows *Riot ID · region · short tier (e.g. `E IV`) · W/L · WR* (green ≥ 55% / red < 45%). Click the header to expand: a full **rank card with emblem icon** appears, plus the **last 5 games** with champion icon, K/D/A, KDA ratio, and CS. Expand state is remembered across dashboard reloads.
 
 ---
 
