@@ -11,6 +11,7 @@ import {
   fetchActiveGame,
   getChampionsById,
   getDragonVersion,
+  getSummonerSpellsById,
   type RiotLeagueEntry,
   type RiotMatchParticipant,
 } from "@/lib/riot";
@@ -65,13 +66,14 @@ export async function GET(request: Request) {
 
   // 2. Fan out the remaining calls in parallel. Everything keys off puuid now,
   //    so no serial dependency on the summoner-id (Riot removed that field).
-  const [summonerRes, ranksRes, matchIdsRes, masteryRes, liveRes, championsById, dragonVersion] = await Promise.all([
+  const [summonerRes, ranksRes, matchIdsRes, masteryRes, liveRes, championsById, summonerSpellsById, dragonVersion] = await Promise.all([
     fetchSummonerByPuuid(puuid, account.region),
     fetchRanksByPuuid(puuid, account.region),
     fetchMatchIds(puuid, account.region, 10),
     fetchTopMasteries(puuid, account.region, 5),
     fetchActiveGame(puuid, account.region),
     getChampionsById(),
+    getSummonerSpellsById(),
     getDragonVersion(),
   ]);
 
@@ -136,5 +138,6 @@ export async function GET(request: Request) {
     liveGame,
     dragonVersion,
     championsById,
+    summonerSpellsById,
   });
 }

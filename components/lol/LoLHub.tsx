@@ -38,6 +38,8 @@ interface MatchParticipant {
   win: boolean;
   teamPosition: string;
   visionScore: number;
+  summoner1Id: number;
+  summoner2Id: number;
 }
 interface MatchSummary {
   id: string;
@@ -63,6 +65,7 @@ interface LoLSummary {
   liveGame: { queueId: number; gameMode: string; startedAt: number; length: number } | null;
   dragonVersion: string;
   championsById: Record<number, string>;
+  summonerSpellsById: Record<number, string>;
 }
 
 // Riot queue IDs → readable labels (only the common ones)
@@ -153,6 +156,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
   // Match list controls
   type QueueFilter = "all" | "solo" | "flex" | "aram" | "other";
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
+  const [championFilter, setChampionFilter] = useState<string>("all"); // "all" or champion name
   const [loadingMore, setLoadingMore] = useState(false);
   const [noMoreMatches, setNoMoreMatches] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
@@ -567,31 +571,53 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
 
                   {/* ── Recent matches ── */}
                   {summary.matches.length > 0 && (() => {
-                    const filtered = summary.matches.filter((m) => matchInFilter(m.queueId, queueFilter));
+                    const filtered = summary.matches.filter((m) =>
+                      matchInFilter(m.queueId, queueFilter) &&
+                      (championFilter === "all" || (m.me?.championName === championFilter))
+                    );
+                    // Build the champion picker options — unique names from the loaded matches, alpha-sorted
+                    const championsInMatches = [...new Set(summary.matches.map((m) => m.me?.championName).filter(Boolean) as string[])].sort();
                     return (
                     <div>
                       <div className="flex items-baseline justify-between flex-wrap gap-2 mb-2">
                         <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
                           Recent matches ({filtered.length}{filtered.length !== summary.matches.length ? ` / ${summary.matches.length}` : ""})
                         </h3>
-                        <div className="flex gap-1">
-                          {QUEUE_FILTER_CHIPS.map((c) => {
-                            const active = queueFilter === c.key;
-                            return (
-                              <button
-                                key={c.key}
-                                onClick={() => setQueueFilter(c.key)}
-                                className="text-xs px-2.5 py-1 rounded-full font-medium"
-                                style={{
-                                  background: active ? "var(--accent-blue)" : "var(--surface-2)",
-                                  color: active ? "#fff" : "var(--text-muted)",
-                                  border: "1px solid var(--border)",
-                                }}
-                              >
-                                {c.label}
-                              </button>
-                            );
-                          })}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <select
+                            value={championFilter}
+                            onChange={(e) => setChampionFilter(e.target.value)}
+                            className="text-xs rounded-full px-2.5 py-1 font-medium"
+                            style={{
+                              background: championFilter === "all" ? "var(--surface-2)" : "var(--accent-blue)",
+                              color: championFilter === "all" ? "var(--text-muted)" : "#fff",
+                              border: "1px solid var(--border)",
+                            }}
+                          >
+                            <option value="all">All champs</option>
+                            {championsInMatches.map((c) => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                          <div className="flex gap-1">
+                            {QUEUE_FILTER_CHIPS.map((c) => {
+                              const active = queueFilter === c.key;
+                              return (
+                                <button
+                                  key={c.key}
+                                  onClick={() => setQueueFilter(c.key)}
+                                  className="text-xs px-2.5 py-1 rounded-full font-medium"
+                                  style={{
+                                    background: active ? "var(--accent-blue)" : "var(--surface-2)",
+                                    color: active ? "#fff" : "var(--text-muted)",
+                                    border: "1px solid var(--border)",
+                                  }}
+                                >
+                                  {c.label}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
                       </div>
                       {filtered.length === 0 ? (
@@ -631,6 +657,26 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                                 className="rounded flex-shrink-0"
                                 style={{ background: "var(--surface-2)" }}
                               />
+                              {/* Summoner spells (D, F) */}
+                              <div className="flex flex-col gap-0.5 flex-shrink-0">
+                                {[m.me.summoner1Id, m.me.summoner2Id].map((sid, i) => {
+                                  const spellName = summary.summonerSpellsById[sid];
+                                  if (!spellName) return <div key={i} className="w-4 h-4 rounded-sm" style={{ background: "var(--surface-2)" }} />;
+                                  return (
+                                    <img
+                                      key={i}
+                                      src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/spell/${spellName}.png`}
+                                      alt={spellName}
+                                      title={spellName.replace(/^Summoner/, "")}
+                                      width={16}
+                                      height={16}
+                                      className="rounded-sm"
+                                      style={{ background: "var(--surface-2)" }}
+                                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
+                                    />
+                                  );
+                                })}
+                              </div>
                               <div className="flex-1 min-w-0">
                                 <div className="text-sm font-medium truncate">
                                   {m.me.championName} <span style={{ color: "var(--text-muted)" }}>· {queueLabel(m.queueId)}</span>
@@ -678,38 +724,98 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                     );
                   })()}
 
-                  {/* ── Top masteries ── */}
-                  {summary.mastery.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
-                        Top champions (mastery)
-                      </h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                        {summary.mastery.map((mm) => (
-                          <div
-                            key={mm.championId}
-                            className="rounded-lg p-2 flex flex-col items-center text-center"
-                            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-                          >
-                            <img
-                              src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/champion/${mm.championName}.png`}
-                              alt={mm.championName}
-                              width={48}
-                              height={48}
-                              className="rounded"
-                              style={{ background: "var(--surface-2)" }}
-                            />
-                            <div className="text-xs font-medium mt-1 truncate w-full" title={mm.championName}>
-                              {mm.championName}
-                            </div>
-                            <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-                              M{mm.championLevel} · {(mm.championPoints / 1000).toFixed(0)}k
-                            </div>
-                          </div>
-                        ))}
+                  {/* ── Champion Performance (aggregate over loaded matches) ── */}
+                  {(() => {
+                    const perChampion = new Map<string, {
+                      name: string; games: number; wins: number;
+                      kills: number; deaths: number; assists: number;
+                      cs: number; durationSec: number;
+                    }>();
+                    for (const m of summary.matches) {
+                      if (!m.me) continue;
+                      const key = m.me.championName;
+                      const row = perChampion.get(key) ?? {
+                        name: key, games: 0, wins: 0,
+                        kills: 0, deaths: 0, assists: 0,
+                        cs: 0, durationSec: 0,
+                      };
+                      row.games      += 1;
+                      row.wins       += m.me.win ? 1 : 0;
+                      row.kills      += m.me.kills;
+                      row.deaths     += m.me.deaths;
+                      row.assists    += m.me.assists;
+                      row.cs         += m.me.totalMinionsKilled + m.me.neutralMinionsKilled;
+                      row.durationSec += m.gameDuration;
+                      perChampion.set(key, row);
+                    }
+                    const rows = [...perChampion.values()].sort((a, b) => b.games - a.games).slice(0, 8);
+                    if (rows.length === 0) return null;
+                    return (
+                      <div>
+                        <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
+                          <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                            Champion Performance
+                          </h3>
+                          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            Aggregated over {summary.matches.length} loaded match{summary.matches.length === 1 ? "" : "es"}
+                            {summary.matches.length < 20 && " · load more matches to grow the sample"}
+                          </span>
+                        </div>
+                        <div className="rounded-xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
+                                <th className="px-3 py-2 text-left font-medium" style={{ color: "var(--text-muted)" }}>Champion</th>
+                                <th className="px-3 py-2 text-right font-medium" style={{ color: "var(--text-muted)" }}>Games</th>
+                                <th className="px-3 py-2 text-right font-medium" style={{ color: "var(--text-muted)" }}>KDA</th>
+                                <th className="px-3 py-2 text-right font-medium hidden sm:table-cell" style={{ color: "var(--text-muted)" }}>CS/m</th>
+                                <th className="px-3 py-2 text-right font-medium" style={{ color: "var(--text-muted)" }}>WR</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rows.map((r) => {
+                                const denom = r.deaths || 1;
+                                const kdaVal = (r.kills + r.assists) / denom;
+                                const csPerMin = r.durationSec > 0 ? (r.cs / (r.durationSec / 60)) : 0;
+                                const wr = Math.round((r.wins / r.games) * 100);
+                                const wrColor = wr >= 55 ? "var(--accent-green)" : wr < 45 ? "var(--accent-red)" : "var(--text-muted)";
+                                return (
+                                  <tr key={r.name} style={{ borderBottom: "1px solid var(--border)" }}>
+                                    <td className="px-3 py-1.5">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <img
+                                          src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/champion/${r.name}.png`}
+                                          alt=""
+                                          width={26}
+                                          height={26}
+                                          className="rounded flex-shrink-0"
+                                          style={{ background: "var(--surface-2)" }}
+                                        />
+                                        <span className="truncate">{r.name}</span>
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-1.5 text-right font-medium">{r.games}</td>
+                                    <td className="px-3 py-1.5 text-right">
+                                      <div className="font-medium">{kdaVal.toFixed(2)}</div>
+                                      <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                                        {(r.kills / r.games).toFixed(1)} / {(r.deaths / r.games).toFixed(1)} / {(r.assists / r.games).toFixed(1)}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-1.5 text-right hidden sm:table-cell" style={{ color: "var(--text-muted)" }}>
+                                      {csPerMin.toFixed(1)}
+                                    </td>
+                                    <td className="px-3 py-1.5 text-right font-medium" style={{ color: wrColor }}>
+                                      {wr}%
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </>
               )}
             </div>

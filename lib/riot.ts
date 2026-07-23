@@ -108,6 +108,8 @@ export interface RiotMatchParticipant {
   teamPosition: string;    // "TOP" | "JUNGLE" | "MIDDLE" | "BOTTOM" | "UTILITY"
   visionScore: number;
   teamId: number;          // 100 = blue side, 200 = red side
+  summoner1Id: number;     // summoner spell 1 (D)
+  summoner2Id: number;     // summoner spell 2 (F)
 }
 
 export interface RiotMatchInfo {
@@ -235,4 +237,27 @@ export async function getChampionsById(): Promise<Record<number, string>> {
     championsById = {};
   }
   return championsById;
+}
+
+let summonerSpellsById: Record<number, string> | null = null;
+
+/** Return { summonerSpellKey → asset name }. Match participants report
+ *  `summoner1Id` / `summoner2Id` as numeric keys (e.g. 4 = Flash). Data
+ *  Dragon summoner.json has each spell keyed by its string name (e.g.
+ *  `SummonerFlash`) with a `key: "4"` field — invert to id → name. */
+export async function getSummonerSpellsById(): Promise<Record<number, string>> {
+  if (summonerSpellsById) return summonerSpellsById;
+  try {
+    const version = await getDragonVersion();
+    const res = await fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/summoner.json`, { next: { revalidate: 60 * 60 * 24 } });
+    const data: { data: Record<string, { key: string; id: string }> } = await res.json();
+    const out: Record<number, string> = {};
+    for (const spell of Object.values(data.data)) {
+      out[parseInt(spell.key)] = spell.id;
+    }
+    summonerSpellsById = out;
+  } catch {
+    summonerSpellsById = {};
+  }
+  return summonerSpellsById;
 }
