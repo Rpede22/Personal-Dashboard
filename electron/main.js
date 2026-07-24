@@ -2,6 +2,7 @@ const { app, BrowserWindow, shell, nativeImage, dialog, utilityProcess } = requi
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
+const { ensureSchema } = require("./migrate-schema");
 
 const PORT = 3001;
 const DEV = process.env.NODE_ENV === "development";
@@ -101,9 +102,20 @@ function startNextServer(dbPath) {
     // Collect stderr so we can show it in the error dialog
     const stderrLines = [];
 
-    // Load .env.local bundled alongside server.js so API keys reach the server
-    const envVars = loadEnvFile(path.join(process.resourcesPath, "standalone", ".env.local"));
-    logLine("INFO", `Loaded ${Object.keys(envVars).length} vars from .env.local`);
+    // Env loading — layered so a user-writable file at runtime can override the
+    // bundled values without needing a rebuild. Order (later wins):
+    //   1. Bundled  <resources>/standalone/.env.local (baked at build time)
+    //   2. Runtime  ~/Library/Application Support/Dashboard/.env.local (user)
+    // Handy for rotating short-lived API keys (Riot dev keys expire every 24 h).
+    const bundledEnv = loadEnvFile(path.join(process.resourcesPath, "standalone", ".env.local"));
+    const runtimeEnvPath = path.join(app.getPath("userData"), ".env.local");
+    const runtimeEnv = loadEnvFile(runtimeEnvPath);
+    const envVars = { ...bundledEnv, ...runtimeEnv };
+    logLine(
+      "INFO",
+      `Loaded ${Object.keys(bundledEnv).length} vars from bundled .env.local, ` +
+        `${Object.keys(runtimeEnv).length} overrides from ${runtimeEnvPath}`
+    );
 
     // utilityProcess.fork runs as a hidden Node.js child — no dock icon, no Electron lifecycle
     nextProcess = utilityProcess.fork(serverPath, [], {
@@ -228,6 +240,29 @@ if (!gotTheLock) {
       const dbPath = DEV
         ? path.join(process.cwd(), "dev.db")
         : ensureDatabase();
+
+      // Auto-migrate the user's dashboard.db to match the bundled seed.db
+      // (only additive changes — new tables/columns/indexes). Prevents the
+      // "no such table: LolAccount" class of bug after a schema change +
+      // rebuild without needing a manual `prisma db push`.
+      if (!DEV) {
+        try {
+          const seedDbPath = path.join(process.resourcesPath, "db", "seed.db");
+          const bootLog = (tag, msg) => {
+            const line = `[${new Date().toISOString()}] [${tag}] ${msg}`;
+            const logPath = path.join(app.getPath("userData"), "server.log");
+            try { fs.appendFileSync(logPath, line + "\n"); } catch { /* ignore */ }
+            console.log(line);
+          };
+          const result = ensureSchema(dbPath, seedDbPath, process.resourcesPath, bootLog);
+          bootLog(
+            "MIGRATE",
+            `schema check complete: +${result.addedTables.length} tables, +${result.addedColumns.length} columns, +${result.addedIndexes.length} indexes`
+          );
+        } catch (err) {
+          console.error("[MIGRATE] schema check failed (continuing anyway):", err);
+        }
+      }
 
       await startNextServer(dbPath);
 

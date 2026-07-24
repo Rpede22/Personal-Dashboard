@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import Card, { CardHeader } from "@/components/Card";
 
 interface LolAccount {
@@ -75,7 +76,8 @@ export default function LoLWidget() {
   const [accounts, setAccounts] = useState<LolAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [summaries, setSummaries] = useState<Record<number, LoLSummary | "error">>({});
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  // Accordion: at most one open at a time. null = all collapsed.
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -85,17 +87,17 @@ export default function LoLWidget() {
         const accts: LolAccount[] = data.accounts ?? [];
         setAccounts(accts);
 
-        // Hydrate expanded set from localStorage; default = first account expanded
+        // Hydrate the expanded account from localStorage; default = first account.
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
-          if (raw) {
-            const ids: number[] = JSON.parse(raw);
-            setExpanded(new Set(ids.filter((id) => accts.some((a) => a.id === id))));
+          const id = raw ? parseInt(raw) : NaN;
+          if (!isNaN(id) && accts.some((a) => a.id === id)) {
+            setExpandedId(id);
           } else if (accts[0]) {
-            setExpanded(new Set([accts[0].id]));
+            setExpandedId(accts[0].id);
           }
         } catch {
-          if (accts[0]) setExpanded(new Set([accts[0].id]));
+          if (accts[0]) setExpandedId(accts[0].id);
         }
 
         // Fetch summaries in parallel. Riot's Next.js cache absorbs repeated hits.
@@ -126,10 +128,12 @@ export default function LoLWidget() {
   }, []);
 
   function toggleExpanded(id: number) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
+    setExpandedId((prev) => {
+      const next = prev === id ? null : id;
+      try {
+        if (next === null) localStorage.removeItem(STORAGE_KEY);
+        else localStorage.setItem(STORAGE_KEY, String(next));
+      } catch { /* ignore */ }
       return next;
     });
   }
@@ -148,7 +152,7 @@ export default function LoLWidget() {
         <div className="space-y-2">
           {accounts.map((a) => {
             const s = summaries[a.id];
-            const isOpen = expanded.has(a.id);
+            const isOpen = expandedId === a.id;
             const soloRank = s !== "error" && s ? s.ranks.find((r) => r.queueType === "RANKED_SOLO_5x5") ?? null : null;
             const totalGames = soloRank ? soloRank.wins + soloRank.losses : 0;
             const wr = totalGames > 0 ? Math.round((soloRank!.wins / totalGames) * 100) : 0;
@@ -160,44 +164,53 @@ export default function LoLWidget() {
                 className="rounded-xl overflow-hidden"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
               >
-                {/* Collapsed header — always visible, click to toggle */}
-                <button
-                  onClick={(e) => { e.preventDefault(); toggleExpanded(a.id); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-left"
-                >
-                  <span className="text-xs" style={{ color: "var(--text-muted)", width: "0.7rem" }}>
+                {/* Header — chevron is the expand toggle (accordion), the rest
+                    is a Link that opens the LoL hub focused on this account. */}
+                <div className="flex items-center gap-2 px-3 py-2">
+                  <button
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleExpanded(a.id); }}
+                    title={isOpen ? "Collapse" : "Expand"}
+                    className="text-xs shrink-0 rounded-sm px-1"
+                    style={{ color: "var(--text-muted)", width: "1.1rem" }}
+                  >
                     {isOpen ? "▾" : "▸"}
-                  </span>
-                  <span className="font-semibold text-sm truncate">
-                    {a.gameName}
-                    <span style={{ color: "var(--text-muted)" }}>#{a.tagLine}</span>
-                  </span>
-                  <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full flex-shrink-0"
-                        style={{ background: "var(--accent-blue)22", color: "var(--accent-blue)" }}>
-                    {a.region}
-                  </span>
-                  <span className="ml-auto text-xs flex items-center gap-2 flex-shrink-0">
-                    {!s ? (
-                      <span style={{ color: "var(--text-muted)" }}>…</span>
-                    ) : s === "error" ? (
-                      <span style={{ color: "var(--accent-red)" }}>no data</span>
-                    ) : soloRank ? (
-                      <>
-                        <span className="font-semibold capitalize" style={{ color: tierColor(soloRank.tier) }}>
-                          {shortTier(soloRank.tier, soloRank.rank)}
-                        </span>
-                        <span style={{ color: "var(--text-muted)" }}>
-                          {soloRank.wins}W {soloRank.losses}L
-                        </span>
-                        <span style={{ color: wrColor, minWidth: "2.5rem", textAlign: "right" }}>
-                          {wr}%
-                        </span>
-                      </>
-                    ) : (
-                      <span style={{ color: "var(--text-muted)" }}>Unranked</span>
-                    )}
-                  </span>
-                </button>
+                  </button>
+                  <Link
+                    href={`/lol?account=${a.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex-1 flex items-center gap-2 min-w-0 hover:brightness-125"
+                  >
+                    <span className="font-semibold text-sm truncate">
+                      {a.gameName}
+                      <span style={{ color: "var(--text-muted)" }}>#{a.tagLine}</span>
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full flex-shrink-0"
+                          style={{ background: "var(--accent-blue)22", color: "var(--accent-blue)" }}>
+                      {a.region}
+                    </span>
+                    <span className="ml-auto text-xs flex items-center gap-2 flex-shrink-0">
+                      {!s ? (
+                        <span style={{ color: "var(--text-muted)" }}>…</span>
+                      ) : s === "error" ? (
+                        <span style={{ color: "var(--accent-red)" }}>no data</span>
+                      ) : soloRank ? (
+                        <>
+                          <span className="font-semibold capitalize" style={{ color: tierColor(soloRank.tier) }}>
+                            {shortTier(soloRank.tier, soloRank.rank)}
+                          </span>
+                          <span style={{ color: "var(--text-muted)" }}>
+                            {soloRank.wins}W {soloRank.losses}L
+                          </span>
+                          <span style={{ color: wrColor, minWidth: "2.5rem", textAlign: "right" }}>
+                            {wr}%
+                          </span>
+                        </>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }}>Unranked</span>
+                      )}
+                    </span>
+                  </Link>
+                </div>
 
                 {/* Expanded body */}
                 {isOpen && s && s !== "error" && (

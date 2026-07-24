@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 const MatchDetailModal = dynamic(() => import("./MatchDetailModal"), { ssr: false });
 
@@ -231,14 +232,29 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
     if (selectedId !== null) loadSummary(selectedId);
   }, [selectedId]);
 
+  // Preselect an account via ?account=<id> (used by the dashboard widget so
+  // clicking on a specific account card jumps to that account in the hub).
+  const searchParams = useSearchParams();
+  const requestedAccountId = (() => {
+    const raw = searchParams?.get("account");
+    if (!raw) return null;
+    const n = parseInt(raw);
+    return isNaN(n) ? null : n;
+  })();
+
   async function loadAccounts() {
     setLoading(true);
     try {
       const res = await fetch("/api/lol/account");
       const data = await res.json();
-      setAccounts(data.accounts ?? []);
-      if (data.accounts?.length && selectedId === null) {
-        setSelectedId(data.accounts[0].id);
+      const list: LolAccount[] = data.accounts ?? [];
+      setAccounts(list);
+      if (list.length && selectedId === null) {
+        // Prefer the query-param account if it exists; otherwise the first saved.
+        const preferred = requestedAccountId !== null && list.some((a) => a.id === requestedAccountId)
+          ? requestedAccountId
+          : list[0].id;
+        setSelectedId(preferred);
       }
     } finally {
       setLoading(false);
@@ -521,9 +537,9 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
 
               {summary && (
                 <>
-                  {/* ── Ranks (Solo + Flex) ── */}
+                  {/* ── Ranks (Solo + Flex) + Recent-champion strip ── */}
                   {summary.ranks.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3">
                       {summary.ranks
                         .slice()
                         .sort((a, b) => (a.queueType === "RANKED_SOLO_5x5" ? -1 : b.queueType === "RANKED_SOLO_5x5" ? 1 : 0))
@@ -561,6 +577,52 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                             </div>
                           );
                         })}
+                      {/* Top-3 champions from the loaded matches — inline strip next to the rank cards */}
+                      {(() => {
+                        const perChamp = new Map<string, { name: string; games: number; wins: number; kills: number; deaths: number; assists: number }>();
+                        for (const m of summary.matches) {
+                          if (!m.me) continue;
+                          const row = perChamp.get(m.me.championName) ?? { name: m.me.championName, games: 0, wins: 0, kills: 0, deaths: 0, assists: 0 };
+                          row.games += 1;
+                          row.wins += m.me.win ? 1 : 0;
+                          row.kills += m.me.kills; row.deaths += m.me.deaths; row.assists += m.me.assists;
+                          perChamp.set(m.me.championName, row);
+                        }
+                        const top3 = [...perChamp.values()].sort((a, b) => b.games - a.games).slice(0, 3);
+                        if (top3.length === 0) return null;
+                        return (
+                          <div className="rounded-2xl p-3 flex flex-col gap-1.5" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                            <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                              Last {summary.matches.length} games
+                            </div>
+                            {top3.map((c) => {
+                              const wr = Math.round((c.wins / c.games) * 100);
+                              const wrColor = wr >= 55 ? "var(--accent-green)" : wr < 45 ? "var(--accent-red)" : "var(--text-muted)";
+                              const kdaVal = ((c.kills + c.assists) / (c.deaths || 1)).toFixed(1);
+                              return (
+                                <div key={c.name} className="flex items-center gap-2 min-w-[180px]">
+                                  <img
+                                    src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/champion/${c.name}.png`}
+                                    alt=""
+                                    width={28}
+                                    height={28}
+                                    className="rounded flex-shrink-0"
+                                    style={{ background: "var(--surface-2)" }}
+                                  />
+                                  <div className="flex-1 min-w-0 text-xs">
+                                    <div className="font-medium truncate">{c.name}</div>
+                                    <div style={{ color: "var(--text-muted)" }}>
+                                      <span style={{ color: wrColor, fontWeight: 600 }}>{wr}%</span>
+                                      {" · "}{c.wins}W{c.games - c.wins}L
+                                      {" · "}{kdaVal} KDA
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                   {summary.ranks.length === 0 && (
@@ -632,6 +694,8 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                           const csPerMin = m.gameDuration > 0 ? (cs / (m.gameDuration / 60)).toFixed(1) : "0";
                           const result = m.me.win ? "W" : "L";
                           const resultColor = m.me.win ? "var(--accent-green)" : "var(--accent-red)";
+                          const positionSlug = m.me.teamPosition ? m.me.teamPosition.toLowerCase() : "";
+                          const positionLabel = m.me.teamPosition === "UTILITY" ? "support" : positionSlug;
                           return (
                             <div
                               key={m.id}
@@ -649,14 +713,33 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                               >
                                 {result}
                               </span>
-                              <img
-                                src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/champion/${m.me.championName}.png`}
-                                alt={m.me.championName}
-                                width={36}
-                                height={36}
-                                className="rounded flex-shrink-0"
-                                style={{ background: "var(--surface-2)" }}
-                              />
+                              {/* Champion portrait with role icon overlay on bottom-left */}
+                              <div className="relative flex-shrink-0" style={{ width: 44, height: 44 }}>
+                                <img
+                                  src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/champion/${m.me.championName}.png`}
+                                  alt={m.me.championName}
+                                  width={44}
+                                  height={44}
+                                  className="rounded"
+                                  style={{ background: "var(--surface-2)" }}
+                                />
+                                {positionSlug && (
+                                  <span
+                                    title={positionLabel}
+                                    className="absolute -bottom-0.5 -left-0.5 rounded-full flex items-center justify-center"
+                                    style={{ width: 16, height: 16, background: "var(--surface)", border: "1px solid var(--border)" }}
+                                  >
+                                    <img
+                                      src={`https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-${positionSlug}.svg`}
+                                      alt=""
+                                      width={11}
+                                      height={11}
+                                      style={{ filter: "invert(100%)", opacity: 0.85 }}
+                                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
+                                    />
+                                  </span>
+                                )}
+                              </div>
                               {/* Summoner spells (D, F) */}
                               <div className="flex flex-col gap-0.5 flex-shrink-0">
                                 {[m.me.summoner1Id, m.me.summoner2Id].map((sid, i) => {
@@ -668,8 +751,8 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                                       src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/spell/${spellName}.png`}
                                       alt={spellName}
                                       title={spellName.replace(/^Summoner/, "")}
-                                      width={16}
-                                      height={16}
+                                      width={18}
+                                      height={18}
                                       className="rounded-sm"
                                       style={{ background: "var(--surface-2)" }}
                                       onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
@@ -677,15 +760,42 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                                   );
                                 })}
                               </div>
+                              {/* Info column — clearer hierarchy */}
                               <div className="flex-1 min-w-0">
-                                <div className="text-sm font-medium truncate">
-                                  {m.me.championName} <span style={{ color: "var(--text-muted)" }}>· {queueLabel(m.queueId)}</span>
+                                {/* Line 1: champion + meta (queue · duration) */}
+                                <div className="flex items-baseline gap-2 flex-wrap min-w-0">
+                                  <span className="font-semibold truncate" style={{ fontSize: "0.95rem", color: "var(--text)" }}>
+                                    {m.me.championName}
+                                  </span>
+                                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                                    {queueLabel(m.queueId)} · {formatDuration(m.gameDuration)}
+                                  </span>
                                 </div>
-                                <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                                  {m.me.kills}/{m.me.deaths}/{m.me.assists} · {kda(m.me)} KDA · {cs} CS ({csPerMin}/min) · {formatDuration(m.gameDuration)}
+                                {/* Line 2: KDA (prominent) + CS (secondary) */}
+                                <div className="flex items-baseline gap-3 mt-0.5 flex-wrap">
+                                  <span className="font-bold" style={{ fontSize: "0.95rem", color: "var(--text)" }}>
+                                    {m.me.kills}
+                                    <span style={{ color: "var(--text-muted)" }}> / </span>
+                                    <span style={{ color: "var(--accent-red)" }}>{m.me.deaths}</span>
+                                    <span style={{ color: "var(--text-muted)" }}> / </span>
+                                    {m.me.assists}
+                                  </span>
+                                  <span
+                                    className="text-xs font-semibold px-1.5 py-0.5 rounded"
+                                    style={{
+                                      background: "var(--surface-2)",
+                                      color: parseFloat(kda(m.me)) >= 3 ? "var(--accent-green)" : parseFloat(kda(m.me)) < 1.5 ? "var(--accent-red)" : "var(--text-muted)",
+                                    }}
+                                    title="Kills + Assists / Deaths"
+                                  >
+                                    {kda(m.me)} KDA
+                                  </span>
+                                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                                    {cs} CS · {csPerMin}/min
+                                  </span>
                                 </div>
                               </div>
-                              <div className="text-xs flex-shrink-0" style={{ color: "var(--text-muted)" }}>
+                              <div className="text-xs flex-shrink-0 self-start" style={{ color: "var(--text-muted)" }}>
                                 {timeAgo(m.gameCreation)}
                               </div>
                             </div>
@@ -731,7 +841,10 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                       kills: number; deaths: number; assists: number;
                       cs: number; durationSec: number;
                     }>();
-                    for (const m of summary.matches) {
+                    // Aggregate over RANKED matches only (queue 420 solo + 440 flex)
+                    // so the panel matches the "this season" framing.
+                    const rankedMatches = summary.matches.filter((m) => m.queueId === 420 || m.queueId === 440);
+                    for (const m of rankedMatches) {
                       if (!m.me) continue;
                       const key = m.me.championName;
                       const row = perChampion.get(key) ?? {
@@ -748,17 +861,17 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                       row.durationSec += m.gameDuration;
                       perChampion.set(key, row);
                     }
-                    const rows = [...perChampion.values()].sort((a, b) => b.games - a.games).slice(0, 8);
+                    const rows = [...perChampion.values()].sort((a, b) => b.games - a.games).slice(0, 6);
                     if (rows.length === 0) return null;
                     return (
                       <div>
                         <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
                           <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
-                            Champion Performance
+                            Top 6 champions this season
                           </h3>
                           <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                            Aggregated over {summary.matches.length} loaded match{summary.matches.length === 1 ? "" : "es"}
-                            {summary.matches.length < 20 && " · load more matches to grow the sample"}
+                            {rankedMatches.length} ranked match{rankedMatches.length === 1 ? "" : "es"} loaded
+                            {summary.matches.length < 40 && " · use \"Load 10 more\" to grow the sample"}
                           </span>
                         </div>
                         <div className="rounded-xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>

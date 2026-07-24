@@ -212,9 +212,10 @@ export default function MatchDetailModal({
                                       <div className={`truncate ${isFocus ? "font-semibold" : ""}`} style={{ color: isFocus ? teamColor : "var(--text)" }}>
                                         {p.championName}
                                       </div>
+                                      {/* Riot calls the support role "UTILITY"; everyone else calls it support. */}
                                       {p.teamPosition && (
                                         <div className="text-[10px] uppercase" style={{ color: "var(--text-muted)" }}>
-                                          {p.teamPosition.toLowerCase()}
+                                          {p.teamPosition === "UTILITY" ? "support" : p.teamPosition.toLowerCase()}
                                         </div>
                                       )}
                                     </div>

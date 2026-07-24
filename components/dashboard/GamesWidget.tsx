@@ -65,10 +65,19 @@ export default function GamesWidget() {
         </div>
       </div>
 
-      {/* Active game body — wrap in the hub link so clicking anywhere still opens the hub */}
-      <Link href={tabs.find((t) => t.key === tab)!.href} className="block flex-1">
-        {tab === "wow" ? <WoWWidget /> : <LoLWidget />}
-      </Link>
+      {/* Active game body. WoW is wrapped in a hub link so clicking anywhere
+          opens the hub. LoL manages its own per-account navigation (each
+          account header is its own Link to /lol?account=<id>), so we render
+          it bare — otherwise the outer link swallows the per-account click. */}
+      <div className="flex-1">
+        {tab === "wow" ? (
+          <Link href="/wow" className="block h-full">
+            <WoWWidget />
+          </Link>
+        ) : (
+          <LoLWidget />
+        )}
+      </div>
     </div>
   );
 }

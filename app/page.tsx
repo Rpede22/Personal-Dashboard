@@ -5,6 +5,7 @@ import GamesWidget from "@/components/dashboard/GamesWidget";
 import RunningWidget from "@/components/dashboard/RunningWidget";
 import WorkhubWidget from "@/components/dashboard/WorkhubWidget";
 import CalendarWidget from "@/components/dashboard/CalendarWidget";
+import WidgetErrorBoundary from "@/components/WidgetErrorBoundary";
 
 export default function DashboardPage() {
   return (
@@ -32,25 +33,31 @@ export default function DashboardPage() {
       >
 
         {/* Row 1: Sports | School */}
-        <div className="h-full"><SportsWidget /></div>
+        <div className="h-full">
+          <WidgetErrorBoundary label="Sports"><SportsWidget /></WidgetErrorBoundary>
+        </div>
 
         <Link href="/school" className="block group h-full">
-          <SchoolWidget />
+          <WidgetErrorBoundary label="School"><SchoolWidget /></WidgetErrorBoundary>
         </Link>
 
         {/* Row 2: Games (WoW/LoL tab-switcher) | Running */}
-        <div className="h-full"><GamesWidget /></div>
+        <div className="h-full">
+          <WidgetErrorBoundary label="Games"><GamesWidget /></WidgetErrorBoundary>
+        </div>
 
         <Link href="/running" className="block group h-full">
-          <RunningWidget />
+          <WidgetErrorBoundary label="Running"><RunningWidget /></WidgetErrorBoundary>
         </Link>
 
         {/* Row 3: Calendar | Workhub */}
         <Link href="/calendar" className="block group h-full">
-          <CalendarWidget />
+          <WidgetErrorBoundary label="Calendar"><CalendarWidget /></WidgetErrorBoundary>
         </Link>
 
-        <div className="h-full"><WorkhubWidget /></div>
+        <div className="h-full">
+          <WidgetErrorBoundary label="Workhub"><WorkhubWidget /></WidgetErrorBoundary>
+        </div>
 
       </div>
     </main>

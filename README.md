@@ -254,6 +254,25 @@ Copy `.env.example` to `.env.local`:
 
 Sports (NHL, FotMob, TheSportsDB, ESPN) and WoW (Raider.IO) use free public APIs — no keys needed.
 
+### Rotating keys without a rebuild
+
+The packaged app layers env files at startup:
+
+1. **Bundled** `.env.local` — baked into the app at build time.
+2. **Runtime** `~/Library/Application Support/Dashboard/.env.local` — read on every launch; **values override the bundled ones**.
+
+So if you need to rotate a short-lived key (Riot dev keys expire every 24 h), just:
+
+```bash
+# create/edit the runtime override — same file format as .env.local
+mkdir -p ~/Library/Application\ Support/Dashboard
+cat > ~/Library/Application\ Support/Dashboard/.env.local <<'EOF'
+RIOT_API_KEY=RGAPI-abc-123-new-key
+EOF
+```
+
+Then quit and relaunch the app — no rebuild needed. The startup log (`~/Library/Application Support/Dashboard/server.log`) shows how many bundled vars and how many runtime overrides were loaded.
+
 ---
 
 ## Database
@@ -265,6 +284,10 @@ SQLite file lives at `dev.db` in the project root. Prisma schema: `prisma/schema
 ```bash
 cp ~/Library/Application\ Support/Dashboard/dashboard.db /path/to/project/dev.db
 ```
+
+**Auto-migration.** On every launch, the packaged app runs `electron/migrate-schema.js` to bring `dashboard.db` up to the bundled `seed.db`. It only makes additive changes (new tables, new columns, new indexes) — user data is never touched. That means adding a new Prisma model or column no longer requires a manual `prisma db push` on the packaged DB after each rebuild; just rebuild + relaunch. Column renames/removals still need manual handling.
+
+**Widget error boundaries.** Each dashboard card is wrapped in [components/WidgetErrorBoundary.tsx](components/WidgetErrorBoundary.tsx). A rendering crash inside one widget shows a small red fallback card with the error message and a `↻ Retry` button; every other widget on the dashboard keeps working. Async/promise errors still need to be handled inside the widget (React error boundaries don't catch those).
 
 After any schema change:
 ```bash
