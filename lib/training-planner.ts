@@ -416,3 +416,96 @@ export function formatPace(secPerKm: number | null): string {
   const s = Math.round(secPerKm % 60);
   return `${m}:${String(s).padStart(2, "0")}/km`;
 }
+
+/** Format a duration in seconds as `H:MM:SS` (or `M:SS` under an hour). */
+export function formatDuration(seconds: number): string {
+  if (!isFinite(seconds) || seconds < 0) return "—";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.round(seconds % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+export interface RacePrediction {
+  predictedSeconds: number;
+  predictedPaceSecPerKm: number;
+  anchorRun: { date: string; distanceKm: number; durationSeconds: number };
+  qualifyingRuns: number;
+  weeksToRace: number | null;
+  confidence: "low" | "medium" | "high";
+  note: string;
+}
+
+/**
+ * Predict a race-day time from recent training using the Riegel formula:
+ *   T2 = T1 · (D2 / D1) ^ 1.06
+ *
+ * For every run in the last 90 days at ≥ max(3 km, 20% of race distance),
+ * extrapolate it to the race distance and keep the fastest projection —
+ * that naturally reflects current fitness.
+ *
+ * Returns `null` when there's nothing to predict from (no race distance set,
+ * or no qualifying runs).
+ */
+export function predictRaceTime(
+  runs: RunEntry[],
+  raceDistanceKm: number | null | undefined,
+  raceDate: Date | null,
+): RacePrediction | null {
+  if (!raceDistanceKm || raceDistanceKm <= 0) return null;
+
+  const now = Date.now();
+  const cutoff = now - 90 * 86400000;
+  const minDistance = Math.max(3, raceDistanceKm * 0.2);
+
+  const qualifying = runs.filter((r) => {
+    if (!(r.distance > 0) || !(r.duration > 0)) return false;
+    const t = new Date(r.date).getTime();
+    if (!isFinite(t) || t < cutoff || t > now) return false;
+    return r.distance >= minDistance;
+  });
+
+  if (qualifying.length === 0) return null;
+
+  const RIEGEL = 1.06;
+  let bestRun = qualifying[0];
+  let bestProjected = qualifying[0].duration * Math.pow(raceDistanceKm / qualifying[0].distance, RIEGEL);
+  for (const r of qualifying.slice(1)) {
+    const proj = r.duration * Math.pow(raceDistanceKm / r.distance, RIEGEL);
+    if (proj < bestProjected) {
+      bestProjected = proj;
+      bestRun = r;
+    }
+  }
+
+  const weeksToRace = raceDate
+    ? Math.max(0, Math.round((raceDate.getTime() - now) / (7 * 86400000)))
+    : null;
+
+  // Confidence: how close the anchor run's distance is to the race distance,
+  // and how many qualifying efforts back it up. Rough heuristic — good enough
+  // to warn the user when a 5 km run is extrapolated to a marathon.
+  const ratio = bestRun.distance / raceDistanceKm;
+  let confidence: RacePrediction["confidence"];
+  if (ratio >= 0.6 && qualifying.length >= 3) confidence = "high";
+  else if (ratio >= 0.35 && qualifying.length >= 2) confidence = "medium";
+  else confidence = "low";
+
+  const note =
+    confidence === "low"
+      ? `Low confidence — anchor run (${bestRun.distance.toFixed(1)} km) is a big extrapolation to ${raceDistanceKm} km. A longer training run will sharpen the prediction.`
+      : confidence === "medium"
+        ? `Riegel-extrapolated from your best recent ${bestRun.distance.toFixed(1)} km effort. A slightly longer run at that pace would raise confidence.`
+        : `Riegel-extrapolated from your best recent ${bestRun.distance.toFixed(1)} km effort (${qualifying.length} qualifying runs in the last 90 days).`;
+
+  return {
+    predictedSeconds: bestProjected,
+    predictedPaceSecPerKm: bestProjected / raceDistanceKm,
+    anchorRun: { date: bestRun.date, distanceKm: bestRun.distance, durationSeconds: bestRun.duration },
+    qualifyingRuns: qualifying.length,
+    weeksToRace,
+    confidence,
+    note,
+  };
+}

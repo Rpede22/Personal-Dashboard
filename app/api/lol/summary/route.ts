@@ -12,6 +12,8 @@ import {
   getChampionsById,
   getDragonVersion,
   getSummonerSpellsById,
+  getPerkIconsById,
+  getPerkStyleIconsById,
   type RiotLeagueEntry,
   type RiotMatchParticipant,
 } from "@/lib/riot";
@@ -35,6 +37,10 @@ export async function GET(request: Request) {
   const accountIdParam = searchParams.get("accountId");
   if (!accountIdParam) return NextResponse.json({ error: "accountId required" }, { status: 400 });
   const accountId = parseInt(accountIdParam);
+  // Optional `count`: preserve however many matches the client has already
+  // loaded through the "Load 10 more" button, so silent auto-refresh doesn't
+  // truncate back to 10.
+  const matchCount = Math.max(1, Math.min(100, parseInt(searchParams.get("count") ?? "10")));
 
   if (!hasRiotKey()) {
     return NextResponse.json(
@@ -66,14 +72,16 @@ export async function GET(request: Request) {
 
   // 2. Fan out the remaining calls in parallel. Everything keys off puuid now,
   //    so no serial dependency on the summoner-id (Riot removed that field).
-  const [summonerRes, ranksRes, matchIdsRes, masteryRes, liveRes, championsById, summonerSpellsById, dragonVersion] = await Promise.all([
+  const [summonerRes, ranksRes, matchIdsRes, masteryRes, liveRes, championsById, summonerSpellsById, perkIconsById, perkStyleIconsById, dragonVersion] = await Promise.all([
     fetchSummonerByPuuid(puuid, account.region),
     fetchRanksByPuuid(puuid, account.region),
-    fetchMatchIds(puuid, account.region, 10),
+    fetchMatchIds(puuid, account.region, matchCount),
     fetchTopMasteries(puuid, account.region, 5),
     fetchActiveGame(puuid, account.region),
     getChampionsById(),
     getSummonerSpellsById(),
+    getPerkIconsById(),
+    getPerkStyleIconsById(),
     getDragonVersion(),
   ]);
 
@@ -139,5 +147,7 @@ export async function GET(request: Request) {
     dragonVersion,
     championsById,
     summonerSpellsById,
+    perkIconsById,
+    perkStyleIconsById,
   });
 }

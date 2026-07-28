@@ -72,6 +72,8 @@ export default function MatchDetailModal({
   const [data, setData] = useState<MatchDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  interface TimelineFrame { timestampMs: number; blueGold: number; redGold: number; blueLevel: number; redLevel: number }
+  const [timeline, setTimeline] = useState<TimelineFrame[] | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -86,6 +88,12 @@ export default function MatchDetailModal({
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+
+    // Fetch timeline in parallel; failure is silent (chart just doesn't render)
+    fetch(`/api/lol/match-timeline?matchId=${encodeURIComponent(matchId)}&region=${encodeURIComponent(region)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d?.frames) setTimeline(d.frames); })
+      .catch(() => { /* ignore — chart is optional */ });
 
     // Lock body scroll while open + Escape closes
     const prev = document.body.style.overflow;
@@ -246,6 +254,62 @@ export default function MatchDetailModal({
                   </div>
                 );
               })}
+
+              {/* Gold-difference chart — rendered under both scoreboards so
+                  the scoreline is the first thing you see when the modal
+                  opens; the timeline is context that fits below. */}
+              {timeline && timeline.length > 1 && (() => {
+                const W = 640, H = 120, PAD_X = 32, PAD_Y = 14;
+                const golds = timeline.map((f) => f.blueGold - f.redGold);
+                const maxAbs = Math.max(...golds.map(Math.abs), 1);
+                const maxMin = timeline[timeline.length - 1].timestampMs / 60000;
+                const xAt = (ms: number) => PAD_X + ((ms / 60000) / maxMin) * (W - PAD_X * 2);
+                const yAt = (gd: number) => H / 2 - (gd / maxAbs) * (H / 2 - PAD_Y);
+                const zeroY = H / 2;
+                const pts = timeline.map((f) => `${xAt(f.timestampMs)},${yAt(f.blueGold - f.redGold)}`).join(" ");
+                const areaPts = `${xAt(0)},${zeroY} ${pts} ${xAt(timeline[timeline.length - 1].timestampMs)},${zeroY}`;
+                const finalGD = golds[golds.length - 1];
+                const peakBlue = Math.max(...golds);
+                const peakRed  = Math.min(...golds);
+                return (
+                  <div className="rounded-xl p-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+                    <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
+                      <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                        Gold difference · blue − red
+                      </h3>
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        <span style={{ color: "var(--accent-blue)" }}>peak +{(peakBlue / 1000).toFixed(1)}k</span>
+                        <span> · </span>
+                        <span style={{ color: "var(--accent-red)" }}>peak −{(-peakRed / 1000).toFixed(1)}k</span>
+                        <span> · final </span>
+                        <span style={{ color: finalGD >= 0 ? "var(--accent-blue)" : "var(--accent-red)", fontWeight: 600 }}>
+                          {finalGD >= 0 ? "+" : "−"}{(Math.abs(finalGD) / 1000).toFixed(1)}k
+                        </span>
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
+                        <line x1={PAD_X} y1={zeroY} x2={W - PAD_X} y2={zeroY} stroke="var(--border)" strokeWidth={1} />
+                        <defs>
+                          <clipPath id="blueClip"><rect x={0} y={0} width={W} height={zeroY} /></clipPath>
+                          <clipPath id="redClip"><rect x={0} y={zeroY} width={W} height={H - zeroY} /></clipPath>
+                        </defs>
+                        <polygon points={areaPts} fill="var(--accent-blue)" opacity={0.35} clipPath="url(#blueClip)" />
+                        <polygon points={areaPts} fill="var(--accent-red)"  opacity={0.35} clipPath="url(#redClip)"  />
+                        <polyline points={pts} fill="none" stroke="var(--text)" strokeWidth={1.5} strokeLinejoin="round" />
+                        {Array.from({ length: Math.floor(maxMin / 5) + 1 }, (_, i) => i * 5).map((min) => (
+                          <g key={min}>
+                            <line x1={xAt(min * 60000)} y1={H - PAD_Y + 2} x2={xAt(min * 60000)} y2={H - PAD_Y - 2} stroke="var(--text-muted)" strokeWidth={0.5} />
+                            <text x={xAt(min * 60000)} y={H - 2} fontSize={9} textAnchor="middle" fill="var(--text-muted)">{min}′</text>
+                          </g>
+                        ))}
+                        <text x={4} y={PAD_Y + 4} fontSize={9} fill="var(--accent-blue)">+{(maxAbs / 1000).toFixed(1)}k</text>
+                        <text x={4} y={H - PAD_Y - 2} fontSize={9} fill="var(--accent-red)">−{(maxAbs / 1000).toFixed(1)}k</text>
+                      </svg>
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           )}
         </div>

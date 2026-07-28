@@ -110,6 +110,14 @@ export interface RiotMatchParticipant {
   teamId: number;          // 100 = blue side, 200 = red side
   summoner1Id: number;     // summoner spell 1 (D)
   summoner2Id: number;     // summoner spell 2 (F)
+  gameEndedInEarlySurrender: boolean; // true = remake (all players agree, ~3:30 mark)
+  perks?: {
+    styles: Array<{
+      style: number;                                  // tree id (e.g. 8000 = Precision)
+      selections: Array<{ perk: number }>;            // first item of primary tree is the keystone
+      description: string;                            // "primaryStyle" | "subStyle"
+    }>;
+  };
 }
 
 export interface RiotMatchInfo {
@@ -163,7 +171,7 @@ export function fetchAccountByRiotId(gameName: string, tagLine: string, platform
 /** Summoner details by puuid. Platform endpoint. */
 export function fetchSummonerByPuuid(puuid: string, platform: string) {
   const url = `https://${platform.toLowerCase()}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`;
-  return riotFetch<RiotSummoner>(url, { revalidate: 60 * 60 }); // 1h — profile icon + level can change
+  return riotFetch<RiotSummoner>(url, { revalidate: 60 * 10 }); // 10m — profile icon + level rarely change
 }
 
 /** Solo/duo + flex ranked entries. Platform endpoint, keyed by puuid (Riot's
@@ -171,14 +179,15 @@ export function fetchSummonerByPuuid(puuid: string, platform: string) {
  *  encrypted summonerId, so we must use the newer by-puuid path). */
 export function fetchRanksByPuuid(puuid: string, platform: string) {
   const url = `https://${platform.toLowerCase()}.api.riotgames.com/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`;
-  return riotFetch<RiotLeagueEntry[]>(url, { revalidate: 60 * 5 });
+  return riotFetch<RiotLeagueEntry[]>(url, { revalidate: 60 }); // 60s — LP moves after every ranked game
 }
 
 /** Last N match IDs. Regional endpoint. */
-export function fetchMatchIds(puuid: string, platform: string, count = 10, start = 0) {
+export function fetchMatchIds(puuid: string, platform: string, count = 10, start = 0, queue?: number) {
   const regional = toRegional(platform);
-  const url = `https://${regional}.api.riotgames.com/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?start=${start}&count=${count}`;
-  return riotFetch<string[]>(url, { revalidate: 60 * 5 });
+  const q = queue !== undefined ? `&queue=${queue}` : "";
+  const url = `https://${regional}.api.riotgames.com/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?start=${start}&count=${count}${q}`;
+  return riotFetch<string[]>(url, { revalidate: 60 }); // 60s — new game IDs need to appear quickly
 }
 
 /** Full match detail. Regional endpoint. Match documents are immutable — cache 24h. */
@@ -186,6 +195,33 @@ export function fetchMatch(matchId: string, platform: string) {
   const regional = toRegional(platform);
   const url = `https://${regional}.api.riotgames.com/lol/match/v5/matches/${encodeURIComponent(matchId)}`;
   return riotFetch<RiotMatch>(url, { revalidate: 60 * 60 * 24 });
+}
+
+/** Per-minute frames for a completed match (gold, xp, level, cs by participant).
+ *  Riot returns participantId (1..10), not puuid — the caller must map via the
+ *  parent match document's `metadata.participants` array. Immutable — cache 24h. */
+export interface RiotMatchTimeline {
+  info: {
+    frameInterval: number;
+    frames: Array<{
+      timestamp: number;
+      participantFrames: Record<string, {
+        participantId: number;
+        totalGold: number;
+        currentGold: number;
+        xp: number;
+        level: number;
+        minionsKilled: number;
+        jungleMinionsKilled: number;
+      }>;
+    }>;
+    participants: Array<{ participantId: number; puuid: string }>;
+  };
+}
+export function fetchMatchTimeline(matchId: string, platform: string) {
+  const regional = toRegional(platform);
+  const url = `https://${regional}.api.riotgames.com/lol/match/v5/matches/${encodeURIComponent(matchId)}/timeline`;
+  return riotFetch<RiotMatchTimeline>(url, { revalidate: 60 * 60 * 24 });
 }
 
 /** Top N champion masteries by points. Platform endpoint. */
@@ -237,6 +273,51 @@ export async function getChampionsById(): Promise<Record<number, string>> {
     championsById = {};
   }
   return championsById;
+}
+
+// ── Runes (Community Dragon) ──────────────────────────────────────────────────
+// Riot's Match-v5 reports perks as opaque numeric IDs. To render icons we need
+// two lookup tables:
+//   • perk id → keystone icon URL   (from perks.json)
+//   • tree id → tree icon URL       (from perkstyles.json)
+// Both files are large but static; fetched once and memoised for the process.
+
+const CDRAGON_PREFIX = "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default";
+
+/** Turn an iconPath like "/lol-game-data/assets/v1/perk-images/Styles/Precision/Conqueror/Conqueror.png"
+ *  into the Community Dragon URL, which is lowercase and rooted under `assets`. */
+function cdragonAssetUrl(iconPath: string): string {
+  return `${CDRAGON_PREFIX}${iconPath.toLowerCase().replace("/lol-game-data/assets/", "/")}`;
+}
+
+let perkIconById: Record<number, string> | null = null;
+export async function getPerkIconsById(): Promise<Record<number, string>> {
+  if (perkIconById) return perkIconById;
+  try {
+    const res = await fetch(`${CDRAGON_PREFIX}/v1/perks.json`, { next: { revalidate: 60 * 60 * 24 } });
+    const data: Array<{ id: number; iconPath: string }> = await res.json();
+    const out: Record<number, string> = {};
+    for (const p of data) if (p.iconPath) out[p.id] = cdragonAssetUrl(p.iconPath);
+    perkIconById = out;
+  } catch {
+    perkIconById = {};
+  }
+  return perkIconById;
+}
+
+let perkStyleIconById: Record<number, string> | null = null;
+export async function getPerkStyleIconsById(): Promise<Record<number, string>> {
+  if (perkStyleIconById) return perkStyleIconById;
+  try {
+    const res = await fetch(`${CDRAGON_PREFIX}/v1/perkstyles.json`, { next: { revalidate: 60 * 60 * 24 } });
+    const data: { styles: Array<{ id: number; iconPath: string }> } = await res.json();
+    const out: Record<number, string> = {};
+    for (const s of data.styles ?? []) if (s.iconPath) out[s.id] = cdragonAssetUrl(s.iconPath);
+    perkStyleIconById = out;
+  } catch {
+    perkStyleIconById = {};
+  }
+  return perkStyleIconById;
 }
 
 let summonerSpellsById: Record<number, string> | null = null;

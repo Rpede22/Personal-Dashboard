@@ -425,14 +425,22 @@ export async function GET(request: Request) {
     const summaries = await Promise.all(
       Object.values(SPORTS_TEAMS).map(async (team) => {
         const result = await fetchTeamData(team, true);
+        // Top-3 opponent list is used by the dashboard's match-of-the-week
+        // highlight so the widget can flag "you play a top-3 side next".
+        const topOpponents = result.allStandings
+          .filter((r) => !r.team.toLowerCase().includes(team.matchKeyword.toLowerCase()))
+          .sort((a, b) => a.rank - b.rank)
+          .slice(0, 3)
+          .map((r) => r.team);
         return {
           slug: team.slug,
           config: { ...team, ...result.resolvedConfig },
           standing: result.standing,
           last5: result.last5,
-          next5: result.next5.slice(0, 1),
+          next5: result.next5.slice(0, 3),
           subTables: result.subTables,
           source: result.source,
+          topOpponents,
         };
       })
     );

@@ -60,6 +60,8 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Source priority for football standings:** FotMob → TheSportsDB.
 
+**Match of the week highlight** on the dashboard: whenever any of the four teams plays a top-3 league opponent within the next 7 days, a small orange strip appears above the sports grid — team badge, home/away, opponent name, opponent's league rank, and kickoff time. Each row links straight to that team's hub.
+
 **Esbjerg Energy uses [Metal Ligaen's own JSON](https://s3.dualstack.eu-west-1.amazonaws.com/den.hokejovyzapis.cz)** (via [lib/metalligaen.ts](lib/metalligaen.ts)) instead of TheSportsDB. This is the same data feed metalligaen.dk uses on its own site through the icestats.at widgets. It gives us proper standings, a full match schedule, **and a live playoff bracket** (see the Playoffs tab → Live sub-tab) — with best-of-7 pip rows, per-game scores, and OT/SO markers.
 
 **Danish 1st Division split table:** After round 22, FotMob returns three sub-tables (Promotion Group / Relegation Group / 1. Division). The hub and widget both display the team's Oprykningsspil rank when available.
@@ -105,8 +107,9 @@ Add accounts as `gameName#tagLine` + platform region (`euw1`, `na1`, `kr`, …).
 - **Profile** — icon + summoner level, plus a red **🔴 LIVE** badge when the summoner is in an active game.
 - **Ranked cards** — Solo/Duo + Flex tier (iron → challenger) with **rank emblem icon**, LP, wins/losses, win-rate.
 - **Match list** — filter by champion (dropdown of champs actually in the loaded matches) **and** by queue (**All / Solo / Flex / ARAM / Other**). Each row shows W/L color bar, champion icon, **summoner-spell icons (D/F)**, KDA + KDA ratio, CS + CS/min, duration, and time ago. **Click any row** for a full match popover with both team scoreboards (10 players, KDA, CS, gold, damage, vision — your player's row highlighted).
-- **Load more** — "Load 10 more" button under the match list; automatically stops when there are no more matches. Filters + Champion Performance table adapt to the extended sample.
-- **Champion Performance table** — aggregates the loaded matches per champion: games, KDA (ratio + per-game K/D/A splits), CS/m, WR. Sorted by games played, top 8.
+- **Load more** — "Load 10 more" button under the match list; automatically stops when there are no more matches.
+- **Session view (per day)** — the match list is grouped by local calendar day (`Today`, `Yesterday`, `Sat 20 Jul`, …), with a per-day header showing W-L record (colour-coded) and total time played.
+- **Top champions panel** in the sidebar (under the accounts list) shows the top 6 champions by games with KDA + win rate, aggregated across the full recent ranked history (up to 40 solo + 20 flex matches via `/api/lol/season-champs`) — not just the 10 matches loaded in the detail pane.
 - `⟳ Refresh` re-fetches. Errors surface with actionable hints (missing key / rate limit / expired key).
 
 Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/) (24-hour dev key or apply for production). Dev tier rate limits: 20 req / 1 s and 100 req / 2 min. Set `RIOT_API_KEY` in `.env.local` and rebuild.
@@ -145,6 +148,7 @@ The Running Hub has three tabs:
 - **Training progress:** two bar charts appear once you have runs logged — *Weekly Kilometers* (last 12 weeks, current week highlighted; label shows the Mon–Sun date range, e.g. `18 May – 24 May`) and *Longest Run* (best run per month for the last 6 months; label is just the month name, e.g. `Dec`).
 - **Stats bar** at the top of the hub (This week / Last 30 days / etc.) is shown to 2 decimals so nothing is rounded away.
 - **Race target:** set a race date and/or race distance in the hub. The widget and stats bar show days remaining and the target distance label.
+- **Race predictor** (Training tab): once a race distance is set, projects a finish time from your last 90 days of training via the **Riegel formula** (`T2 = T1·(D2/D1)^1.06`). Anchors on the fastest projection across every qualifying run (≥ max(3 km, 20% of race distance)), so it reflects current fitness — not just what you ran last time. Shows predicted finish, race pace, the anchor run, weeks-to-race, and a colour-coded confidence badge (high = anchor ≥ 60% of race distance + ≥ 3 qualifying runs; medium = ≥ 35% + ≥ 2; low = big extrapolation).
 - **7-day planner:** assign `easy` / `tempo` / `long` / `rest` days with optional target distance. Switch to **Month view** for a full calendar overview. Plans on days where a run has been logged are automatically cleared on sync.
 
 ### Strava setup

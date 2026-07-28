@@ -61,6 +61,7 @@ interface SportsSummary {
   last5: SportsEvent[];
   next5: SportsEvent[];
   subTables: SportsSubTable[];
+  topOpponents?: string[];
 }
 
 // Team-specific colours: real club colours used for gradient borders.
@@ -194,6 +195,7 @@ export default function SportsWidget() {
   const [edmGames, setEdmGames] = useState<NHLGame[]>([]);
   const [edmNext, setEdmNext] = useState<NHLGame | null>(null);
   const [edmSeries, setEdmSeries] = useState<BracketSeries | null>(null);
+  const [nhlStandings, setNhlStandings] = useState<TeamStanding[]>([]);
   const [sportsSummaries, setSportsSummaries] = useState<SportsSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -210,7 +212,9 @@ export default function SportsWidget() {
       const sports = await sportsRes.json();
       const bracketData = await bracketRes.json();
 
-      setEdm(standings.standings?.find((s: TeamStanding) => s.teamAbbrev === "EDM") ?? null);
+      const allStandings: TeamStanding[] = standings.standings ?? [];
+      setNhlStandings(allStandings);
+      setEdm(allStandings.find((s: TeamStanding) => s.teamAbbrev === "EDM") ?? null);
       setEdmGames(schedule.recent ?? []);
       setEdmNext(schedule.next ?? null);
       setSportsSummaries(sports.summaries ?? []);
@@ -283,6 +287,7 @@ export default function SportsWidget() {
       {loading ? (
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
       ) : (
+        <>
         <div className="grid grid-cols-2 gap-3">
 
           {/* EDM box */}
@@ -389,6 +394,112 @@ export default function SportsWidget() {
           })}
 
         </div>
+
+        {/* ── Match of the week: flag any upcoming top-3-opponent fixture.
+            Rendered below the grid so the four team cards stay the main event
+            and the strip acts as a "coming up" footer. Up to 4 rows — one per
+            team when they each have a qualifying fixture in the next 7 days. ── */}
+        {(() => {
+          const now = Date.now();
+          const weekOut = now + 7 * 24 * 3600 * 1000;
+          type Highlight = {
+            key: string;
+            href: string;
+            teamLabel: string;
+            teamEmoji: string;
+            teamAccent: string;
+            opponent: string;
+            opponentRank: number;
+            homeAway: "vs" | "@";
+            when: string;
+            leagueName: string;
+          };
+          const found: Highlight[] = [];
+
+          if (edmNext && nhlStandings.length > 0) {
+            const start = edmNext.startTimeUTC ? new Date(edmNext.startTimeUTC).getTime() : new Date(edmNext.gameDate + "T12:00:00Z").getTime();
+            if (start >= now && start <= weekOut) {
+              const isHome = edmNext.homeTeam.abbrev === "EDM";
+              const oppAbbrev = isHome ? edmNext.awayTeam.abbrev : edmNext.homeTeam.abbrev;
+              const opp = nhlStandings.find((s) => s.teamAbbrev === oppAbbrev);
+              if (opp && opp.divisionRank <= 3) {
+                found.push({
+                  key: `nhl-${oppAbbrev}`,
+                  href: "/nhl",
+                  teamLabel: "EDM",
+                  teamEmoji: "🏒",
+                  teamAccent: EDM_ACCENT,
+                  opponent: oppAbbrev,
+                  opponentRank: opp.divisionRank,
+                  homeAway: isHome ? "vs" : "@",
+                  when: `${edmDateLabel(edmNext)} · ${formatCEST(edmNext)}`,
+                  leagueName: "NHL",
+                });
+              }
+            }
+          }
+
+          for (const teamCfg of SPORT_TEAM_CONFIGS) {
+            const summary = sportsSummaries.find((s) => s.slug === teamCfg.slug);
+            if (!summary?.topOpponents?.length) continue;
+            for (const evt of summary.next5 ?? []) {
+              const start = new Date(`${evt.date}T${evt.time ?? "12:00"}:00Z`).getTime();
+              if (!isFinite(start) || start < now || start > weekOut) continue;
+              const isHome = evt.homeTeam.toLowerCase().includes(summary.config.matchKeyword.toLowerCase());
+              const opp = isHome ? evt.awayTeam : evt.homeTeam;
+              const oppLower = opp.toLowerCase();
+              const rankIdx = summary.topOpponents.findIndex((t) => oppLower.includes(t.toLowerCase()) || t.toLowerCase().includes(oppLower));
+              if (rankIdx === -1) continue;
+              found.push({
+                key: `${teamCfg.slug}-${evt.date}-${opp}`,
+                href: teamCfg.href,
+                teamLabel: teamCfg.short,
+                teamEmoji: teamCfg.emoji,
+                teamAccent: teamCfg.textAccent,
+                opponent: shortName(opp),
+                opponentRank: rankIdx + 1,
+                homeAway: isHome ? "vs" : "@",
+                when: `${toCopenhagenDate(evt.date, evt.time)}${evt.time ? ` · ${toCopenhagenTime(evt.date, evt.time)} CEST` : ""}`,
+                leagueName: summary.config.leagueName,
+              });
+              break; // one match per team is enough
+            }
+          }
+
+          if (found.length === 0) return null;
+          return (
+            <div className="mt-3 rounded-lg p-2.5" style={{
+              background: "linear-gradient(135deg, rgba(252,76,2,0.18), rgba(252,76,2,0.05))",
+              border: "1px solid rgba(252,76,2,0.45)",
+            }}>
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-xs">⭐</span>
+                <span className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--accent-orange)" }}>
+                  Match of the week{found.length > 1 ? ` · ${found.length}` : ""}
+                </span>
+              </div>
+              <div className="space-y-1">
+                {found.map((h) => (
+                  <Link key={h.key} href={h.href} className="block hover:brightness-125">
+                    <div className="text-xs flex items-baseline gap-1.5 flex-wrap">
+                      <span className="font-bold" style={{ color: h.teamAccent }}>{h.teamEmoji} {h.teamLabel}</span>
+                      <span style={{ color: "var(--text-muted)" }}>{h.homeAway}</span>
+                      <span className="font-semibold" style={{ color: "var(--text)" }}>{h.opponent}</span>
+                      <span
+                        className="text-[9px] font-bold px-1 rounded"
+                        style={{ background: "var(--accent-orange)22", color: "var(--accent-orange)" }}
+                      >
+                        #{h.opponentRank}
+                      </span>
+                      <span style={{ color: "var(--text-muted)" }}>· {h.when}</span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+        </>
       )}
     </GradientBorder>
   );

@@ -97,6 +97,69 @@ export default function CalendarHub() {
   });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
+  // ── Quick-add state ─────────────────────────────────────────────────────
+  const [addOpen, setAddOpen] = useState(false);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [addForm, setAddForm] = useState({
+    calendar: "Kalender",
+    title: "",
+    date: new Date().toISOString().slice(0, 10),   // yyyy-mm-dd
+    startTime: "12:00",
+    endTime: "13:00",
+    allDay: false,
+    location: "",
+  });
+
+  // Only iCloud (CalDAV) calendars can be written back to — ICS feeds are
+  // read-only, so the picker restricts to writeable names. Detected below.
+  // Everything except the read-only ICS feed names is assumed writeable.
+  const READ_ONLY = new Set(["Rasmus_skole", "Cand", "Rasmus_arbejde"]);
+  const writeableCalendars = calendarNames.filter((n) => !READ_ONLY.has(n));
+
+  async function submitAdd(e: React.FormEvent) {
+    e.preventDefault();
+    setAddSaving(true);
+    setAddError(null);
+    try {
+      // Interpret the input date + time as Europe/Copenhagen local. We build
+      // the ISO in UTC by asking the browser to format the components; the
+      // simplest reliable way is to send the local-string and let the server
+      // interpret it. iCloud handles UTC ISO strings correctly.
+      const startLocal = addForm.allDay
+        ? `${addForm.date}T00:00:00`
+        : `${addForm.date}T${addForm.startTime}:00`;
+      const endLocal = addForm.allDay
+        ? `${addForm.date}T23:59:59`
+        : `${addForm.date}T${addForm.endTime}:00`;
+
+      const res = await fetch("/api/calendar/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calendar: addForm.calendar,
+          title: addForm.title.trim(),
+          startISO: new Date(startLocal).toISOString(),
+          endISO: new Date(endLocal).toISOString(),
+          allDay: addForm.allDay,
+          location: addForm.location.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      // Reset form + reload calendar with cache bust so the new event appears.
+      setAddForm((f) => ({ ...f, title: "", location: "" }));
+      setAddOpen(false);
+      loadCalendar(true);
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddSaving(false);
+    }
+  }
+
   // Load calendar data. `bust=true` skips the server cache to force a fresh fetch.
   const loadCalendar = useCallback((bust = false) => {
     fetch(`/api/calendar${bust ? "?bust=1" : ""}`)
@@ -167,7 +230,107 @@ export default function CalendarHub() {
             ← Dashboard
           </Link>
           <h1 className="text-2xl font-bold" style={{ color: "var(--accent-purple)" }}>📅 Calendar</h1>
+          <button
+            onClick={() => setAddOpen((v) => !v)}
+            className="ml-auto text-xs px-3 py-1.5 rounded-lg font-medium"
+            style={{ background: addOpen ? "var(--surface-2)" : "var(--accent-purple)", color: addOpen ? "var(--text-muted)" : "#fff" }}
+          >
+            {addOpen ? "Cancel" : "+ Add event"}
+          </button>
         </div>
+
+        {/* Quick-add form — pops out under the header when the button is toggled. */}
+        {addOpen && (
+          <form
+            onSubmit={submitAdd}
+            className="mb-3 rounded-xl p-3 grid gap-2"
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+            }}
+          >
+            <input
+              required
+              value={addForm.title}
+              onChange={(e) => setAddForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="Event title"
+              className="rounded-lg px-2 py-1.5 text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)", gridColumn: "1 / -1" }}
+            />
+            <select
+              value={addForm.calendar}
+              onChange={(e) => setAddForm((f) => ({ ...f, calendar: e.target.value }))}
+              className="rounded-lg px-2 py-1.5 text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+            >
+              {writeableCalendars.length === 0 && <option value="Kalender">Kalender</option>}
+              {writeableCalendars.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <input
+              type="date"
+              required
+              value={addForm.date}
+              onChange={(e) => setAddForm((f) => ({ ...f, date: e.target.value }))}
+              className="rounded-lg px-2 py-1.5 text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+            />
+            {!addForm.allDay && (
+              <>
+                <input
+                  type="time"
+                  value={addForm.startTime}
+                  onChange={(e) => setAddForm((f) => ({ ...f, startTime: e.target.value }))}
+                  className="rounded-lg px-2 py-1.5 text-sm"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+                />
+                <input
+                  type="time"
+                  value={addForm.endTime}
+                  onChange={(e) => setAddForm((f) => ({ ...f, endTime: e.target.value }))}
+                  className="rounded-lg px-2 py-1.5 text-sm"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+                />
+              </>
+            )}
+            <label className="flex items-center gap-2 text-xs px-2" style={{ color: "var(--text-muted)" }}>
+              <input
+                type="checkbox"
+                checked={addForm.allDay}
+                onChange={(e) => setAddForm((f) => ({ ...f, allDay: e.target.checked }))}
+              />
+              All day
+            </label>
+            <input
+              value={addForm.location}
+              onChange={(e) => setAddForm((f) => ({ ...f, location: e.target.value }))}
+              placeholder="Location (optional)"
+              className="rounded-lg px-2 py-1.5 text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)", gridColumn: "1 / -1" }}
+            />
+            <button
+              type="submit"
+              disabled={addSaving || !addForm.title.trim()}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium"
+              style={{
+                background: addSaving ? "var(--surface-2)" : "var(--accent-green)",
+                color: "#fff",
+                gridColumn: "1 / -1",
+                opacity: !addForm.title.trim() ? 0.5 : 1,
+              }}
+            >
+              {addSaving ? "Saving to iCloud…" : "Save event"}
+            </button>
+            {addError && (
+              <p className="text-xs whitespace-pre-wrap break-words rounded-md p-2"
+                 style={{ background: "var(--accent-red)11", color: "var(--accent-red)", border: "1px solid var(--accent-red)44", gridColumn: "1 / -1" }}>
+                {addError}
+              </p>
+            )}
+          </form>
+        )}
 
         {/* Calendar filter toggles */}
         {calendarNames.length > 0 && (

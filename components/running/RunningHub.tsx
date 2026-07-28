@@ -7,6 +7,8 @@ import {
   computeWeeklyStats,
   generateNextWeekPlan,
   formatPace,
+  formatDuration,
+  predictRaceTime,
   type SessionType,
   type DayName,
   type RunDaysPerWeek,
@@ -41,14 +43,6 @@ const PLAN_TYPE_COLOR: Record<string, string> = {
   long:  "var(--accent-blue)",
   rest:  "var(--text-muted)",
 };
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
 
 function pace(distKm: number, durationSec: number): string {
   if (distKm === 0) return "—";
@@ -1412,6 +1406,90 @@ export default function RunningHub() {
                 </div>
               </div>
             </div>
+
+            {/* ── Race predictor ── */}
+            {(() => {
+              const prediction = predictRaceTime(
+                runs.map((r) => ({ date: r.date, distance: r.distance, duration: r.duration })),
+                raceDistance,
+                raceDate ? new Date(raceDate) : null,
+              );
+              if (!raceDistance) {
+                return (
+                  <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <h3 className="text-sm font-semibold mb-1" style={{ color: "var(--accent-orange)" }}>
+                      Race predictor
+                    </h3>
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      Set a race distance in the Overview tab to see a predicted finish time based on your training.
+                    </p>
+                  </div>
+                );
+              }
+              if (!prediction) {
+                return (
+                  <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <h3 className="text-sm font-semibold mb-1" style={{ color: "var(--accent-orange)" }}>
+                      Race predictor — {raceDistance} km
+                    </h3>
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      Need at least one run of {Math.max(3, raceDistance * 0.2).toFixed(1)} km or more in the last 90 days to predict a finish time.
+                    </p>
+                  </div>
+                );
+              }
+              const conf = prediction.confidence;
+              const confColor =
+                conf === "high" ? "var(--accent-green)" :
+                conf === "medium" ? "var(--accent-orange)" :
+                "var(--accent-red)";
+              return (
+                <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                  <div className="flex items-baseline justify-between mb-3">
+                    <h3 className="text-sm font-semibold" style={{ color: "var(--accent-orange)" }}>
+                      Race predictor — {raceDistance} km
+                    </h3>
+                    <span
+                      className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full font-semibold"
+                      style={{ background: `${confColor}22`, color: confColor }}
+                    >
+                      {conf} confidence
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <div className="text-2xl font-bold" style={{ color: "var(--accent-orange)" }}>
+                        {formatDuration(prediction.predictedSeconds)}
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>predicted finish</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold">{formatPace(prediction.predictedPaceSecPerKm)}</div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>race pace</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" style={{ color: "var(--accent-blue)" }}>
+                        {prediction.anchorRun.distanceKm.toFixed(1)}
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        km anchor · {new Date(prediction.anchorRun.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold">
+                        {prediction.weeksToRace != null ? prediction.weeksToRace : "—"}
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        {prediction.weeksToRace != null ? "weeks to race" : "no race date set"}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-[11px] mt-3" style={{ color: "var(--text-muted)" }}>
+                    {prediction.note}
+                  </p>
+                </div>
+              );
+            })()}
 
             {/* ── 8-week volume trend ── */}
             <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>

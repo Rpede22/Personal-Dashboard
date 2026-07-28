@@ -28,6 +28,7 @@ interface MatchParticipant {
   championName: string;
   totalMinionsKilled: number;
   neutralMinionsKilled: number;
+  gameEndedInEarlySurrender?: boolean;
 }
 
 interface MatchSummary {
@@ -79,12 +80,16 @@ export default function LoLWidget() {
   // Accordion: at most one open at a time. null = all collapsed.
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
+  // Extracted so the interval below can call it without re-declaring the whole
+  // fetch chain. Accounts list is fetched on the first run; subsequent ticks
+  // only re-fetch the per-account summaries.
+  async function loadAll(refreshOnly = false) {
+    try {
+      let accts = accounts;
+      if (!refreshOnly) {
         const res = await fetch("/api/lol/account");
         const data = await res.json();
-        const accts: LolAccount[] = data.accounts ?? [];
+        accts = data.accounts ?? [];
         setAccounts(accts);
 
         // Hydrate the expanded account from localStorage; default = first account.
@@ -99,32 +104,41 @@ export default function LoLWidget() {
         } catch {
           if (accts[0]) setExpandedId(accts[0].id);
         }
+      }
 
-        // Fetch summaries in parallel. Riot's Next.js cache absorbs repeated hits.
-        const results = await Promise.all(
-          accts.map(async (a) => {
-            try {
-              const sRes = await fetch(`/api/lol/summary?accountId=${a.id}`);
-              if (!sRes.ok) return { id: a.id, summary: "error" as const };
-              const s = await sRes.json();
-              return {
-                id: a.id,
-                summary: {
-                  ranks: s.ranks ?? [],
-                  matches: s.matches ?? [],
-                  dragonVersion: s.dragonVersion ?? "15.1.1",
-                } as LoLSummary,
-              };
-            } catch {
-              return { id: a.id, summary: "error" as const };
-            }
-          })
-        );
-        const map: Record<number, LoLSummary | "error"> = {};
-        for (const { id, summary } of results) map[id] = summary;
-        setSummaries(map);
-      } catch { /* ignore */ } finally { setLoading(false); }
-    })();
+      const results = await Promise.all(
+        accts.map(async (a) => {
+          try {
+            const sRes = await fetch(`/api/lol/summary?accountId=${a.id}`);
+            if (!sRes.ok) return { id: a.id, summary: "error" as const };
+            const s = await sRes.json();
+            return {
+              id: a.id,
+              summary: {
+                ranks: s.ranks ?? [],
+                matches: s.matches ?? [],
+                dragonVersion: s.dragonVersion ?? "15.1.1",
+              } as LoLSummary,
+            };
+          } catch {
+            return { id: a.id, summary: "error" as const };
+          }
+        })
+      );
+      const map: Record<number, LoLSummary | "error"> = {};
+      for (const { id, summary } of results) map[id] = summary;
+      setSummaries(map);
+    } catch { /* ignore */ } finally { setLoading(false); }
+  }
+
+  useEffect(() => {
+    loadAll(false);
+    // Poll every 2 min while the dashboard is open. Riot's cache is 60s on the
+    // volatile endpoints so this only actually hits Riot roughly every other
+    // tick — the intermediate ticks are absorbed by Next.js.
+    const iv = setInterval(() => loadAll(true), 2 * 60 * 1000);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function toggleExpanded(id: number) {
@@ -159,13 +173,15 @@ export default function LoLWidget() {
             const wrColor = wr >= 55 ? "var(--accent-green)" : wr < 45 ? "var(--accent-red)" : "var(--text-muted)";
 
             return (
-              <div
+              <Link
                 key={a.id}
-                className="rounded-xl overflow-hidden"
+                href={`/lol?account=${a.id}`}
+                className="block rounded-xl overflow-hidden hover:brightness-110"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
               >
-                {/* Header — chevron is the expand toggle (accordion), the rest
-                    is a Link that opens the LoL hub focused on this account. */}
+                {/* Header — chevron toggles expand (stopPropagation keeps the
+                    outer Link from navigating); every other click inside the
+                    card falls through to the Link and opens the hub. */}
                 <div className="flex items-center gap-2 px-3 py-2">
                   <button
                     onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleExpanded(a.id); }}
@@ -175,11 +191,7 @@ export default function LoLWidget() {
                   >
                     {isOpen ? "▾" : "▸"}
                   </button>
-                  <Link
-                    href={`/lol?account=${a.id}`}
-                    onClick={(e) => e.stopPropagation()}
-                    className="flex-1 flex items-center gap-2 min-w-0 hover:brightness-125"
-                  >
+                  <div className="flex-1 flex items-center gap-2 min-w-0">
                     <span className="font-semibold text-sm truncate">
                       {a.gameName}
                       <span style={{ color: "var(--text-muted)" }}>#{a.tagLine}</span>
@@ -209,7 +221,7 @@ export default function LoLWidget() {
                         <span style={{ color: "var(--text-muted)" }}>Unranked</span>
                       )}
                     </span>
-                  </Link>
+                  </div>
                 </div>
 
                 {/* Expanded body */}
@@ -267,16 +279,19 @@ export default function LoLWidget() {
                           <div className="space-y-1">
                             {last5.map((m) => {
                               if (!m.me) return null;
+                              const remake = m.me.gameEndedInEarlySurrender === true;
                               const win = m.me.win;
                               const cs = m.me.totalMinionsKilled + m.me.neutralMinionsKilled;
                               const kdaVal = ((m.me.kills + m.me.assists) / (m.me.deaths || 1)).toFixed(2);
+                              const badgeColor = remake ? "var(--text-muted)" : win ? "var(--accent-green)" : "var(--accent-red)";
+                              const badgeLabel = remake ? "R" : win ? "W" : "L";
                               return (
                                 <div
                                   key={m.id}
                                   className="rounded-md px-2 py-1 flex items-center gap-2"
                                   style={{
                                     background: "var(--surface-2)",
-                                    borderLeft: `3px solid ${win ? "var(--accent-green)" : "var(--accent-red)"}`,
+                                    borderLeft: `3px solid ${badgeColor}`,
                                   }}
                                 >
                                   <img
@@ -295,9 +310,9 @@ export default function LoLWidget() {
                                   </div>
                                   <span
                                     className="text-[10px] font-bold flex-shrink-0"
-                                    style={{ color: win ? "var(--accent-green)" : "var(--accent-red)" }}
+                                    style={{ color: badgeColor }}
                                   >
-                                    {win ? "W" : "L"}
+                                    {badgeLabel}
                                   </span>
                                 </div>
                               );
@@ -315,7 +330,7 @@ export default function LoLWidget() {
                     Riot data unavailable. Check <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>RIOT_API_KEY</code> in the hub.
                   </div>
                 )}
-              </div>
+              </Link>
             );
           })}
         </div>
