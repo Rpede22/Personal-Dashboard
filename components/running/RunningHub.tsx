@@ -660,74 +660,6 @@ export default function RunningHub() {
         )}
       </div>
 
-      {/* Strava integration */}
-      <div
-        className="rounded-2xl p-4 mb-6 flex flex-wrap items-center gap-3"
-        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-      >
-        <span className="text-lg">🏃</span>
-        <span className="text-sm font-semibold" style={{ color: "var(--accent-orange)" }}>Strava</span>
-        {stravaConnected ? (
-          <>
-            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--accent-green)22", color: "var(--accent-green)" }}>Connected</span>
-            <button
-              onClick={syncStrava}
-              disabled={stravaLoading}
-              className="px-3 py-1.5 rounded-lg text-sm"
-              style={{ background: "var(--accent-orange)", color: "#fff" }}
-            >
-              {stravaLoading ? "Syncing…" : "Sync runs"}
-            </button>
-            <button
-              onClick={disconnectStrava}
-              className="px-3 py-1.5 rounded-lg text-sm"
-              style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
-            >
-              Disconnect
-            </button>
-            {stravaSyncResult && (
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>{stravaSyncResult}</span>
-            )}
-          </>
-        ) : stravaHasCredentials ? (
-          <a
-            href="/api/strava/auth"
-            className="px-4 py-1.5 rounded-lg text-sm font-semibold"
-            style={{ background: "var(--accent-orange)", color: "#fff" }}
-          >
-            Connect Strava
-          </a>
-        ) : (
-          <div className="text-xs space-y-1" style={{ color: "var(--text-muted)" }}>
-            <p className="font-medium" style={{ color: "var(--text)" }}>Setup required — 3 steps:</p>
-            <ol className="list-decimal list-inside space-y-0.5">
-              <li>
-                Create a Strava app at{" "}
-                <a
-                  href="https://www.strava.com/settings/api"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline"
-                  style={{ color: "var(--accent-orange)" }}
-                >
-                  strava.com/settings/api
-                </a>
-                {" "}— set <em>Authorization Callback Domain</em> to{" "}
-                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>localhost</code>
-              </li>
-              <li>
-                Add to{" "}
-                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>.env.local</code>
-                :{" "}
-                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>STRAVA_CLIENT_ID=…</code>{" "}
-                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>STRAVA_CLIENT_SECRET=…</code>
-              </li>
-              <li>Restart the dev server, then a &quot;Connect Strava&quot; button will appear here</li>
-            </ol>
-          </div>
-        )}
-      </div>
-
       </>)}
 
       {/* ── Run Log tab ── */}
@@ -1259,6 +1191,75 @@ export default function RunningHub() {
           </div>
         </div>
       )}
+
+      {/* Strava integration — kept at the bottom of the Overview tab so the
+          planner (the thing you actually use daily) is above the fold. */}
+      <div
+        className="rounded-2xl p-4 mt-6 flex flex-wrap items-center gap-3"
+        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+      >
+        <span className="text-lg">🏃</span>
+        <span className="text-sm font-semibold" style={{ color: "var(--accent-orange)" }}>Strava</span>
+        {stravaConnected ? (
+          <>
+            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--accent-green)22", color: "var(--accent-green)" }}>Connected</span>
+            <button
+              onClick={syncStrava}
+              disabled={stravaLoading}
+              className="px-3 py-1.5 rounded-lg text-sm"
+              style={{ background: "var(--accent-orange)", color: "#fff" }}
+            >
+              {stravaLoading ? "Syncing…" : "Sync runs"}
+            </button>
+            <button
+              onClick={disconnectStrava}
+              className="px-3 py-1.5 rounded-lg text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
+            >
+              Disconnect
+            </button>
+            {stravaSyncResult && (
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>{stravaSyncResult}</span>
+            )}
+          </>
+        ) : stravaHasCredentials ? (
+          <a
+            href="/api/strava/auth"
+            className="px-4 py-1.5 rounded-lg text-sm font-semibold"
+            style={{ background: "var(--accent-orange)", color: "#fff" }}
+          >
+            Connect Strava
+          </a>
+        ) : (
+          <div className="text-xs space-y-1" style={{ color: "var(--text-muted)" }}>
+            <p className="font-medium" style={{ color: "var(--text)" }}>Setup required — 3 steps:</p>
+            <ol className="list-decimal list-inside space-y-0.5">
+              <li>
+                Create a Strava app at{" "}
+                <a
+                  href="https://www.strava.com/settings/api"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                  style={{ color: "var(--accent-orange)" }}
+                >
+                  strava.com/settings/api
+                </a>
+                {" "}— set <em>Authorization Callback Domain</em> to{" "}
+                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>localhost</code>
+              </li>
+              <li>
+                Add to{" "}
+                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>.env.local</code>
+                :{" "}
+                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>STRAVA_CLIENT_ID=…</code>{" "}
+                <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>STRAVA_CLIENT_SECRET=…</code>
+              </li>
+              <li>Restart the dev server, then a &quot;Connect Strava&quot; button will appear here</li>
+            </ol>
+          </div>
+        )}
+      </div>
 
       </>)}
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Skeleton } from "@/components/Skeleton";
 
 // ── EDM (NHL) types ────────────────────────────────────────────────────────
 interface TeamStanding {
@@ -285,7 +286,12 @@ export default function SportsWidget() {
       </div>
 
       {loading ? (
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
+        <div className="grid grid-cols-2 gap-3">
+          <Skeleton height={110} rounded="14px" />
+          <Skeleton height={110} rounded="14px" />
+          <Skeleton height={110} rounded="14px" />
+          <Skeleton height={110} rounded="14px" />
+        </div>
       ) : (
         <>
         <div className="grid grid-cols-2 gap-3">

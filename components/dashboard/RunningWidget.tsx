@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Card, { CardHeader } from "@/components/Card";
+import { Skeleton, SkeletonList } from "@/components/Skeleton";
 
 interface RecentRun {
   date: string;
@@ -70,7 +71,14 @@ export default function RunningWidget() {
       />
 
       {loading ? (
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
+        <div className="space-y-3">
+          <div className="flex gap-3">
+            <Skeleton className="flex-1" height={64} rounded="12px" />
+            <Skeleton className="flex-1" height={64} rounded="12px" />
+            <Skeleton className="flex-1" height={64} rounded="12px" />
+          </div>
+          <SkeletonList rows={3} rowHeight={40} />
+        </div>
       ) : (
         <div className="space-y-3">
           {/* Stats row — this week + last 30 days + days to race */}

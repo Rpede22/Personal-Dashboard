@@ -1,6 +1,157 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ddragonChampionIcon } from "@/lib/riot";
+
+interface TimelineFrame { timestampMs: number; blueGold: number; redGold: number; blueLevel: number; redLevel: number }
+
+/**
+ * Gold-difference chart with y-axis reference lines and hover-to-inspect.
+ * Split out from MatchDetailModal so it can own its own hover state.
+ */
+function GoldChart({ timeline }: { timeline: TimelineFrame[] }) {
+  const W = 640, H = 140, PAD_X = 40, PAD_Y = 16;
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  const golds = timeline.map((f) => f.blueGold - f.redGold);
+  const maxAbs = Math.max(...golds.map(Math.abs), 1);
+  const maxMin = timeline[timeline.length - 1].timestampMs / 60000;
+  const xAt = (ms: number) => PAD_X + ((ms / 60000) / maxMin) * (W - PAD_X * 2);
+  const yAt = (gd: number) => H / 2 - (gd / maxAbs) * (H / 2 - PAD_Y);
+  const zeroY = H / 2;
+  const pts = timeline.map((f) => `${xAt(f.timestampMs)},${yAt(f.blueGold - f.redGold)}`).join(" ");
+  const areaPts = `${xAt(0)},${zeroY} ${pts} ${xAt(timeline[timeline.length - 1].timestampMs)},${zeroY}`;
+  const finalGD = golds[golds.length - 1];
+  const peakBlue = Math.max(...golds);
+  const peakRed  = Math.min(...golds);
+
+  // Reference y-gridlines: 25%, 50%, 75% of maxAbs, mirrored above and below.
+  // Labelled on the left so the eye can read a delta without moving to the tooltip.
+  const yTicks = [0.25, 0.5, 0.75, 1].flatMap((frac) => [frac, -frac]).map((frac) => ({
+    frac,
+    y: yAt(frac * maxAbs),
+    labelK: (frac * maxAbs) / 1000,
+  }));
+
+  function handleMove(e: React.MouseEvent<SVGSVGElement>) {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const svgX = ((e.clientX - rect.left) / rect.width) * W;
+    // Find the nearest frame to the pointer's x-position.
+    let best = 0, bestDist = Infinity;
+    for (let i = 0; i < timeline.length; i++) {
+      const dist = Math.abs(xAt(timeline[i].timestampMs) - svgX);
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    }
+    setHoverIdx(best);
+  }
+
+  const hoverFrame = hoverIdx != null ? timeline[hoverIdx] : null;
+  const hoverGD = hoverFrame ? hoverFrame.blueGold - hoverFrame.redGold : 0;
+  const hoverMin = hoverFrame ? Math.round(hoverFrame.timestampMs / 60000) : 0;
+  const hoverX = hoverFrame ? xAt(hoverFrame.timestampMs) : 0;
+  const hoverY = hoverFrame ? yAt(hoverGD) : 0;
+
+  return (
+    <div className="rounded-xl p-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+      <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
+        <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+          Gold difference · blue − red
+        </h3>
+        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <span style={{ color: "var(--accent-blue)" }}>peak +{(peakBlue / 1000).toFixed(1)}k</span>
+          <span> · </span>
+          <span style={{ color: "var(--accent-red)" }}>peak −{(-peakRed / 1000).toFixed(1)}k</span>
+          <span> · final </span>
+          <span style={{ color: finalGD >= 0 ? "var(--accent-blue)" : "var(--accent-red)", fontWeight: 600 }}>
+            {finalGD >= 0 ? "+" : "−"}{(Math.abs(finalGD) / 1000).toFixed(1)}k
+          </span>
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${W} ${H}`}
+          width="100%"
+          height={H}
+          preserveAspectRatio="none"
+          onMouseMove={handleMove}
+          onMouseLeave={() => setHoverIdx(null)}
+          style={{ cursor: "crosshair" }}
+        >
+          {/* Reference y-gridlines (dashed, faint) + left labels */}
+          {yTicks.map(({ frac, y, labelK }) => (
+            <g key={frac}>
+              <line x1={PAD_X} y1={y} x2={W - PAD_X} y2={y} stroke="var(--border)" strokeWidth={0.5} strokeDasharray="3 3" opacity={0.6} />
+              <text x={PAD_X - 4} y={y + 3} fontSize={9} textAnchor="end" fill="var(--text-muted)">
+                {frac > 0 ? "+" : "−"}{labelK.toFixed(1)}k
+              </text>
+            </g>
+          ))}
+          {/* Zero line — solid, more prominent */}
+          <line x1={PAD_X} y1={zeroY} x2={W - PAD_X} y2={zeroY} stroke="var(--text-muted)" strokeWidth={1} />
+          <text x={PAD_X - 4} y={zeroY + 3} fontSize={9} textAnchor="end" fill="var(--text-muted)">0</text>
+
+          {/* Filled area — blue above, red below */}
+          <defs>
+            <clipPath id="blueClip"><rect x={0} y={0} width={W} height={zeroY} /></clipPath>
+            <clipPath id="redClip"><rect x={0} y={zeroY} width={W} height={H - zeroY} /></clipPath>
+          </defs>
+          <polygon points={areaPts} fill="var(--accent-blue)" opacity={0.35} clipPath="url(#blueClip)" />
+          <polygon points={areaPts} fill="var(--accent-red)"  opacity={0.35} clipPath="url(#redClip)"  />
+
+          {/* Line above the fill */}
+          <polyline points={pts} fill="none" stroke="var(--text)" strokeWidth={1.5} strokeLinejoin="round" />
+
+          {/* X-axis minute ticks every 5 min */}
+          {Array.from({ length: Math.floor(maxMin / 5) + 1 }, (_, i) => i * 5).map((min) => (
+            <g key={min}>
+              <line x1={xAt(min * 60000)} y1={H - PAD_Y + 2} x2={xAt(min * 60000)} y2={H - PAD_Y - 2} stroke="var(--text-muted)" strokeWidth={0.5} />
+              <text x={xAt(min * 60000)} y={H - 2} fontSize={9} textAnchor="middle" fill="var(--text-muted)">{min}′</text>
+            </g>
+          ))}
+
+          {/* Hover indicator: vertical line + dot + tooltip */}
+          {hoverFrame && (
+            <g style={{ pointerEvents: "none" }}>
+              <line x1={hoverX} y1={PAD_Y} x2={hoverX} y2={H - PAD_Y} stroke="var(--text-muted)" strokeWidth={0.5} strokeDasharray="2 2" />
+              <circle cx={hoverX} cy={hoverY} r={3.5} fill={hoverGD >= 0 ? "var(--accent-blue)" : "var(--accent-red)"} stroke="var(--surface)" strokeWidth={1.5} />
+              {/* Tooltip: nudge left when near the right edge so it stays on-screen */}
+              {(() => {
+                const flipLeft = hoverX > W - 90;
+                const tx = flipLeft ? hoverX - 8 : hoverX + 8;
+                const anchor = flipLeft ? "end" : "start";
+                return (
+                  <g>
+                    <rect
+                      x={flipLeft ? hoverX - 90 : hoverX + 4}
+                      y={PAD_Y + 2}
+                      width={86}
+                      height={30}
+                      rx={4}
+                      fill="var(--surface)"
+                      stroke="var(--border)"
+                      strokeWidth={0.5}
+                      opacity={0.95}
+                    />
+                    <text x={tx} y={PAD_Y + 14} fontSize={10} textAnchor={anchor} fill="var(--text)">
+                      {hoverMin}′
+                    </text>
+                    <text x={tx} y={PAD_Y + 26} fontSize={10} fontWeight={600} textAnchor={anchor} fill={hoverGD >= 0 ? "var(--accent-blue)" : "var(--accent-red)"}>
+                      {hoverGD >= 0 ? "+" : "−"}{(Math.abs(hoverGD) / 1000).toFixed(2)}k
+                    </text>
+                  </g>
+                );
+              })()}
+            </g>
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+}
 
 interface DetailParticipant {
   puuid: string;
@@ -72,7 +223,6 @@ export default function MatchDetailModal({
   const [data, setData] = useState<MatchDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  interface TimelineFrame { timestampMs: number; blueGold: number; redGold: number; blueLevel: number; redLevel: number }
   const [timeline, setTimeline] = useState<TimelineFrame[] | null>(null);
 
   useEffect(() => {
@@ -209,7 +359,7 @@ export default function MatchDetailModal({
                                 <td className="px-2 py-1.5">
                                   <div className="flex items-center gap-2 min-w-0">
                                     <img
-                                      src={`https://ddragon.leagueoflegends.com/cdn/${data.dragonVersion}/img/champion/${p.championName}.png`}
+                                      src={ddragonChampionIcon(data.dragonVersion, p.championName)}
                                       alt={p.championName}
                                       width={26}
                                       height={26}
@@ -255,61 +405,9 @@ export default function MatchDetailModal({
                 );
               })}
 
-              {/* Gold-difference chart — rendered under both scoreboards so
-                  the scoreline is the first thing you see when the modal
-                  opens; the timeline is context that fits below. */}
-              {timeline && timeline.length > 1 && (() => {
-                const W = 640, H = 120, PAD_X = 32, PAD_Y = 14;
-                const golds = timeline.map((f) => f.blueGold - f.redGold);
-                const maxAbs = Math.max(...golds.map(Math.abs), 1);
-                const maxMin = timeline[timeline.length - 1].timestampMs / 60000;
-                const xAt = (ms: number) => PAD_X + ((ms / 60000) / maxMin) * (W - PAD_X * 2);
-                const yAt = (gd: number) => H / 2 - (gd / maxAbs) * (H / 2 - PAD_Y);
-                const zeroY = H / 2;
-                const pts = timeline.map((f) => `${xAt(f.timestampMs)},${yAt(f.blueGold - f.redGold)}`).join(" ");
-                const areaPts = `${xAt(0)},${zeroY} ${pts} ${xAt(timeline[timeline.length - 1].timestampMs)},${zeroY}`;
-                const finalGD = golds[golds.length - 1];
-                const peakBlue = Math.max(...golds);
-                const peakRed  = Math.min(...golds);
-                return (
-                  <div className="rounded-xl p-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
-                    <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
-                      <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
-                        Gold difference · blue − red
-                      </h3>
-                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        <span style={{ color: "var(--accent-blue)" }}>peak +{(peakBlue / 1000).toFixed(1)}k</span>
-                        <span> · </span>
-                        <span style={{ color: "var(--accent-red)" }}>peak −{(-peakRed / 1000).toFixed(1)}k</span>
-                        <span> · final </span>
-                        <span style={{ color: finalGD >= 0 ? "var(--accent-blue)" : "var(--accent-red)", fontWeight: 600 }}>
-                          {finalGD >= 0 ? "+" : "−"}{(Math.abs(finalGD) / 1000).toFixed(1)}k
-                        </span>
-                      </span>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
-                        <line x1={PAD_X} y1={zeroY} x2={W - PAD_X} y2={zeroY} stroke="var(--border)" strokeWidth={1} />
-                        <defs>
-                          <clipPath id="blueClip"><rect x={0} y={0} width={W} height={zeroY} /></clipPath>
-                          <clipPath id="redClip"><rect x={0} y={zeroY} width={W} height={H - zeroY} /></clipPath>
-                        </defs>
-                        <polygon points={areaPts} fill="var(--accent-blue)" opacity={0.35} clipPath="url(#blueClip)" />
-                        <polygon points={areaPts} fill="var(--accent-red)"  opacity={0.35} clipPath="url(#redClip)"  />
-                        <polyline points={pts} fill="none" stroke="var(--text)" strokeWidth={1.5} strokeLinejoin="round" />
-                        {Array.from({ length: Math.floor(maxMin / 5) + 1 }, (_, i) => i * 5).map((min) => (
-                          <g key={min}>
-                            <line x1={xAt(min * 60000)} y1={H - PAD_Y + 2} x2={xAt(min * 60000)} y2={H - PAD_Y - 2} stroke="var(--text-muted)" strokeWidth={0.5} />
-                            <text x={xAt(min * 60000)} y={H - 2} fontSize={9} textAnchor="middle" fill="var(--text-muted)">{min}′</text>
-                          </g>
-                        ))}
-                        <text x={4} y={PAD_Y + 4} fontSize={9} fill="var(--accent-blue)">+{(maxAbs / 1000).toFixed(1)}k</text>
-                        <text x={4} y={H - PAD_Y - 2} fontSize={9} fill="var(--accent-red)">−{(maxAbs / 1000).toFixed(1)}k</text>
-                      </svg>
-                    </div>
-                  </div>
-                );
-              })()}
+              {/* Gold-difference chart under both scoreboards. Own component
+                  so hover state stays local. */}
+              {timeline && timeline.length > 1 && <GoldChart timeline={timeline} />}
             </>
           )}
         </div>

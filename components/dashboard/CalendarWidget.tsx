@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Card, { CardHeader } from "@/components/Card";
+import { SkeletonList } from "@/components/Skeleton";
 
 interface CalEvent {
   uid: string;
@@ -102,7 +103,7 @@ export default function CalendarWidget() {
       <CardHeader icon="📅" title="Calendar" subtitle="Upcoming events" accentColor="var(--accent-pink)" />
 
       {loading ? (
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
+        <SkeletonList rows={4} rowHeight={40} />
       ) : !configured ? (
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>Calendar not configured.</p>
       ) : error ? (

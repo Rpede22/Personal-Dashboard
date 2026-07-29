@@ -2,8 +2,14 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import {
+  ddragonChampionIcon,
+  ddragonProfileIcon,
+  ddragonSummonerSpellIcon,
+  cdragonRankedEmblem,
+  cdragonPositionIcon,
+} from "@/lib/riot";
 
 const MatchDetailModal = dynamic(() => import("./MatchDetailModal"), { ssr: false });
 
@@ -150,7 +156,10 @@ const REGIONS: { value: string; label: string }[] = [
   { value: "ru",   label: "Russia" },
 ];
 
-export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } = {}) {
+export default function LoLHub(_props?: { hideHeader?: boolean }) {
+  // `hideHeader` prop retained for callsite compatibility; the internal header
+  // was removed since the hub is only ever rendered inside GameHub.
+  void _props;
   const [accounts, setAccounts] = useState<LolAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -387,20 +396,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
   const selected = accounts.find((a) => a.id === selectedId) ?? null;
 
   return (
-    <div className={hideHeader ? "" : "min-h-screen p-6 page-bg"}>
-      {!hideHeader && (
-        <div className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg">
-          <div className="flex items-center gap-4">
-            <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
-              ← Dashboard
-            </Link>
-            <h1 className="text-2xl font-bold" style={{ color: "var(--accent-blue)" }}>
-              ⚔️ League of Legends
-            </h1>
-          </div>
-        </div>
-      )}
-
+    <div>
       <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-6">
         {/* ── Accounts sidebar ── */}
         <aside className="space-y-3">
@@ -545,7 +541,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                     return (
                       <li key={r.name} className="flex items-center gap-2 px-2.5 py-1.5" style={{ borderBottom: "1px solid var(--border)" }}>
                         <img
-                          src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/champion/${r.name}.png`}
+                          src={ddragonChampionIcon(summary.dragonVersion, r.name)}
                           alt=""
                           width={26}
                           height={26}
@@ -580,7 +576,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                   <div className="flex items-center gap-4 min-w-0">
                     {summary && (
                       <img
-                        src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/profileicon/${summary.summoner.profileIconId}.png`}
+                        src={ddragonProfileIcon(summary.dragonVersion, summary.summoner.profileIconId)}
                         alt=""
                         width={64}
                         height={64}
@@ -682,7 +678,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                           const games = r.wins + r.losses;
                           const wr = games > 0 ? Math.round((r.wins / games) * 100) : 0;
                           const color = tierColor(r.tier);
-                          const emblem = `https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-static-assets/global/default/images/ranked-emblem/emblem-${r.tier.toLowerCase()}.png`;
+                          const emblem = cdragonRankedEmblem(r.tier);
                           return (
                             <div key={r.queueType} className="rounded-2xl p-4 flex items-center gap-3" style={{ background: "var(--surface)", border: `1px solid ${color}55` }}>
                               <img
@@ -736,7 +732,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                               return (
                                 <div key={c.name} className="flex items-center gap-2 min-w-[180px]">
                                   <img
-                                    src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/champion/${c.name}.png`}
+                                    src={ddragonChampionIcon(summary.dragonVersion, c.name)}
                                     alt=""
                                     width={28}
                                     height={28}
@@ -913,7 +909,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                               {/* Champion portrait with role icon overlay on bottom-left */}
                               <div className="relative flex-shrink-0" style={{ width: 44, height: 44 }}>
                                 <img
-                                  src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/champion/${m.me.championName}.png`}
+                                  src={ddragonChampionIcon(summary.dragonVersion, m.me.championName)}
                                   alt={m.me.championName}
                                   width={44}
                                   height={44}
@@ -927,7 +923,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                                     style={{ width: 16, height: 16, background: "var(--surface)", border: "1px solid var(--border)" }}
                                   >
                                     <img
-                                      src={`https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-${positionSlug}.svg`}
+                                      src={cdragonPositionIcon(positionSlug)}
                                       alt=""
                                       width={11}
                                       height={11}
@@ -945,7 +941,7 @@ export default function LoLHub({ hideHeader = false }: { hideHeader?: boolean } 
                                   return (
                                     <img
                                       key={i}
-                                      src={`https://ddragon.leagueoflegends.com/cdn/${summary.dragonVersion}/img/spell/${spellName}.png`}
+                                      src={ddragonSummonerSpellIcon(summary.dragonVersion, spellName)}
                                       alt={spellName}
                                       title={spellName.replace(/^Summoner/, "")}
                                       width={18}

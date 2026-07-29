@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 
 interface WowCharacter {
   id: number;
@@ -146,7 +145,10 @@ function CheckGrid({
   );
 }
 
-export default function WoWHub({ hideHeader = false }: { hideHeader?: boolean } = {}) {
+export default function WoWHub(_props?: { hideHeader?: boolean }) {
+  // `hideHeader` prop retained for callsite compatibility; the internal header
+  // was removed since the hub is only ever rendered inside GameHub.
+  void _props;
   const [characters, setCharacters] = useState<WowCharacter[]>([]);
   const [selectedChar, setSelectedChar] = useState<WowCharacter | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
@@ -508,22 +510,7 @@ export default function WoWHub({ hideHeader = false }: { hideHeader?: boolean } 
   );
 
   return (
-    <div className={hideHeader ? "" : "min-h-screen p-6 page-bg"}>
-      {!hideHeader && (
-        <div
-          className="sticky top-[28px] z-10 -mx-6 px-6 pt-5 pb-3 mb-4 page-bg"
-        >
-          <div className="flex items-center gap-4">
-            <Link href="/" className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
-              ← Dashboard
-            </Link>
-            <h1 className="text-2xl font-bold" style={{ color: "var(--accent-purple)" }}>
-              🧙 WoW Hub
-            </h1>
-          </div>
-        </div>
-      )}
-
+    <div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Character list */}
         <div

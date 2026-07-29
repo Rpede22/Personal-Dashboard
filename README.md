@@ -79,6 +79,10 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Dashboard widget heights** are equalised per row — CSS grid stretches each pair of widgets to match the taller one so neither column looks sparse.
 
+**Drag-to-reorder widgets.** Grab the small ⋮⋮ handle in any widget's top-right corner and drop it on another widget to swap positions. The hover target gets a blue outline while dragging. Your custom order persists to `localStorage["dashboard.widgetOrder"]` and survives reloads; a "Reset widget order" button appears below the grid whenever the order differs from the default.
+
+**Loading skeletons.** While widget data loads, each card shows shape-appropriate pulsing skeleton blocks (rows for lists, a 2×2 grid for Sports, a 3-stat strip for Running) instead of a "Loading…" text — no more blank cards on first paint.
+
 **Sticky headers** — every hub page and the dashboard itself has a sticky header that stays pinned below the Electron title bar (`top: 28px`) while you scroll. Headers use a viewport-anchored background gradient (`background-attachment: fixed`) that matches the page background exactly, making them visually seamless rather than showing as a solid box.
 
 ---

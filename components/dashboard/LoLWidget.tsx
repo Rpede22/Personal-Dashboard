@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Card, { CardHeader } from "@/components/Card";
+import { SkeletonList } from "@/components/Skeleton";
+import { cdragonRankedEmblem, ddragonChampionIcon } from "@/lib/riot";
 
 interface LolAccount {
   id: number;
@@ -74,24 +76,26 @@ function shortTier(tier: string, rank: string): string {
 const STORAGE_KEY = "dashboard.lol.expanded";
 
 export default function LoLWidget() {
+  const router = useRouter();
   const [accounts, setAccounts] = useState<LolAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [summaries, setSummaries] = useState<Record<number, LoLSummary | "error">>({});
   // Accordion: at most one open at a time. null = all collapsed.
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  // Extracted so the interval below can call it without re-declaring the whole
-  // fetch chain. Accounts list is fetched on the first run; subsequent ticks
-  // only re-fetch the per-account summaries.
-  async function loadAll(refreshOnly = false) {
+  // Always fetches accounts + summaries. Earlier version tried to skip the
+  // accounts fetch on interval ticks, but the interval's closure captured
+  // `accounts = []` from the very first render — so refreshes iterated zero
+  // accounts and blanked the whole widget. Fetching accounts every time is
+  // a cheap SQLite read; the summaries hit Riot's own cache anyway.
+  async function loadAll(isFirstRun: boolean) {
     try {
-      let accts = accounts;
-      if (!refreshOnly) {
-        const res = await fetch("/api/lol/account");
-        const data = await res.json();
-        accts = data.accounts ?? [];
-        setAccounts(accts);
+      const res = await fetch("/api/lol/account");
+      const data = await res.json();
+      const accts: LolAccount[] = data.accounts ?? [];
+      setAccounts(accts);
 
+      if (isFirstRun) {
         // Hydrate the expanded account from localStorage; default = first account.
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
@@ -125,18 +129,21 @@ export default function LoLWidget() {
           }
         })
       );
-      const map: Record<number, LoLSummary | "error"> = {};
-      for (const { id, summary } of results) map[id] = summary;
-      setSummaries(map);
+      // Merge (not replace) so a single failed fetch on refresh doesn't wipe
+      // the whole widget — the previous good data stays for that account.
+      setSummaries((prev) => {
+        const next = { ...prev };
+        for (const { id, summary } of results) {
+          if (summary !== "error" || !next[id] || next[id] === "error") next[id] = summary;
+        }
+        return next;
+      });
     } catch { /* ignore */ } finally { setLoading(false); }
   }
 
   useEffect(() => {
-    loadAll(false);
-    // Poll every 2 min while the dashboard is open. Riot's cache is 60s on the
-    // volatile endpoints so this only actually hits Riot roughly every other
-    // tick — the intermediate ticks are absorbed by Next.js.
-    const iv = setInterval(() => loadAll(true), 2 * 60 * 1000);
+    loadAll(true);
+    const iv = setInterval(() => loadAll(false), 2 * 60 * 1000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -157,7 +164,7 @@ export default function LoLWidget() {
       <CardHeader icon="⚔️" title="League of Legends" subtitle="Rank · recent matches" accentColor="var(--accent-blue)" />
 
       {loading ? (
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
+        <SkeletonList rows={2} rowHeight={52} />
       ) : accounts.length === 0 ? (
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           No accounts yet — click through to add your Riot ID.
@@ -173,25 +180,38 @@ export default function LoLWidget() {
             const wrColor = wr >= 55 ? "var(--accent-green)" : wr < 45 ? "var(--accent-red)" : "var(--text-muted)";
 
             return (
-              <Link
+              // Card itself is NOT interactive — the chevron toggles expand,
+              // the inner "name area" button navigates. Separating the two
+              // hit-boxes fixes the "clicking chevron still navigates" bug
+              // that propagation-based approaches kept re-introducing.
+              <div
                 key={a.id}
-                href={`/lol?account=${a.id}`}
-                className="block rounded-xl overflow-hidden hover:brightness-110"
+                className="rounded-xl overflow-hidden"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
               >
-                {/* Header — chevron toggles expand (stopPropagation keeps the
-                    outer Link from navigating); every other click inside the
-                    card falls through to the Link and opens the hub. */}
-                <div className="flex items-center gap-2 px-3 py-2">
+                <div className="flex items-center gap-1 px-2 py-2">
                   <button
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleExpanded(a.id); }}
+                    type="button"
+                    onClick={() => toggleExpanded(a.id)}
                     title={isOpen ? "Collapse" : "Expand"}
-                    className="text-xs shrink-0 rounded-sm px-1"
-                    style={{ color: "var(--text-muted)", width: "1.1rem" }}
+                    aria-label={isOpen ? "Collapse account" : "Expand account"}
+                    className="text-sm shrink-0 rounded-md flex items-center justify-center"
+                    style={{
+                      color: "var(--text-muted)",
+                      width: "1.75rem",
+                      height: "1.75rem",
+                      background: "var(--surface-2)",
+                    }}
                   >
                     {isOpen ? "▾" : "▸"}
                   </button>
-                  <div className="flex-1 flex items-center gap-2 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/lol?account=${a.id}`)}
+                    className="flex-1 flex items-center gap-2 min-w-0 text-left px-1 rounded-md hover:brightness-110"
+                    style={{ background: "transparent" }}
+                    title="Open in LoL hub"
+                  >
                     <span className="font-semibold text-sm truncate">
                       {a.gameName}
                       <span style={{ color: "var(--text-muted)" }}>#{a.tagLine}</span>
@@ -221,7 +241,7 @@ export default function LoLWidget() {
                         <span style={{ color: "var(--text-muted)" }}>Unranked</span>
                       )}
                     </span>
-                  </div>
+                  </button>
                 </div>
 
                 {/* Expanded body */}
@@ -234,7 +254,7 @@ export default function LoLWidget() {
                         style={{ background: "var(--surface-2)", border: `1px solid ${tierColor(soloRank.tier)}55` }}
                       >
                         <img
-                          src={`https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-static-assets/global/default/images/ranked-emblem/emblem-${soloRank.tier.toLowerCase()}.png`}
+                          src={cdragonRankedEmblem(soloRank.tier)}
                           alt=""
                           width={44}
                           height={44}
@@ -295,7 +315,7 @@ export default function LoLWidget() {
                                   }}
                                 >
                                   <img
-                                    src={`https://ddragon.leagueoflegends.com/cdn/${s.dragonVersion}/img/champion/${m.me.championName}.png`}
+                                    src={ddragonChampionIcon(s.dragonVersion, m.me.championName)}
                                     alt={m.me.championName}
                                     width={26}
                                     height={26}
@@ -330,7 +350,7 @@ export default function LoLWidget() {
                     Riot data unavailable. Check <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>RIOT_API_KEY</code> in the hub.
                   </div>
                 )}
-              </Link>
+              </div>
             );
           })}
         </div>

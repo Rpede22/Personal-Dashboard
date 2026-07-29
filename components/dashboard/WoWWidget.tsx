@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Card, { CardHeader } from "@/components/Card";
+import { SkeletonList } from "@/components/Skeleton";
 
 interface WowCharacter {
   id: number;
@@ -102,7 +103,7 @@ export default function WoWWidget() {
       />
 
       {loading ? (
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
+        <SkeletonList rows={3} rowHeight={64} />
       ) : charData.length === 0 ? (
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           No characters added yet

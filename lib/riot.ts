@@ -320,6 +320,30 @@ export async function getPerkStyleIconsById(): Promise<Record<number, string>> {
   return perkStyleIconById;
 }
 
+// ── Public URL builders (safe to import client-side; no fetches) ────────────
+// Centralises the Data Dragon / Community Dragon URL templates so widgets and
+// hubs don't drift out of sync.
+
+export function ddragonChampionIcon(version: string, championName: string): string {
+  return `https://ddragon.leagueoflegends.com/cdn/${version}/img/champion/${championName}.png`;
+}
+
+export function ddragonProfileIcon(version: string, profileIconId: number): string {
+  return `https://ddragon.leagueoflegends.com/cdn/${version}/img/profileicon/${profileIconId}.png`;
+}
+
+export function ddragonSummonerSpellIcon(version: string, spellName: string): string {
+  return `https://ddragon.leagueoflegends.com/cdn/${version}/img/spell/${spellName}.png`;
+}
+
+export function cdragonRankedEmblem(tier: string): string {
+  return `https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-static-assets/global/default/images/ranked-emblem/emblem-${tier.toLowerCase()}.png`;
+}
+
+export function cdragonPositionIcon(position: string): string {
+  return `https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-${position.toLowerCase()}.svg`;
+}
+
 let summonerSpellsById: Record<number, string> | null = null;
 
 /** Return { summonerSpellKey → asset name }. Match participants report

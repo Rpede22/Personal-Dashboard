@@ -1,11 +1,4 @@
-import Link from "next/link";
-import SportsWidget from "@/components/dashboard/SportsWidget";
-import SchoolWidget from "@/components/dashboard/SchoolWidget";
-import GamesWidget from "@/components/dashboard/GamesWidget";
-import RunningWidget from "@/components/dashboard/RunningWidget";
-import WorkhubWidget from "@/components/dashboard/WorkhubWidget";
-import CalendarWidget from "@/components/dashboard/CalendarWidget";
-import WidgetErrorBoundary from "@/components/WidgetErrorBoundary";
+import DashboardGrid from "@/components/dashboard/DashboardGrid";
 
 export default function DashboardPage() {
   return (
@@ -26,40 +19,7 @@ export default function DashboardPage() {
         </p>
       </header>
 
-      {/* 2-column grid — each column is min 420px and grows to fill the window */}
-      <div
-        className="grid gap-6"
-        style={{ gridTemplateColumns: "repeat(2, minmax(420px, 1fr))" }}
-      >
-
-        {/* Row 1: Sports | School */}
-        <div className="h-full">
-          <WidgetErrorBoundary label="Sports"><SportsWidget /></WidgetErrorBoundary>
-        </div>
-
-        <Link href="/school" className="block group h-full">
-          <WidgetErrorBoundary label="School"><SchoolWidget /></WidgetErrorBoundary>
-        </Link>
-
-        {/* Row 2: Games (WoW/LoL tab-switcher) | Running */}
-        <div className="h-full">
-          <WidgetErrorBoundary label="Games"><GamesWidget /></WidgetErrorBoundary>
-        </div>
-
-        <Link href="/running" className="block group h-full">
-          <WidgetErrorBoundary label="Running"><RunningWidget /></WidgetErrorBoundary>
-        </Link>
-
-        {/* Row 3: Calendar | Workhub */}
-        <Link href="/calendar" className="block group h-full">
-          <WidgetErrorBoundary label="Calendar"><CalendarWidget /></WidgetErrorBoundary>
-        </Link>
-
-        <div className="h-full">
-          <WidgetErrorBoundary label="Workhub"><WorkhubWidget /></WidgetErrorBoundary>
-        </div>
-
-      </div>
+      <DashboardGrid />
     </main>
   );
 }
