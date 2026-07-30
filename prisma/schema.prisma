@@ -95,3 +95,20 @@ model LolAccount {
 
   @@unique([gameName, tagLine, region])
 }
+
+// Snapshot of a LoL account's ranked standing, written at most once per
+// (account, queue, day) so the sparkline in the LoL Hub can show LP-trend.
+// Populated as a side effect of the /api/lol/summary fetch — no cron job.
+model LolRankSnapshot {
+  id            Int      @id @default(autoincrement())
+  accountId     Int
+  capturedAt    DateTime @default(now())
+  queueType     String   // RANKED_SOLO_5x5 | RANKED_FLEX_SR
+  tier          String   // IRON..CHALLENGER
+  division      String   // I..IV (empty for master/gm/chall)
+  leaguePoints  Int
+  wins          Int
+  losses        Int
+
+  @@index([accountId, queueType, capturedAt])
+}

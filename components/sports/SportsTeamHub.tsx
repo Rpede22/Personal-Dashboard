@@ -2,6 +2,18 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import TitleRace from "@/components/sports/TitleRace";
+
+interface MatchStats {
+  homeTeam: string | null;
+  awayTeam: string | null;
+  possession: { home: string | number | null; away: string | number | null } | null;
+  shotsTotal: { home: string | number | null; away: string | number | null } | null;
+  shotsOnTarget: { home: string | number | null; away: string | number | null } | null;
+  xg: { home: string | number | null; away: string | number | null } | null;
+  formationHome: string | null;
+  formationAway: string | null;
+}
 
 interface GoalEvent {
   minute: number;
@@ -355,6 +367,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const [livePlayoffsLoading, setLivePlayoffsLoading] = useState(false);
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[] | "loading" | "error">>({});
+  const [statsMap, setStatsMap] = useState<Record<string, MatchStats | "loading" | "error">>({});
 
   async function loadData() {
     try {
@@ -392,6 +405,14 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   async function toggleGoals(matchId: string, date: string) {
     if (expandedMatch === matchId) { setExpandedMatch(null); return; }
     setExpandedMatch(matchId);
+    // Kick off stats fetch (FotMob-only, football-only) in parallel with goals.
+    if (isFootball && statsMap[matchId] === undefined) {
+      setStatsMap((prev) => ({ ...prev, [matchId]: "loading" }));
+      fetch(`/api/sports/match-stats?matchId=${matchId}`)
+        .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+        .then((d) => setStatsMap((prev) => ({ ...prev, [matchId]: d })))
+        .catch(() => setStatsMap((prev) => ({ ...prev, [matchId]: "error" })));
+    }
     if (goalsMap[matchId] !== undefined) return; // already fetched or fetching
     setGoalsMap((prev) => ({ ...prev, [matchId]: "loading" }));
     try {
@@ -506,6 +527,9 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
 
         /* ── STANDINGS ── */
         <div className="space-y-6">
+          {isFootball && (
+            <TitleRace keyword={keyword} rows={data.allStandings} accent={accent} />
+          )}
           <StandingsTable
             title="Regular Season"
             rows={data.allStandings}
@@ -589,9 +613,49 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                         )}
                       </div>
 
-                      {/* Goal timeline */}
+                      {/* Match stats (football only) + goal timeline */}
                       {isExpanded && (
                         <div className="px-4 pb-4 pt-2 border-t" style={{ borderColor: "var(--border)" }}>
+                          {isFootball && e.matchId && (() => {
+                            const st = statsMap[e.matchId];
+                            if (!st || st === "error") return null;
+                            if (st === "loading") {
+                              return <div className="text-xs mb-3" style={{ color: "var(--text-muted)" }}>Loading stats…</div>;
+                            }
+                            const rows: Array<{ label: string; row: MatchStats["possession"] | null; suffix?: string }> = [
+                              { label: "Possession",     row: st.possession,    suffix: "%" },
+                              { label: "Shots",          row: st.shotsTotal },
+                              { label: "Shots on target",row: st.shotsOnTarget },
+                              { label: "Expected goals", row: st.xg },
+                            ];
+                            const anyStat = rows.some((r) => r.row && (r.row.home !== null || r.row.away !== null));
+                            if (!anyStat && !st.formationHome && !st.formationAway) return null;
+                            return (
+                              <div className="mb-3 rounded-lg p-3" style={{ background: "var(--surface-2)" }}>
+                                {(st.formationHome || st.formationAway) && (
+                                  <div className="flex items-center justify-between text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+                                    <span>{st.formationHome ?? "?"}</span>
+                                    <span className="uppercase tracking-wide">Formations</span>
+                                    <span>{st.formationAway ?? "?"}</span>
+                                  </div>
+                                )}
+                                <div className="space-y-1.5">
+                                  {rows.map((r) => {
+                                    if (!r.row || (r.row.home === null && r.row.away === null)) return null;
+                                    const h = r.row.home !== null ? `${r.row.home}${r.suffix ?? ""}` : "—";
+                                    const a = r.row.away !== null ? `${r.row.away}${r.suffix ?? ""}` : "—";
+                                    return (
+                                      <div key={r.label} className="grid gap-2 items-center text-xs" style={{ gridTemplateColumns: "auto 1fr auto" }}>
+                                        <span className="font-semibold tabular-nums" style={{ minWidth: "3rem", textAlign: "right" }}>{h}</span>
+                                        <span className="uppercase tracking-wide text-center" style={{ color: "var(--text-muted)" }}>{r.label}</span>
+                                        <span className="font-semibold tabular-nums" style={{ minWidth: "3rem" }}>{a}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })()}
                           {goalsState === "loading" ? (
                             <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading…</p>
                           ) : goalsState === "error" ? (

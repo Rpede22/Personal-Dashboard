@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import PlayoffRace from "@/components/nhl/PlayoffRace";
 
 type ScopeType = "division" | "conference" | "league";
 type Division = "pacific" | "central" | "atlantic" | "metropolitan";
@@ -814,6 +815,7 @@ export default function NHLHub() {
       {/* ── Live Playoffs Bracket ── */}
       {tab === "playoffs" && (
         <div>
+          <PlayoffRace teamAbbrev="EDM" />
           {loadingBracket ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <div style={{ color: "var(--text-muted)" }}>Loading live bracket…</div>

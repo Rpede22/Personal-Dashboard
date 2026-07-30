@@ -17,6 +17,7 @@ import {
   type RiotLeagueEntry,
   type RiotMatchParticipant,
 } from "@/lib/riot";
+import { snapshotRanksIfDue } from "@/lib/rank-history";
 
 /**
  * GET /api/lol/summary?accountId=<id>
@@ -93,6 +94,10 @@ export async function GET(request: Request) {
   }
   const summoner = summonerRes.data;
   const ranks: RiotLeagueEntry[] = ranksRes.ok ? ranksRes.data : [];
+
+  // Best-effort rank history snapshot (throttled to at most once per 6h per queue).
+  // Awaited so failures surface in server logs, but the helper never throws.
+  await snapshotRanksIfDue(accountId, ranks);
 
   // 3. Fetch match details (up to 10). Riot rate-limits so serialize with small stagger.
   const matchIds = matchIdsRes.ok ? matchIdsRes.data : [];

@@ -1,4 +1,8 @@
 import DashboardGrid from "@/components/dashboard/DashboardGrid";
+import TodayBriefing from "@/components/dashboard/TodayBriefing";
+import WeekAheadHeatmap from "@/components/dashboard/WeekAheadHeatmap";
+import RaceCountdown from "@/components/dashboard/RaceCountdown";
+import ReviewLink from "@/components/dashboard/ReviewLink";
 
 export default function DashboardPage() {
   return (
@@ -19,6 +23,10 @@ export default function DashboardPage() {
         </p>
       </header>
 
+      <ReviewLink />
+      <TodayBriefing />
+      <RaceCountdown />
+      <WeekAheadHeatmap />
       <DashboardGrid />
     </main>
   );

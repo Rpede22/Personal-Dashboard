@@ -11,6 +11,8 @@ import {
   cdragonPositionIcon,
 } from "@/lib/riot";
 
+import RankSparkline from "./RankSparkline";
+
 const MatchDetailModal = dynamic(() => import("./MatchDetailModal"), { ssr: false });
 
 interface LolAccount {
@@ -508,6 +510,16 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                 </p>
               )}
             </form>
+          )}
+
+          {/* ── Rank history — LP trend, 60d window, tier icons on Y-axis ── */}
+          {selectedId !== null && (
+            <div className="pt-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
+                Rank history
+              </h2>
+              <RankSparkline accountId={selectedId} />
+            </div>
           )}
 
           {/* ── Top champions this season (full ranked history, not just loaded matches) ── */}

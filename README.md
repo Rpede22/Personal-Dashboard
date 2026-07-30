@@ -66,6 +66,8 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Danish 1st Division split table:** After round 22, FotMob returns three sub-tables (Promotion Group / Relegation Group / 1. Division). The hub and widget both display the team's Oprykningsspil rank when available.
 
+**Match reports.** For finished football matches (Barcelona + Esbjerg fB), clicking a match expands a stats panel above the goal timeline: ball possession, total shots, shots on target, expected goals, and each side's starting formation. Data comes from FotMob's `matchDetails` endpoint (free, no key) and is cached for 1 h. Every field is null-safe — if FotMob doesn't return a stat for a given match, the row is silently skipped rather than 500'ing the panel.
+
 **Goal timelines:** Click any finished match to expand a goal-by-goal timeline with scorer, assist, and running score.
 - **NHL:** Uses the free NHL play-by-play API. Includes strength indicator (EV / PP1 / PP2 / SH / EN / SO).
 - **Barcelona:** ESPN hidden API (`site.api.espn.com`) — free, no key.
@@ -82,6 +84,18 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 **Drag-to-reorder widgets.** Grab the small ⋮⋮ handle in any widget's top-right corner and drop it on another widget to swap positions. The hover target gets a blue outline while dragging. Your custom order persists to `localStorage["dashboard.widgetOrder"]` and survives reloads; a "Reset widget order" button appears below the grid whenever the order differs from the default.
 
 **Loading skeletons.** While widget data loads, each card shows shape-appropriate pulsing skeleton blocks (rows for lists, a 2×2 grid for Sports, a 3-stat strip for Running) instead of a "Loading…" text — no more blank cards on first paint.
+
+**Today briefing** sits at the very top of the dashboard: a single card showing the next calendar event, any tracked-team matches inside the next 24 h, today's planned run, and the next school deadline. Empty slots collapse — the card shrinks to what's actually happening today. Auto-refreshes every 5 min.
+
+**Race countdown** appears as a dedicated card below the Today briefing whenever a race date + distance are set — big countdown number, Riegel-predicted finish time, pace, colour-coded confidence badge, and current week km. Unmounts the day after the race.
+
+**Week-ahead heatmap** — a 7-cell strip sitting under the top cards. Each cell splits vertically into planned **school** hours (top, indigo) and **calendar-busy** hours (bottom, pink). Bars scale against a 12 h waking-hours ceiling; the cell outline goes green (≤ 8 h), orange (> 8 h) or red (> 12 h). Today gets a coloured border. Click a bar half to jump to School or Calendar. Answers "when is next week going to be a grind?" at one glance.
+
+**Weekly review** (`/review`) — auto-generated recap of the current Mon–Sun week: km vs plan, LoL wins/losses across every account + top champion, school assignments completed, calendar hours booked, and each followed team's results. One screen, no editing. Surfaced through a small **"🗓️ Review week →"** pill under the dashboard header that only appears **Thu–Sun** — the week doesn't have enough data to be worth recapping earlier. Hidden the rest of the week.
+
+**Playoff race tracker.**
+- **NHL Hub → Playoffs tab** now leads with a compact race panel for EDM: division rank, points, games remaining, margin over the current 9th-place team in the conference, **magic number** to clinch a playoff spot, and elimination number. Formulas assume 2 pts per win and ignore the regulation-win tiebreaker, so it's a rough guide, not a perfect one.
+- **Football team hubs (Barca / Esbjerg fB)** get a title-race panel above the standings: current position, points, "behind leader" or "ahead of 2nd", "above drop" gap to the third-from-bottom, and max possible points if the team wins out.
 
 **Sticky headers** — every hub page and the dashboard itself has a sticky header that stays pinned below the Electron title bar (`top: 28px`) while you scroll. Headers use a viewport-anchored background gradient (`background-attachment: fixed`) that matches the page background exactly, making them visually seamless rather than showing as a solid box.
 
@@ -114,6 +128,7 @@ Add accounts as `gameName#tagLine` + platform region (`euw1`, `na1`, `kr`, …).
 - **Load more** — "Load 10 more" button under the match list; automatically stops when there are no more matches.
 - **Session view (per day)** — the match list is grouped by local calendar day (`Today`, `Yesterday`, `Sat 20 Jul`, …), with a per-day header showing W-L record (colour-coded) and total time played.
 - **Top champions panel** in the sidebar (under the accounts list) shows the top 6 champions by games with KDA + win rate, aggregated across the full recent ranked history (up to 40 solo + 20 flex matches via `/api/lol/season-champs`) — not just the 10 matches loaded in the detail pane.
+- **Rank history sparkline** in the detail pane plots your LP over the last 60 days per queue. Snapshots are written as a side effect of every summary fetch (throttled to once every 6 h per queue), so history builds up naturally without any cron job. The line uses a monotonic LP-equivalent scale (Iron IV 0 LP = 0, Diamond IV 0 LP = 2400, Master+ = 2800 + LP) so tier boundaries don't create fake jumps.
 - `⟳ Refresh` re-fetches. Errors surface with actionable hints (missing key / rate limit / expired key).
 
 Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/) (24-hour dev key or apply for production). Dev tier rate limits: 20 req / 1 s and 100 req / 2 min. Set `RIOT_API_KEY` in `.env.local` and rebuild.
