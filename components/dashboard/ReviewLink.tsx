@@ -19,7 +19,7 @@ export default function ReviewLink() {
   if (!visible) return null;
 
   return (
-    <div className="mb-4 flex justify-end">
+    <div className="mb-4 flex justify-start">
       <Link
         href="/review"
         className="text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-2 hover:brightness-110"

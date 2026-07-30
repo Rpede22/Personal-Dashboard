@@ -69,23 +69,39 @@ export default function TodayBriefing() {
 
       const out: Item[] = [];
 
-      // 1. Next calendar event within 24h
+      // 1. Every calendar event that lands on today's local calendar day —
+      // one row per event. No fallback to tomorrow: if today is empty, the
+      // calendar slot simply doesn't render.
       if (calRes.status === "fulfilled") {
-        const events: CalEvent[] = (calRes.value?.events ?? [])
+        const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
+        const endOfToday = new Date(startOfToday); endOfToday.setDate(endOfToday.getDate() + 1);
+        const todaysEvents: CalEvent[] = (calRes.value?.events ?? [])
           .filter((e: CalEvent) => {
             const s = new Date(e.start).getTime();
-            return s >= now.getTime() && s <= in24h.getTime();
+            const en = new Date(e.end).getTime();
+            if (!isFinite(s) || !isFinite(en)) return false;
+            // Event overlaps today if it starts before end-of-today AND ends after start-of-today.
+            return s < endOfToday.getTime() && en > startOfToday.getTime();
           })
-          .sort((a: CalEvent, b: CalEvent) => new Date(a.start).getTime() - new Date(b.start).getTime());
-        const next = events[0];
-        if (next) {
-          const startsIn = new Date(next.start).getTime() - now.getTime();
+          .sort((a: CalEvent, b: CalEvent) => {
+            // All-day items first, then by start time.
+            if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
+            return new Date(a.start).getTime() - new Date(b.start).getTime();
+          });
+
+        for (const ev of todaysEvents) {
+          const evStart = new Date(ev.start);
+          const startsIn = evStart.getTime() - now.getTime();
           out.push({
-            key: "cal",
+            key: `cal-${ev.uid}`,
             emoji: "📅",
-            label: "Next event",
-            detail: next.title,
-            meta: next.allDay ? "all day" : `${formatTime(next.start)} · in ${formatCountdown(startsIn)}`,
+            label: "Today",
+            detail: ev.title,
+            meta: ev.allDay
+              ? "all day"
+              : startsIn > 0
+                ? `${formatTime(ev.start)} · in ${formatCountdown(startsIn)}`
+                : `${formatTime(ev.start)} · started`,
             href: "/calendar",
             color: "var(--accent-pink)",
           });
