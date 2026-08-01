@@ -76,6 +76,112 @@ async function fetchFromESPN(espnLeague: string, date: string, keyword: string):
   });
 }
 
+// ── FotMob source (no key required) ───────────────────────────────────────────
+// FotMob's matchDetails payload embeds the goal timeline under several keys
+// depending on the match (`content.matchFacts.events.events`, per-player event
+// lists, header summaries, …). Naively walking the whole payload double-counts
+// the same goal from multiple paths and matches aggregate objects that have
+// `type: "Goal"` but no real scorer or minute. We accept only nodes that
+// carry BOTH a scorer name AND a real minute, then dedupe by (minute+scorer+isHome).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function walkForFotMobGoals(root: any): GoalEvent[] | null {
+  interface Raw { minute: number; extraMinute: number | null; scorer: string; assist: string | null; type: GoalEvent["type"]; isHome: boolean }
+  const raw: Raw[] = [];
+  const seen = new WeakSet<object>();
+
+  function extractMinute(obj: Record<string, unknown>): { minute: number; extraMinute: number | null } | null {
+    // FotMob variants: `time` can be a number OR an object like { minutes, addedMinutes }.
+    const t = obj.time;
+    if (typeof t === "number") return { minute: t, extraMinute: typeof obj.overloadTime === "number" ? (obj.overloadTime as number) : null };
+    if (t && typeof t === "object") {
+      const to = t as Record<string, unknown>;
+      if (typeof to.minutes === "number") {
+        return { minute: to.minutes, extraMinute: typeof to.addedMinutes === "number" ? (to.addedMinutes as number) : null };
+      }
+    }
+    if (typeof obj.minute === "number") {
+      return { minute: obj.minute as number, extraMinute: typeof obj.minuteAddition === "number" ? (obj.minuteAddition as number) : null };
+    }
+    if (typeof obj.timeStr === "string") {
+      const m = /^(\d+)(?:\+(\d+))?/.exec(obj.timeStr);
+      if (m) return { minute: parseInt(m[1], 10), extraMinute: m[2] ? parseInt(m[2], 10) : null };
+    }
+    return null;
+  }
+
+  function extractScorer(obj: Record<string, unknown>): string | null {
+    const p = asObj(obj.player);
+    if (p && typeof p.name === "string" && p.name.trim()) return p.name;
+    if (typeof obj.playerName === "string" && (obj.playerName as string).trim()) return obj.playerName as string;
+    if (typeof obj.nameStr === "string" && (obj.nameStr as string).trim()) return obj.nameStr as string;
+    return null;
+  }
+
+  function visit(node: unknown): void {
+    if (!node || typeof node !== "object") return;
+    if (seen.has(node as object)) return;
+    seen.add(node as object);
+    if (Array.isArray(node)) { for (const child of node) visit(child); return; }
+    const obj = node as Record<string, unknown>;
+    const typeRaw = (obj.type ?? obj.typeOfEvent ?? obj.eventType);
+    const typeStr = typeof typeRaw === "string" ? typeRaw.toLowerCase() : null;
+    if (typeStr && (typeStr === "goal" || typeStr === "own goal" || typeStr === "penalty" || typeStr === "penalty goal")) {
+      const time = extractMinute(obj);
+      const scorer = extractScorer(obj);
+      // Skip aggregate/summary nodes that lack real per-event data.
+      if (time && scorer) {
+        const assistObj = asObj(obj.assistPlayer) ?? asObj(obj.assist);
+        const assist = assistObj && typeof assistObj.name === "string" ? assistObj.name : null;
+        const type: GoalEvent["type"] =
+          typeStr === "own goal" ? "OWN_GOAL" :
+          typeStr.includes("penalty") ? "PENALTY" : "REGULAR";
+        raw.push({ minute: time.minute, extraMinute: time.extraMinute, scorer, assist, type, isHome: obj.isHome === true });
+      }
+    }
+    for (const v of Object.values(obj)) visit(v);
+  }
+  visit(root);
+  if (raw.length === 0) return null;
+
+  // Dedupe: same minute + scorer + side = same real-world goal captured from
+  // more than one payload path. Prefer the row that has an assist over one
+  // that doesn't.
+  const byKey = new Map<string, Raw>();
+  for (const g of raw) {
+    const key = `${g.minute}-${g.extraMinute ?? ""}-${g.scorer}-${g.isHome ? "h" : "a"}`;
+    const prev = byKey.get(key);
+    if (!prev || (!prev.assist && g.assist)) byKey.set(key, g);
+  }
+  const deduped = [...byKey.values()];
+
+  deduped.sort((a, b) => (a.minute - b.minute) || ((a.extraMinute ?? 0) - (b.extraMinute ?? 0)));
+
+  let h = 0, aw = 0;
+  const out: GoalEvent[] = [];
+  for (const g of deduped) {
+    const creditHome = g.type === "OWN_GOAL" ? !g.isHome : g.isHome;
+    if (creditHome) h++; else aw++;
+    out.push({ ...g, homeScore: h, awayScore: aw });
+  }
+  return out;
+}
+
+async function fetchFromFotMob(matchId: string): Promise<GoalEvent[] | null> {
+  if (!matchId) return null;
+  try {
+    const res = await fetch(`https://www.fotmob.com/api/data/matchDetails?matchId=${matchId}`, {
+      headers: { "User-Agent": UA, "Accept": "application/json" },
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return walkForFotMobGoals(j);
+  } catch { return null; }
+}
+
+function asObj(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
 // ── SportAPI7 (Sofascore-compatible) source ───────────────────────────────────
 const SA7_BASE = "https://sportapi7.p.rapidapi.com";
 const SA7_HOST = "sportapi7.p.rapidapi.com";
@@ -178,7 +284,14 @@ export async function GET(request: Request) {
       goals = await fetchFromESPN(espnLeague, date, keyword);
     }
 
-    // Fall back to SportAPI7 if ESPN isn't mapped or returned nothing
+    // Fall back to FotMob's matchDetails (free, covers everything FotMob knows
+    // about — including Danish 1. Division for EFB). Needs the FotMob matchId
+    // from the fixture row.
+    if ((!goals || goals.length === 0) && matchId) {
+      goals = await fetchFromFotMob(matchId);
+    }
+
+    // Final fall back to SportAPI7 (paid).
     if (!goals || goals.length === 0) {
       goals = await fetchFromSportAPI7(slug, date);
     }

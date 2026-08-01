@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 interface CalEvent {
   uid: string;
@@ -91,11 +92,28 @@ export default function CalendarHub() {
   const [error, setError] = useState<string | null>(null);
   const [enabledCals, setEnabledCals] = useState<Set<string>>(new Set(["SDU", "Cand", "Rasmus_Arbejde"]));
   const [calendarNames, setCalendarNames] = useState<string[]>([]);
+  const [writeableCalendars, setWriteableCalendars] = useState<string[]>([]);
   const [viewDate, setViewDate] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  // Deep-link: /calendar?date=YYYY-MM-DD from the WeekAheadHeatmap opens
+  // straight into that day's detail (and jumps the month view to it).
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const dateParam = searchParams.get("date");
+    if (!dateParam) return;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateParam);
+    if (!m) return;
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const d = Number(m[3]);
+    setSelectedDay(dateParam);
+    setViewDate(new Date(y, mo, 1));
+    void d;
+  }, [searchParams]);
 
   // ── Quick-add state ─────────────────────────────────────────────────────
   const [addOpen, setAddOpen] = useState(false);
@@ -111,11 +129,8 @@ export default function CalendarHub() {
     location: "",
   });
 
-  // Only iCloud (CalDAV) calendars can be written back to — ICS feeds are
-  // read-only, so the picker restricts to writeable names. Detected below.
-  // Everything except the read-only ICS feed names is assumed writeable.
-  const READ_ONLY = new Set(["Rasmus_skole", "Cand", "Rasmus_arbejde"]);
-  const writeableCalendars = calendarNames.filter((n) => !READ_ONLY.has(n));
+  // `writeableCalendars` is populated from the API (`data.writableCalendars`),
+  // which returns only iCloud CalDAV names — ICS feeds are read-only by nature.
 
   async function submitAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -175,6 +190,8 @@ export default function CalendarHub() {
         const apiNames: string[] = Array.isArray(d.calendars) ? d.calendars : [];
         const names = [...new Set([...apiNames, ...eventNames])].sort();
         setCalendarNames(names);
+        const apiWriteable: string[] = Array.isArray(d.writableCalendars) ? d.writableCalendars : [];
+        setWriteableCalendars(apiWriteable);
         try {
           const raw = localStorage.getItem(FILTER_KEY);
           if (!raw) {

@@ -179,14 +179,25 @@ function extractCalendarData(xml: string): string[] {
   return blocks;
 }
 
-// CalDAV calendars to include (match by iCloud display name prefix).
-// `Cand` intentionally dropped — the ICS `CALENDAR_CAND_URL` feed covers it.
-const CALDAV_INCLUDE = ["Arbejde", "Kalender"];
+// CalDAV calendars to include (match by iCloud display name prefix). Add a
+// prefix here for every iCloud calendar you want surfaced (and writeable via
+// the quick-add picker). `Cand` intentionally dropped — the ICS
+// `CALENDAR_CAND_URL` feed covers it. `Rasmus` catches any iCloud calendar
+// starting with that name (e.g. `Rasmus_skole`, `Rasmus_arbejde`) alongside
+// the ICS feeds of the same name — the ICS entries stay read-only, but a
+// matching iCloud calendar becomes writeable.
+const CALDAV_INCLUDE = ["Arbejde", "Kalender", "Rasmus"];
 
 // Rename iCloud-side display names to the labels shown in the app.
-// Add rows here if you want a different label than the CalDAV name.
+// Keyed by the CALDAV_INCLUDE prefix that matched — the app label replaces
+// the raw iCloud name for every calendar under that prefix.
+// `Rasmus` remaps to `Rasmus_arbejde` so any iCloud calendar starting with
+// `Rasmus` (e.g. `Rasmus Arbejde`) collapses onto the existing ICS feed name
+// and gets skipped by the collision guard rather than showing up as a
+// duplicate chip.
 const CALDAV_DISPLAY_NAME: Record<string, string> = {
   Arbejde: "Jennifer_arbejde",
+  Rasmus:  "Rasmus_arbejde",
 };
 
 async function fetchCalDAVCalendars(auth: string): Promise<{ url: string; name: string }[]> {
@@ -296,6 +307,9 @@ export async function GET(request: Request) {
   // Track every configured calendar name so the UI can show filter toggles even
   // for calendars that currently have zero events in the window.
   const allCalendarNames = new Set<string>();
+  // Subset of allCalendarNames that we can PUT events to (iCloud CalDAV, not
+  // read-only ICS feeds). Powers the quick-add picker.
+  const writableCalendarNames = new Set<string>();
 
   // 1. ICS feeds — always register the name even if the feed is empty or failed,
   //    so the calendar filter chip still appears in the UI.
@@ -323,8 +337,16 @@ export async function GET(request: Request) {
   if (hasCalDAV) {
     try {
       const auth = "Basic " + Buffer.from(`${process.env.ICLOUD_CALDAV_USER}:${process.env.ICLOUD_CALDAV_PASS}`).toString("base64");
-      const calendars = await fetchCalDAVCalendars(auth);
-      for (const { name } of calendars) allCalendarNames.add(name);
+      // Skip any CalDAV calendar whose name collides with an already-registered
+      // ICS feed — otherwise the app shows a duplicate chip (usually the iCloud
+      // side is empty since the real events come from the ICS URL).
+      const calendars = (await fetchCalDAVCalendars(auth)).filter(
+        (c) => !allCalendarNames.has(c.name)
+      );
+      for (const { name } of calendars) {
+        allCalendarNames.add(name);
+        writableCalendarNames.add(name);
+      }
       await Promise.all(
         calendars.map(async ({ url, name }) => {
           try { allEvents.push(...await fetchCalDAVEvents(url, name, auth, oneMonthAgo, threeMonths)); }
@@ -344,11 +366,27 @@ export async function GET(request: Request) {
   }
 
   allEvents.sort((a, b) => a.start.localeCompare(b.start));
+
+  // Dedupe: the same real-world event can arrive twice — e.g. an RRULE master
+  // gets expanded AND the ICS also ships explicit RECURRENCE-ID overrides for
+  // the same date, or two feeds both list the same meeting. Two events with
+  // the same (start, end, title, calendar) are treated as one; the first copy
+  // wins. Compared to intra-second precision by trimming the ISO to seconds.
+  const seen = new Set<string>();
+  const dedupedEvents: CalEvent[] = [];
+  for (const e of allEvents) {
+    const key = `${e.start.slice(0, 19)}|${e.end.slice(0, 19)}|${e.title}|${e.calendar}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dedupedEvents.push(e);
+  }
+
   const payload = {
     configured: true,
-    events: allEvents,
+    events: dedupedEvents,
     errors: fetchErrors,
     calendars: [...allCalendarNames].sort(),
+    writableCalendars: [...writableCalendarNames].sort(),
   };
   cache.set(cacheKey, { data: payload, ts: Date.now() });
   return NextResponse.json(payload);

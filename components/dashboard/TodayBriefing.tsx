@@ -89,7 +89,8 @@ export default function TodayBriefing() {
             return new Date(a.start).getTime() - new Date(b.start).getTime();
           });
 
-        for (const ev of todaysEvents) {
+        if (todaysEvents.length === 1) {
+          const ev = todaysEvents[0];
           const evStart = new Date(ev.start);
           const startsIn = evStart.getTime() - now.getTime();
           out.push({
@@ -105,17 +106,44 @@ export default function TodayBriefing() {
             href: "/calendar",
             color: "var(--accent-pink)",
           });
+        } else if (todaysEvents.length > 1) {
+          // Multiple events — collapse into a single box. Primary line = first
+          // event's title; meta line lists the rest with times separated by " · ".
+          const first = todaysEvents[0];
+          const firstStart = new Date(first.start);
+          const firstStartsIn = firstStart.getTime() - now.getTime();
+          const firstMeta = first.allDay
+            ? "all day"
+            : firstStartsIn > 0
+              ? `${formatTime(first.start)} · in ${formatCountdown(firstStartsIn)}`
+              : `${formatTime(first.start)} · started`;
+          const rest = todaysEvents.slice(1).map((ev) => {
+            const t = ev.allDay ? "all day" : formatTime(ev.start);
+            return `${t} ${ev.title}`;
+          }).join(" · ");
+          out.push({
+            key: "cal-today",
+            emoji: "📅",
+            label: `Today · ${todaysEvents.length} events`,
+            detail: first.title,
+            meta: `${firstMeta} — then ${rest}`,
+            href: "/calendar",
+            color: "var(--accent-pink)",
+          });
         }
       }
 
-      // 2. Tracked matches within 24h — one item per team match
+      // 2. Tracked matches — show if kickoff is today (local day) or within the
+      // next 24h. Also include matches that already kicked off today but aren't
+      // finished yet (previous rule dropped them the moment kickoff passed).
       if (sportsRes.status === "fulfilled") {
         const summaries: SportsSummary[] = sportsRes.value?.summaries ?? [];
         for (const s of summaries) {
           const upcoming = (s.next5 ?? []).find((m) => {
             if (m.finished) return false;
             const t = matchStart(m.date, m.time);
-            return t && t.getTime() >= now.getTime() && t.getTime() <= in24h.getTime();
+            if (!t) return false;
+            return isSameLocalDay(t, now) || (t.getTime() >= now.getTime() && t.getTime() <= in24h.getTime());
           });
           if (upcoming) {
             const t = matchStart(upcoming.date, upcoming.time)!;
@@ -125,7 +153,9 @@ export default function TodayBriefing() {
               emoji: s.config.emoji ?? "🏆",
               label: s.config.shortName ?? s.config.name ?? s.slug,
               detail: `${upcoming.homeTeam} vs ${upcoming.awayTeam}`,
-              meta: `${formatTime(t.toISOString())} · in ${formatCountdown(startsIn)}`,
+              meta: startsIn >= 0
+                ? `${formatTime(t.toISOString())} · in ${formatCountdown(startsIn)}`
+                : `${formatTime(t.toISOString())} · started`,
               href: SPORT_HREF[s.slug] ?? "/",
               color: "var(--accent-orange)",
             });
@@ -133,18 +163,21 @@ export default function TodayBriefing() {
         }
       }
 
-      // 2b. EDM (NHL) — separate endpoint from /api/sports
+      // 2b. EDM (NHL) — separate endpoint. Same rule: today OR within 24h.
       if (nhlRes.status === "fulfilled") {
         const next = nhlRes.value?.next as { startTimeUTC?: string; homeTeam?: { abbrev?: string }; awayTeam?: { abbrev?: string } } | null;
         if (next?.startTimeUTC) {
           const t = new Date(next.startTimeUTC);
-          if (t.getTime() >= now.getTime() && t.getTime() <= in24h.getTime()) {
+          if (isSameLocalDay(t, now) || (t.getTime() >= now.getTime() && t.getTime() <= in24h.getTime())) {
+            const startsIn = t.getTime() - now.getTime();
             out.push({
               key: "sport-edm",
               emoji: "🏒",
               label: "EDM",
               detail: `${next.awayTeam?.abbrev ?? "?"} @ ${next.homeTeam?.abbrev ?? "?"}`,
-              meta: `${formatTime(next.startTimeUTC)} · in ${formatCountdown(t.getTime() - now.getTime())}`,
+              meta: startsIn >= 0
+                ? `${formatTime(next.startTimeUTC)} · in ${formatCountdown(startsIn)}`
+                : `${formatTime(next.startTimeUTC)} · started`,
               href: "/nhl",
               color: "var(--accent-orange)",
             });

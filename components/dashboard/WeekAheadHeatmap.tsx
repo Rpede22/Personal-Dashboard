@@ -164,7 +164,7 @@ export default function WeekAheadHeatmap() {
                 <div className="absolute left-0 right-0" style={{ top: 23, height: 1, background: "var(--border)" }} />
                 {/* Bottom half — calendar (grows up from midline) */}
                 <Link
-                  href="/calendar"
+                  href={`/calendar?date=${d.key}`}
                   aria-label={`${d.calendarHours.toFixed(1)}h calendar on ${d.label}`}
                   className="absolute left-0 right-0 rounded-sm hover:brightness-125"
                   style={{

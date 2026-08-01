@@ -71,7 +71,8 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 **Goal timelines:** Click any finished match to expand a goal-by-goal timeline with scorer, assist, and running score.
 - **NHL:** Uses the free NHL play-by-play API. Includes strength indicator (EV / PP1 / PP2 / SH / EN / SO).
 - **Barcelona:** ESPN hidden API (`site.api.espn.com`) — free, no key.
-- **Esbjerg fB / Esbjerg Energy:** SportAPI7 via RapidAPI (`RAPIDAPI_KEY`). Searches all matches for the date, then fetches incidents. Requires a free SportAPI7 subscription.
+- **Esbjerg fB:** FotMob `matchDetails` (free, no key). A recursive walker extracts goal events and computes the running score itself. ESPN doesn't carry Danish 1. Division and SportAPI7 incidents were often empty — this used to leave EFB matches showing "No goals recorded" even when goals were scored.
+- **Esbjerg Energy:** SportAPI7 via RapidAPI (`RAPIDAPI_KEY`). Searches all matches for the date, then fetches incidents. Requires a free SportAPI7 subscription.
 
 **Auto-refresh:** The sports widget on the dashboard and every team hub page automatically re-fetch data every 5 minutes while the app is open — no manual refresh needed.
 
@@ -85,11 +86,11 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Loading skeletons.** While widget data loads, each card shows shape-appropriate pulsing skeleton blocks (rows for lists, a 2×2 grid for Sports, a 3-stat strip for Running) instead of a "Loading…" text — no more blank cards on first paint.
 
-**Today briefing** sits at the very top of the dashboard: a single card showing the next calendar event, any tracked-team matches inside the next 24 h, today's planned run, and the next school deadline. Empty slots collapse — the card shrinks to what's actually happening today. Auto-refreshes every 5 min.
+**Today briefing** sits at the very top of the dashboard: a single card showing every calendar event that lands on today's local day, any tracked-team matches whose kickoff is today or inside the next 24 h (including matches already in progress — the widget keeps showing them until they're marked finished), today's planned run, and the next school deadline. Multiple calendar events collapse into one box (`TODAY · N events` header + `first title` + `HH.mm · started — then HH.mm Title · …`) so a busy day doesn't blow up the widget height. Empty slots collapse. Auto-refreshes every 5 min.
 
 **Race countdown** appears as a dedicated card below the Today briefing whenever a race date + distance are set — big countdown number, Riegel-predicted finish time, pace, colour-coded confidence badge, and current week km. Unmounts the day after the race.
 
-**Week-ahead heatmap** — a 7-cell strip sitting under the top cards. Each cell splits vertically into planned **school** hours (top, indigo) and **calendar-busy** hours (bottom, pink). Bars scale against a 12 h waking-hours ceiling; the cell outline goes green (≤ 8 h), orange (> 8 h) or red (> 12 h). Today gets a coloured border. Click a bar half to jump to School or Calendar. Answers "when is next week going to be a grind?" at one glance.
+**Week-ahead heatmap** — a 7-cell strip sitting under the top cards. Each cell splits vertically into planned **school** hours (top, indigo) and **calendar-busy** hours (bottom, pink). Bars scale against a 12 h waking-hours ceiling; the cell outline goes green (≤ 8 h), orange (> 8 h) or red (> 12 h). Today gets a coloured border. Click the top half to jump to School; click the bottom half to open the calendar hub **straight to that specific day** (`/calendar?date=YYYY-MM-DD` — the hub reads the query param via `useSearchParams` and preselects the day). Answers "when is next week going to be a grind?" at one glance.
 
 **Weekly review** (`/review`) — auto-generated recap of the current Mon–Sun week: km vs plan, LoL wins/losses across every account + top champion, school assignments completed, calendar hours booked, and each followed team's results. One screen, no editing. Surfaced through a small **"🗓️ Review week →"** pill under the dashboard header that only appears **Thu–Sun** — the week doesn't have enough data to be worth recapping earlier. Hidden the rest of the week.
 
@@ -205,7 +206,7 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 Events are pulled from **iCloud CalDAV** using Apple's PROPFIND/REPORT protocol. No third-party calendar service is involved.
 
 - **Sources & names shown in the app:**
-  - iCloud CalDAV: `Arbejde` (remapped to display as `Jennifer_arbejde`), `Kalender`. Configured in `app/api/calendar/route.ts` via `CALDAV_INCLUDE` + the `CALDAV_DISPLAY_NAME` mapping.
+  - iCloud CalDAV: whitelisted via `CALDAV_INCLUDE` in `app/api/calendar/route.ts` (prefix match against iCloud display names). Current list: `Arbejde` (remapped to `Jennifer_arbejde` via `CALDAV_DISPLAY_NAME`), `Kalender`, `Rasmus*` (any iCloud calendar starting with `Rasmus`). Extend the array to surface additional iCloud calendars. The quick-add picker is driven by the API's `writableCalendars` field, which returns only these CalDAV names — ICS feeds are read-only by nature and never appear in the picker.
   - Public ICS URLs: `CALENDAR_SDU_URL` → `Rasmus_skole`, `CALENDAR_CAND_URL` → `Cand`, `CALENDAR_ARBEJDE_URL` → `Rasmus_arbejde`.
 - **Window: 31 days back → 365 days ahead** — long-lead events like exam dates months out show up immediately.
 - **Recurring events (`RRULE`) are expanded** — a weekly event whose base `DTSTART` is outside the window still produces all its individual occurrences inside the window (previously only the base date was checked, so recurring events silently disappeared).
