@@ -93,6 +93,7 @@ export default function CalendarHub() {
   const [enabledCals, setEnabledCals] = useState<Set<string>>(new Set(["SDU", "Cand", "Rasmus_Arbejde"]));
   const [calendarNames, setCalendarNames] = useState<string[]>([]);
   const [writeableCalendars, setWriteableCalendars] = useState<string[]>([]);
+  const [deletingUid, setDeletingUid] = useState<string | null>(null);
   const [viewDate, setViewDate] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -172,6 +173,28 @@ export default function CalendarHub() {
       setAddError(err instanceof Error ? err.message : String(err));
     } finally {
       setAddSaving(false);
+    }
+  }
+
+  async function deleteEvent(e: CalEvent) {
+    if (!window.confirm(`Delete "${e.title}"?`)) return;
+    setDeletingUid(e.uid);
+    try {
+      const res = await fetch("/api/calendar/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calendar: e.calendar, uid: e.uid }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.alert(j?.error ?? `Delete failed (${res.status})`);
+        return;
+      }
+      loadCalendar(true);
+    } catch (err) {
+      window.alert(String(err));
+    } finally {
+      setDeletingUid(null);
     }
   }
 
@@ -501,6 +524,7 @@ export default function CalendarHub() {
               <div className="space-y-2">
                 {selectedEvents.map((e) => {
                   const color = calColor(e.calendar);
+                  const canDelete = writeableCalendars.includes(e.calendar);
                   return (
                     <div
                       key={e.uid}
@@ -531,6 +555,18 @@ export default function CalendarHub() {
                       >
                         {e.calendar}
                       </span>
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => deleteEvent(e)}
+                          disabled={deletingUid === e.uid}
+                          className="text-xs px-2 py-1 rounded-md shrink-0 hover:brightness-110 disabled:opacity-50"
+                          style={{ background: "var(--accent-red)22", color: "var(--accent-red)", border: "1px solid var(--accent-red)44" }}
+                          title="Delete this event"
+                        >
+                          {deletingUid === e.uid ? "…" : "✕"}
+                        </button>
+                      )}
                     </div>
                   );
                 })}

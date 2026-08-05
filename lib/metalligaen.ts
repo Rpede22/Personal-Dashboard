@@ -137,10 +137,17 @@ export interface MetalLigaenPlayoffs {
 
 async function fetchJson<T>(url: string): Promise<T | null> {
   try {
-    const res = await fetch(url, { next: { revalidate: 300 } });
-    if (!res.ok) return null;
+    // `cache: "no-store"` bypasses Next's build-time fetch cache — a stale
+    // pre-season 404 got baked into a previous build and stuck around after
+    // Metal Ligaen published new fixtures. Small hit; the payload is tiny.
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) {
+      console.log(`[metalligaen] ${res.status} ${url}`);
+      return null;
+    }
     return (await res.json()) as T;
-  } catch {
+  } catch (err) {
+    console.log(`[metalligaen] fetch failed ${url}: ${String(err)}`);
     return null;
   }
 }
@@ -149,12 +156,14 @@ async function fetchJson<T>(url: string): Promise<T | null> {
  *  season's table is empty (season hasn't started yet), roll back to the previous
  *  completed season so we always show something meaningful. */
 export async function mlFetchStandings(startYear: number = currentSeasonStartYear()): Promise<SportsStandingRow[]> {
-  // Standings URL uses seasonEndYear
-  for (const sy of [startYear, startYear - 1]) {
+  // Standings URL uses seasonEndYear. Walk back up to 2 seasons — the current
+  // season is often published with an empty roster (games=0) months before the
+  // opener, and the previous season can be in the same state during the summer
+  // gap, so we skip anything without played games and try further back.
+  for (const sy of [startYear, startYear - 1, startYear - 2]) {
     const endYear = sy + 1;
     const data = await fetchJson<RawStandingsGroup[]>(`${BASE}/table/${endYear}/${COMPETITION_ID}.json`);
     const clubs = data?.[0]?.clubs ?? [];
-    // Skip empty (pre-season) tables — every team at 0 games
     if (clubs.length && clubs.some((c) => (c.games ?? 0) > 0)) {
       return clubs.map(mlClubToRow);
     }
@@ -182,7 +191,7 @@ function mlClubToRow(c: RawClub): SportsStandingRow {
 /** Return every match for a season, with fallback to the previous season if this
  *  one's schedule isn't published yet. Filter by team keyword downstream. */
 export async function mlFetchMatches(startYear: number = currentSeasonStartYear()): Promise<SportsEvent[]> {
-  for (const sy of [startYear, startYear - 1]) {
+  for (const sy of [startYear, startYear - 1, startYear - 2]) {
     const data = await fetchJson<{ matches: RawMatch[] }>(`${BASE}/league-matches/${sy}/${COMPETITION_ID}.json`);
     const raw = data?.matches ?? [];
     if (raw.length) return raw.map(mlMatchToEvent);
@@ -230,7 +239,7 @@ export function pickNext5(all: SportsEvent[], keyword: string): SportsEvent[] {
  * shows the last completed bracket.
  */
 export async function mlFetchPlayoffs(startYear: number = currentSeasonStartYear()): Promise<MetalLigaenPlayoffs | null> {
-  for (const sy of [startYear, startYear - 1]) {
+  for (const sy of [startYear, startYear - 1, startYear - 2]) {
     const data = await fetchJson<RawPlayoffs>(`${BASE}/league-playoffs/${sy}/${COMPETITION_ID}.json`);
     if (data?.round?.length) {
       return {

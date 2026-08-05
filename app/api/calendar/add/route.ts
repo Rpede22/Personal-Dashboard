@@ -51,8 +51,19 @@ export async function POST(request: Request) {
   const auth = "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
 
   const calendars = await discoverCalDAVCalendars(auth);
-  const match = calendars.find((c) => c.displayName === calendar)
-             ?? calendars.find((c) => c.displayName.toLowerCase() === calendar.toLowerCase());
+  // The client sends the display name shown in the UI (e.g. "Rasmus_arbejde"),
+  // which may differ from the raw iCloud name ("Rasmus Arbejde") after the
+  // CALDAV_DISPLAY_NAME remap in /api/calendar. Normalize both sides — strip
+  // separators, lowercase — so a picker choice always resolves to a real
+  // calendar even when the two names disagree on punctuation.
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_\-.]+/g, "");
+  const needle = norm(calendar);
+  const match =
+    calendars.find((c) => c.displayName === calendar)
+    ?? calendars.find((c) => c.displayName.toLowerCase() === calendar.toLowerCase())
+    ?? calendars.find((c) => norm(c.displayName) === needle)
+    ?? calendars.find((c) => norm(c.displayName).startsWith(needle))
+    ?? calendars.find((c) => needle.startsWith(norm(c.displayName)));
   if (!match) {
     return NextResponse.json({
       error: `Calendar "${calendar}" not found on iCloud. Available: ${calendars.map((c) => c.displayName).join(", ")}`,

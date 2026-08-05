@@ -311,38 +311,15 @@ export async function GET(request: Request) {
   // read-only ICS feeds). Powers the quick-add picker.
   const writableCalendarNames = new Set<string>();
 
-  // 1. ICS feeds — always register the name even if the feed is empty or failed,
-  //    so the calendar filter chip still appears in the UI.
-  await Promise.all(
-    ICS_FEEDS.map(async ({ name, envKey }) => {
-      const url = process.env[envKey];
-      console.log(`[Calendar] ICS ${name} (${envKey}): url=${url ? url.slice(0, 40) + "..." : "UNSET"}`);
-      if (!url) return;
-      allCalendarNames.add(name);
-      try {
-        const evs = await fetchICSFeed(url, name, oneMonthAgo, threeMonths);
-        console.log(`[Calendar] ICS ${name}: fetched ${evs.length} events`);
-        allEvents.push(...evs);
-      }
-      catch (err) {
-        const msg = `ICS ${name}: ${String(err)}`;
-        console.error(`[Calendar] ${msg}`);
-        fetchErrors.push(msg);
-      }
-    })
-  );
-
-  // 2. iCloud CalDAV — same rule: register the display name for every discovered
-  //    calendar, even if fetching its events fails.
+  // 1. iCloud CalDAV FIRST — a CalDAV calendar is writeable, so when a name
+  //    collides with an ICS feed we want CalDAV to win. The ICS side is dropped
+  //    below. (If a matching iCloud calendar exists, it usually mirrors the ICS
+  //    events anyway, so we're not losing data — just avoiding duplicates and
+  //    keeping write capability.)
   if (hasCalDAV) {
     try {
       const auth = "Basic " + Buffer.from(`${process.env.ICLOUD_CALDAV_USER}:${process.env.ICLOUD_CALDAV_PASS}`).toString("base64");
-      // Skip any CalDAV calendar whose name collides with an already-registered
-      // ICS feed — otherwise the app shows a duplicate chip (usually the iCloud
-      // side is empty since the real events come from the ICS URL).
-      const calendars = (await fetchCalDAVCalendars(auth)).filter(
-        (c) => !allCalendarNames.has(c.name)
-      );
+      const calendars = await fetchCalDAVCalendars(auth);
       for (const { name } of calendars) {
         allCalendarNames.add(name);
         writableCalendarNames.add(name);
@@ -364,6 +341,32 @@ export async function GET(request: Request) {
       // Non-fatal: ICS events are still returned
     }
   }
+
+  // 2. ICS feeds — processed AFTER CalDAV so a matching CalDAV calendar wins.
+  //    An ICS feed whose name already came from CalDAV is dropped entirely
+  //    (both the chip and its events) — otherwise events double-count.
+  await Promise.all(
+    ICS_FEEDS.map(async ({ name, envKey }) => {
+      const url = process.env[envKey];
+      console.log(`[Calendar] ICS ${name} (${envKey}): url=${url ? url.slice(0, 40) + "..." : "UNSET"}`);
+      if (!url) return;
+      if (allCalendarNames.has(name)) {
+        console.log(`[Calendar] ICS ${name}: skipped (already provided by CalDAV)`);
+        return;
+      }
+      allCalendarNames.add(name);
+      try {
+        const evs = await fetchICSFeed(url, name, oneMonthAgo, threeMonths);
+        console.log(`[Calendar] ICS ${name}: fetched ${evs.length} events`);
+        allEvents.push(...evs);
+      }
+      catch (err) {
+        const msg = `ICS ${name}: ${String(err)}`;
+        console.error(`[Calendar] ${msg}`);
+        fetchErrors.push(msg);
+      }
+    })
+  );
 
   allEvents.sort((a, b) => a.start.localeCompare(b.start));
 

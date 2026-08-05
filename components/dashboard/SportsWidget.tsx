@@ -48,6 +48,7 @@ interface SportsStanding {
   won: number;
   drawn: number;
   lost: number;
+  otLosses?: number; // hockey only — Metal Ligaen source populates this
   points: number;
 }
 interface SportsSubTable {
@@ -375,7 +376,11 @@ export default function SportsWidget() {
                   {standing ? (
                     <div className="flex gap-2 text-xs mb-2" style={{ color: "var(--text-muted)" }}>
                       <span className="font-bold" style={{ color: teamCfg.textAccent }}>{standing.points}pts</span>
-                      <span>{standing.won}W {standing.drawn}D {standing.lost}L</span>
+                      {standing.otLosses !== undefined ? (
+                        <span>{standing.won}W {standing.lost}L {standing.otLosses}OTL</span>
+                      ) : (
+                        <span>{standing.won}W {standing.drawn}D {standing.lost}L</span>
+                      )}
                     </div>
                   ) : (
                     <div className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>No data yet</div>

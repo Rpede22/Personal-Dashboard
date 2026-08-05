@@ -603,14 +603,6 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                       <div className="text-xs uppercase tracking-wide mt-1 flex items-center gap-2 flex-wrap" style={{ color: "var(--text-muted)" }}>
                         <span>{selected.region}</span>
                         {summary && <span>· Lvl {summary.summoner.level}</span>}
-                        {summary?.liveGame && (
-                          <span
-                            className="rounded-full px-2 py-0.5 font-bold"
-                            style={{ background: "var(--accent-red)22", color: "var(--accent-red)" }}
-                          >
-                            🔴 LIVE · {queueLabel(summary.liveGame.queueId)}
-                          </span>
-                        )}
                       </div>
                     </div>
                   </div>

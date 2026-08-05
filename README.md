@@ -62,7 +62,7 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Match of the week highlight** on the dashboard: whenever any of the four teams plays a top-3 league opponent within the next 7 days, a small orange strip appears above the sports grid — team badge, home/away, opponent name, opponent's league rank, and kickoff time. Each row links straight to that team's hub.
 
-**Esbjerg Energy uses [Metal Ligaen's own JSON](https://s3.dualstack.eu-west-1.amazonaws.com/den.hokejovyzapis.cz)** (via [lib/metalligaen.ts](lib/metalligaen.ts)) instead of TheSportsDB. This is the same data feed metalligaen.dk uses on its own site through the icestats.at widgets. It gives us proper standings, a full match schedule, **and a live playoff bracket** (see the Playoffs tab → Live sub-tab) — with best-of-7 pip rows, per-game scores, and OT/SO markers.
+**Esbjerg Energy uses [Metal Ligaen's own JSON](https://s3.dualstack.eu-west-1.amazonaws.com/den.hokejovyzapis.cz)** (via [lib/metalligaen.ts](lib/metalligaen.ts)) instead of TheSportsDB. This is the same data feed metalligaen.dk uses on its own site through the icestats.at widgets. It gives us proper standings, a full match schedule, **and a live playoff bracket** (see the Playoffs tab → Live sub-tab) — with best-of-7 pip rows, per-game scores, and OT/SO markers. The fetch walks back up to two seasons if the current one hasn't been populated yet (Metal Ligaen sometimes publishes an empty pre-season roster months before the opener), and the Esbjerg Energy widget row shows `W-L-OTL` instead of `W-D-L` since hockey games don't draw in regulation.
 
 **Danish 1st Division split table:** After round 22, FotMob returns three sub-tables (Promotion Group / Relegation Group / 1. Division). The hub and widget both display the team's Oprykningsspil rank when available.
 
@@ -123,7 +123,7 @@ Both games share a `/games` hub with a WoW/LoL tab switcher. `/wow` and `/lol` a
 
 Add accounts as `gameName#tagLine` + platform region (`euw1`, `na1`, `kr`, …). With `RIOT_API_KEY` set, the detail pane shows:
 
-- **Profile** — icon + summoner level, plus a red **🔴 LIVE** badge when the summoner is in an active game.
+- **Profile** — icon + summoner level. (An earlier live-game badge was removed — Riot's spectator endpoint reported stale sessions as "live" too often to be useful.)
 - **Ranked cards** — Solo/Duo + Flex tier (iron → challenger) with **rank emblem icon**, LP, wins/losses, win-rate.
 - **Match list** — filter by champion (dropdown of champs actually in the loaded matches) **and** by queue (**All / Solo / Flex / ARAM / Other**). Each row shows W/L color bar, champion icon, **summoner-spell icons (D/F)**, KDA + KDA ratio, CS + CS/min, duration, and time ago. **Click any row** for a full match popover with both team scoreboards (10 players, KDA, CS, gold, damage, vision — your player's row highlighted).
 - **Load more** — "Load 10 more" button under the match list; automatically stops when there are no more matches.
@@ -206,13 +206,15 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 Events are pulled from **iCloud CalDAV** using Apple's PROPFIND/REPORT protocol. No third-party calendar service is involved.
 
 - **Sources & names shown in the app:**
-  - iCloud CalDAV: whitelisted via `CALDAV_INCLUDE` in `app/api/calendar/route.ts` (prefix match against iCloud display names). Current list: `Arbejde` (remapped to `Jennifer_arbejde` via `CALDAV_DISPLAY_NAME`), `Kalender`, `Rasmus*` (any iCloud calendar starting with `Rasmus`). Extend the array to surface additional iCloud calendars. The quick-add picker is driven by the API's `writableCalendars` field, which returns only these CalDAV names — ICS feeds are read-only by nature and never appear in the picker.
+  - iCloud CalDAV: whitelisted via `CALDAV_INCLUDE` in `app/api/calendar/route.ts` (prefix match against iCloud display names). Current list: `Arbejde` (remapped to `Jennifer_arbejde` via `CALDAV_DISPLAY_NAME`), `Kalender`, `Rasmus*` (any iCloud calendar starting with `Rasmus`, remapped to `Rasmus_arbejde` so it merges cleanly with the ICS feed of the same name). Extend the array to surface additional iCloud calendars. The quick-add picker is driven by the API's `writableCalendars` field, which returns only these CalDAV names — ICS feeds are read-only by nature and never appear in the picker.
   - Public ICS URLs: `CALENDAR_SDU_URL` → `Rasmus_skole`, `CALENDAR_CAND_URL` → `Cand`, `CALENDAR_ARBEJDE_URL` → `Rasmus_arbejde`.
+  - **CalDAV wins over ICS on name collision.** CalDAV is fetched first; any ICS feed whose name is already provided by a CalDAV calendar is skipped entirely (both events and the filter chip). This keeps `Rasmus_arbejde` writeable via the iCloud copy instead of leaving a read-only ICS duplicate that would double-count in the Week Ahead heatmap.
 - **Window: 31 days back → 365 days ahead** — long-lead events like exam dates months out show up immediately.
 - **Recurring events (`RRULE`) are expanded** — a weekly event whose base `DTSTART` is outside the window still produces all its individual occurrences inside the window (previously only the base date was checked, so recurring events silently disappeared).
 - **All configured calendars get a filter chip** even if they currently have zero events in the window — the API returns a `calendars[]` list that the hub uses to build the chip row. Empty semester-break feeds like `Rasmus_skole` therefore stay visible instead of vanishing until events return.
 - **Renaming migration:** the hub's stored `calendarFilter` (localStorage) is auto-migrated when a calendar is renamed in the code — known names retain their on/off state and new/renamed names default to enabled.
 - **Auto-sync every hour** — the hub and the dashboard widget both re-fetch (`?bust=1` to skip the server cache) every 60 min, so calendars added upstream never lag behind by more than an hour without a manual reload.
+- **Add + delete events** — the hub has a `+ Add event` button that PUTs a new VEVENT to a picked writeable calendar via `POST /api/calendar/add`. Each event in the day-detail panel whose calendar is CalDAV-writeable also gets a red `✕` — click → confirm → `POST /api/calendar/delete` (server does a `calendar-query` REPORT by UID to find the exact `.ics` href, then `DELETE`s it). ICS-feed events (Rasmus_skole, Cand, etc.) don't render the button since they're not deletable from here.
 - **App-specific password required** — never use your main Apple ID password. Generate one at [appleid.apple.com](https://appleid.apple.com) → Security → App-Specific Passwords.
 
 ---
