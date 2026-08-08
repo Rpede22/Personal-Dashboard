@@ -3,8 +3,20 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-interface CalEvent { uid: string; start: string; end: string; allDay: boolean }
+interface CalEvent { uid: string; title: string; start: string; end: string; allDay: boolean }
 interface Assignment { id: number; estimatedHours: number | null }
+interface RunPlan { date: string; type: string; distance: number | null }
+
+interface SchoolBreakdownItem { title: string; hours: number }
+interface CalBreakdownItem { title: string; hours: number; range: string }
+
+const PLAN_COLOR: Record<string, string> = {
+  easy:  "var(--accent-green)",
+  tempo: "var(--accent-orange)",
+  speed: "var(--accent-red)",
+  long:  "var(--accent-blue)",
+  rest:  "var(--text-muted)",
+};
 
 interface DayCell {
   date: Date;
@@ -13,6 +25,9 @@ interface DayCell {
   dayNum: number;   // 24
   schoolHours: number;
   calendarHours: number;
+  schoolBreakdown: SchoolBreakdownItem[];
+  calBreakdown: CalBreakdownItem[];
+  runPlan: RunPlan | null;
 }
 
 function dateKey(d: Date): string {
@@ -25,14 +40,16 @@ function isSameLocalDay(a: Date, b: Date): boolean {
 
 export default function WeekAheadHeatmap() {
   const [days, setDays] = useState<DayCell[] | null>(null);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
-      const [schoolRes, calRes] = await Promise.allSettled([
+      const [schoolRes, calRes, runRes] = await Promise.allSettled([
         fetch("/api/school?status=pending,in_progress,overdue").then((r) => r.json()),
         fetch("/api/calendar").then((r) => r.json()),
+        fetch("/api/running/summary").then((r) => r.json()),
       ]);
 
       // Build the 7-day skeleton starting today (local)
@@ -48,21 +65,38 @@ export default function WeekAheadHeatmap() {
           dayNum: d.getDate(),
           schoolHours: 0,
           calendarHours: 0,
+          schoolBreakdown: [],
+          calBreakdown: [],
+          runPlan: null,
         };
       });
+
+      // Running: attach the day's planned session (if any) — one per date.
+      if (runRes.status === "fulfilled") {
+        const plans: RunPlan[] = runRes.value?.upcomingPlans ?? [];
+        for (const p of plans) {
+          const planDate = new Date(p.date);
+          const planKey = dateKey(planDate);
+          const cell = cells.find((c) => c.key === planKey);
+          if (cell) cell.runPlan = p;
+        }
+      }
 
       // School: loadPlan is { [dateKey]: Array<{ assignmentId, title, hours }> }.
       // (Not an object keyed by id — this shape bit me: iterating .values on
       // an array yielded the DaySlot objects, and `0 + {...}` coerced to a
       // string that later crashed .toFixed().)
       if (schoolRes.status === "fulfilled") {
-        const loadPlan: Record<string, Array<{ hours: unknown }>> = schoolRes.value?.loadPlan ?? {};
+        const loadPlan: Record<string, Array<{ hours: unknown; title?: string }>> = schoolRes.value?.loadPlan ?? {};
         for (const c of cells) {
           const slots = loadPlan[c.key];
           if (Array.isArray(slots)) {
             for (const slot of slots) {
               const n = Number(slot?.hours);
-              if (Number.isFinite(n)) c.schoolHours += n;
+              if (Number.isFinite(n)) {
+                c.schoolHours += n;
+                c.schoolBreakdown.push({ title: String(slot?.title ?? "Assignment"), hours: n });
+              }
             }
           }
         }
@@ -82,7 +116,16 @@ export default function WeekAheadHeatmap() {
             const dayStart = c.date.getTime();
             const dayEnd = dayStart + 24 * 3600 * 1000;
             const overlap = Math.max(0, Math.min(en.getTime(), dayEnd) - Math.max(s.getTime(), dayStart));
-            if (overlap > 0) c.calendarHours += overlap / 3600000;
+            if (overlap > 0) {
+              c.calendarHours += overlap / 3600000;
+              const startHM = s.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
+              const endHM   = en.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
+              c.calBreakdown.push({
+                title: String(e.title ?? "Event"),
+                hours: overlap / 3600000,
+                range: `${startHM}–${endHM}`,
+              });
+            }
           }
         }
       }
@@ -96,7 +139,7 @@ export default function WeekAheadHeatmap() {
   }, []);
 
   if (days === null) return null;
-  if (days.every((d) => d.schoolHours === 0 && d.calendarHours === 0)) return null;
+  if (days.every((d) => d.schoolHours === 0 && d.calendarHours === 0 && !d.runPlan)) return null;
 
   return (
     <div
@@ -131,16 +174,26 @@ export default function WeekAheadHeatmap() {
           return (
             <div
               key={d.key}
-              className="rounded-lg overflow-hidden flex flex-col"
+              className="rounded-lg overflow-hidden flex flex-col relative"
               style={{
                 background: "var(--surface-2)",
                 border: `1px solid ${isToday ? loadColor : "var(--border)"}`,
                 minHeight: 88,
               }}
+              onMouseEnter={() => setHoverIdx(i)}
+              onMouseLeave={() => setHoverIdx((prev) => (prev === i ? null : prev))}
             >
               <div className="flex items-center justify-between px-2 pt-1.5 pb-1">
-                <span className="text-[10px] uppercase tracking-wide" style={{ color: isToday ? loadColor : "var(--text-muted)" }}>
+                <span className="text-[10px] uppercase tracking-wide flex items-center gap-1" style={{ color: isToday ? loadColor : "var(--text-muted)" }}>
                   {isToday ? "Today" : d.label}
+                  {d.runPlan && (
+                    <span
+                      title={`Run: ${d.runPlan.type}${d.runPlan.distance ? ` · ${d.runPlan.distance.toFixed(1)} km` : ""}`}
+                      style={{ color: PLAN_COLOR[d.runPlan.type] ?? "var(--text-muted)", fontSize: "10px" }}
+                    >
+                      {d.runPlan.type === "rest" ? "😴" : "🏃"}
+                    </span>
+                  )}
                 </span>
                 <span className="text-[10px] font-semibold" style={{ color: loadColor }}>
                   {total > 0 ? `${total.toFixed(1)}h` : ""}
@@ -174,6 +227,49 @@ export default function WeekAheadHeatmap() {
                   }}
                 />
               </div>
+
+              {hoverIdx === i && (d.schoolBreakdown.length > 0 || d.calBreakdown.length > 0) && (
+                <div
+                  className="absolute z-30 rounded-lg p-2 text-[11px] shadow-xl pointer-events-none"
+                  style={{
+                    top: "100%",
+                    left: i >= 5 ? "auto" : 0,
+                    right: i >= 5 ? 0 : "auto",
+                    marginTop: 6,
+                    minWidth: 200,
+                    maxWidth: 260,
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                  }}
+                >
+                  <div className="font-semibold mb-1" style={{ color: "var(--text-muted)" }}>
+                    {isToday ? "Today" : d.date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}
+                  </div>
+                  {d.schoolBreakdown.length > 0 && (
+                    <div className="mb-1">
+                      <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--accent-indigo)" }}>School · {d.schoolHours.toFixed(1)}h</div>
+                      {d.schoolBreakdown.map((s, si) => (
+                        <div key={si} className="flex justify-between gap-2">
+                          <span className="truncate">{s.title}</span>
+                          <span className="tabular-nums shrink-0" style={{ color: "var(--text-muted)" }}>{s.hours.toFixed(1)}h</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {d.calBreakdown.length > 0 && (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--accent-pink)" }}>Calendar · {d.calendarHours.toFixed(1)}h</div>
+                      {d.calBreakdown.map((e, ei) => (
+                        <div key={ei} className="flex justify-between gap-2">
+                          <span className="truncate">{e.title}</span>
+                          <span className="tabular-nums shrink-0" style={{ color: "var(--text-muted)" }}>{e.range}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}

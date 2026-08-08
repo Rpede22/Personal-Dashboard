@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { cdragonRankedEmblem } from "@/lib/riot";
 
 interface Point {
@@ -129,9 +129,20 @@ function smoothPath(pts: Array<{ x: number; y: number }>): string {
   return d;
 }
 
+function tierShort(tier: string, division: string): string {
+  const t = tier.slice(0, 1).toUpperCase() + tier.slice(1).toLowerCase();
+  return tier === "MASTER" || tier === "GRANDMASTER" || tier === "CHALLENGER" ? t : `${t} ${division}`;
+}
+
+function formatDay(t: number): string {
+  return new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
 function RankChart({ label, points }: { label: string; points: Point[] }) {
   const gradId = useId();
   const areaGradId = useId();
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
   const lps = points.map((p) => p.lp);
   const rawMin = Math.min(...lps);
@@ -175,7 +186,30 @@ function RankChart({ label, points }: { label: string; points: Point[] }) {
         </div>
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: "block" }}>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        width="100%"
+        height={H}
+        preserveAspectRatio="none"
+        style={{ display: "block", cursor: "crosshair" }}
+        onMouseMove={(e) => {
+          const svg = svgRef.current;
+          if (!svg) return;
+          const rect = svg.getBoundingClientRect();
+          // Convert client px → viewBox coords (preserveAspectRatio=none stretches x).
+          const vx = ((e.clientX - rect.left) / rect.width) * W;
+          // Nearest point by x.
+          let bestIdx = 0;
+          let bestDx = Infinity;
+          for (let i = 0; i < svgPts.length; i++) {
+            const dx = Math.abs(svgPts[i].x - vx);
+            if (dx < bestDx) { bestDx = dx; bestIdx = i; }
+          }
+          setHoverIdx(bestIdx);
+        }}
+        onMouseLeave={() => setHoverIdx(null)}
+      >
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%"   stopColor={stopA} />
@@ -209,6 +243,32 @@ function RankChart({ label, points }: { label: string; points: Point[] }) {
         {/* Area fill + line */}
         <path d={areaPath} fill={`url(#${areaGradId})`} />
         <path d={linePath} fill="none" stroke={`url(#${gradId})`} strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
+
+        {/* Hover guide + focus dot + tooltip */}
+        {hoverIdx !== null && (() => {
+          const p = points[hoverIdx];
+          const x = svgPts[hoverIdx].x;
+          const y = svgPts[hoverIdx].y;
+          const boxW = 120;
+          const boxH = 44;
+          // Flip left if near right edge so the tooltip stays inside the chart.
+          const flip = x + boxW + 8 > W - PAD_RIGHT;
+          const boxX = flip ? x - boxW - 8 : x + 8;
+          const boxY = Math.max(2, Math.min(H - boxH - 2, y - boxH / 2));
+          const wl = `${p.wins}W ${p.losses}L`;
+          return (
+            <g pointerEvents="none">
+              <line x1={x} y1={PAD_Y} x2={x} y2={H - PAD_Y} stroke="var(--text-muted)" strokeWidth={0.7} strokeDasharray="3 3" opacity={0.6} />
+              <circle cx={x} cy={y} r={3.5} fill="var(--text)" stroke={`url(#${gradId})`} strokeWidth={1.5} />
+              <rect x={boxX} y={boxY} width={boxW} height={boxH} rx={5} fill="var(--surface-2)" stroke="var(--border)" strokeWidth={0.7} opacity={0.98} />
+              <text x={boxX + 8} y={boxY + 14} fontSize={10} fill="var(--text-muted)">{formatDay(p.t)}</text>
+              <text x={boxX + 8} y={boxY + 27} fontSize={11} fontWeight={600} fill="var(--text)">
+                {tierShort(p.tier, p.division)} · {p.leaguePoints} LP
+              </text>
+              <text x={boxX + 8} y={boxY + 39} fontSize={10} fill="var(--text-muted)">{wl}</text>
+            </g>
+          );
+        })()}
       </svg>
     </div>
   );

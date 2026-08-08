@@ -192,6 +192,19 @@ function ResultDot({ result }: { result: "W" | "D" | "L" | "OTL" }) {
   );
 }
 
+const RANK_BASELINE_KEY = "dashboard.sports.rankBaseline";
+type RankBaseline = { weekStart: string; ranks: Record<string, number> };
+
+/** Monday of the local week for a Date, formatted YYYY-MM-DD. */
+function widgetMondayKey(d: Date): string {
+  const c = new Date(d);
+  c.setHours(0, 0, 0, 0);
+  const day = c.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  c.setDate(c.getDate() + mondayOffset);
+  return `${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, "0")}-${String(c.getDate()).padStart(2, "0")}`;
+}
+
 export default function SportsWidget() {
   const [edm, setEdm] = useState<TeamStanding | null>(null);
   const [edmGames, setEdmGames] = useState<NHLGame[]>([]);
@@ -200,6 +213,7 @@ export default function SportsWidget() {
   const [nhlStandings, setNhlStandings] = useState<TeamStanding[]>([]);
   const [sportsSummaries, setSportsSummaries] = useState<SportsSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rankBaseline, setRankBaseline] = useState<RankBaseline | null>(null);
 
   async function loadData() {
     try {
@@ -234,6 +248,57 @@ export default function SportsWidget() {
     return () => clearInterval(interval);
   }, []);
 
+  // Snapshot ranks weekly so we can render "since Monday" deltas. The stored
+  // baseline is refreshed the first time the widget loads on a new Monday;
+  // during the week we hold it steady so the delta actually reflects movement.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (loading) return;
+    const currentWeek = widgetMondayKey(new Date());
+    let stored: RankBaseline | null = null;
+    try {
+      const raw = localStorage.getItem(RANK_BASELINE_KEY);
+      if (raw) stored = JSON.parse(raw) as RankBaseline;
+    } catch { /* ignore */ }
+    const currentRanks: Record<string, number> = {};
+    if (edm?.divisionRank) currentRanks.edm = edm.divisionRank;
+    for (const s of sportsSummaries) {
+      const r = s.standing?.rank;
+      if (r) currentRanks[s.slug] = r;
+    }
+    if (!stored || stored.weekStart !== currentWeek) {
+      const next: RankBaseline = { weekStart: currentWeek, ranks: currentRanks };
+      try { localStorage.setItem(RANK_BASELINE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      setRankBaseline(next);
+    } else {
+      setRankBaseline(stored);
+    }
+  }, [loading, edm, sportsSummaries]);
+
+  /** Places gained since Monday's snapshot. Positive = moved up the table. */
+  function rankDelta(slug: string, currentRank: number | undefined | null): number | null {
+    if (!rankBaseline || currentRank == null) return null;
+    const baseline = rankBaseline.ranks[slug];
+    if (baseline == null || baseline === currentRank) return null;
+    return baseline - currentRank; // higher rank number = lower position; delta positive means climbed
+  }
+
+  function RankDeltaChip({ delta }: { delta: number }) {
+    const up = delta > 0;
+    const color = up ? "var(--accent-green)" : "var(--accent-red)";
+    const arrow = up ? "▲" : "▼";
+    const abs = Math.abs(delta);
+    return (
+      <span
+        className="text-[10px] font-semibold px-1.5 rounded-md tabular-nums"
+        style={{ background: `${color}22`, color, border: `1px solid ${color}55`, lineHeight: "1.4" }}
+        title="Places moved since Monday"
+      >
+        {arrow} {abs}
+      </span>
+    );
+  }
+
   function edmResult(game: NHLGame): "W" | "L" | "OTL" {
     const es = game.homeTeam.abbrev === "EDM" ? game.homeTeam.score : game.awayTeam.score;
     const os = game.homeTeam.abbrev === "EDM" ? game.awayTeam.score : game.homeTeam.score;
@@ -257,6 +322,92 @@ export default function SportsWidget() {
     const opponent = isHome ? e.awayTeam : e.homeTeam;
     const prefix = isHome ? "vs" : "@";
     return `${prefix} ${shortName(opponent)}`;
+  }
+
+  /** "in 4h 22m" / "in 45m" — only returned when kickoff is < 12h away.
+   *  Sports fixtures carry UTC HH:MM from FotMob, so we build a UTC instant
+   *  and compare against Date.now(). */
+  function kickoffCountdown(dateStr: string | undefined | null, timeStr: string | undefined | null): string | null {
+    if (!dateStr || !timeStr) return null;
+    const t = new Date(`${dateStr}T${timeStr}:00Z`).getTime();
+    if (!isFinite(t)) return null;
+    const ms = t - Date.now();
+    if (ms <= 0) return null;
+    if (ms > 12 * 60 * 60 * 1000) return null;
+    const min = Math.floor(ms / 60000);
+    if (min < 60) return `in ${min}m`;
+    const h = Math.floor(min / 60);
+    const m = min - h * 60;
+    return m > 0 ? `in ${h}h ${m}m` : `in ${h}h`;
+  }
+
+  /** Most-recent finished sports result within 24h of now, or null. Uses UTC
+   *  `date + time` (FotMob format). Returns `{ result: "W"|"D"|"L", isHome }`. */
+  function recentFlash(events: SportsEvent[], keyword: string): { result: "W" | "D" | "L"; opponent: string } | null {
+    if (!events?.length) return null;
+    const now = Date.now();
+    const cutoff = now - 24 * 60 * 60 * 1000;
+    const finished = events
+      .filter((e) => e.finished && e.date && e.time)
+      .map((e) => ({ e, t: new Date(`${e.date}T${e.time}:00Z`).getTime() }))
+      .filter(({ t }) => isFinite(t) && t >= cutoff && t <= now)
+      .sort((a, b) => b.t - a.t);
+    const top = finished[0];
+    if (!top) return null;
+    const isHome = top.e.homeTeam.toLowerCase().includes(keyword.toLowerCase());
+    const opponent = isHome ? top.e.awayTeam : top.e.homeTeam;
+    return { result: sportsResult(top.e, keyword), opponent: shortName(opponent) };
+  }
+
+  /** NHL variant — uses startTimeUTC and the NHL 3-way outcome (W/L/OTL). */
+  function recentEdmFlash(games: NHLGame[]): { result: "W" | "L" | "OTL"; opponent: string } | null {
+    if (!games?.length) return null;
+    const now = Date.now();
+    const cutoff = now - 24 * 60 * 60 * 1000;
+    const finished = games
+      .filter((g) => g.startTimeUTC)
+      .map((g) => ({ g, t: new Date(g.startTimeUTC!).getTime() }))
+      .filter(({ t }) => isFinite(t) && t >= cutoff && t <= now)
+      .sort((a, b) => b.t - a.t);
+    const top = finished[0];
+    if (!top) return null;
+    const isHome = top.g.homeTeam.abbrev === "EDM";
+    const opponent = isHome ? top.g.awayTeam.abbrev : top.g.homeTeam.abbrev;
+    return { result: edmResult(top.g), opponent };
+  }
+
+  function FlashBadge({ result }: { result: "W" | "D" | "L" | "OTL" }) {
+    const map: Record<string, { color: string; icon: string }> = {
+      W:   { color: "var(--accent-green)",  icon: "✓" },
+      D:   { color: "var(--accent-orange)", icon: "=" },
+      L:   { color: "var(--accent-red)",    icon: "✕" },
+      OTL: { color: "var(--accent-orange)", icon: "○" },
+    };
+    const c = map[result] ?? map.L;
+    return (
+      <span
+        className="text-[10px] font-bold px-1.5 rounded-md tabular-nums"
+        style={{ background: `${c.color}22`, color: c.color, border: `1px solid ${c.color}55`, lineHeight: "1.4" }}
+        title={`Last result: ${result}`}
+      >
+        {c.icon} {result}
+      </span>
+    );
+  }
+
+  /** UTC ms for an NHL fixture with startTimeUTC. */
+  function nhlKickoffCountdown(startTimeUTC: string | undefined | null): string | null {
+    if (!startTimeUTC) return null;
+    const t = new Date(startTimeUTC).getTime();
+    if (!isFinite(t)) return null;
+    const ms = t - Date.now();
+    if (ms <= 0) return null;
+    if (ms > 12 * 60 * 60 * 1000) return null;
+    const min = Math.floor(ms / 60000);
+    if (min < 60) return `in ${min}m`;
+    const h = Math.floor(min / 60);
+    const m = min - h * 60;
+    return m > 0 ? `in ${h}h ${m}m` : `in ${h}h`;
   }
 
   function oprykningsspilRank(summary: SportsSummary): number | null {
@@ -306,9 +457,15 @@ export default function SportsWidget() {
                   <span className="text-xs font-bold" style={{ color: EDM_ACCENT }}>
                     R{edmSeries.roundNumber}
                   </span>
-                ) : edm && (
-                  <span className="text-xs font-bold" style={{ color: EDM_ACCENT }}>#{edm.divisionRank} Pacific</span>
-                )}
+                ) : edm && (() => {
+                  const d = rankDelta("edm", edm.divisionRank);
+                  return (
+                    <span className="text-xs font-bold flex items-center gap-1.5" style={{ color: EDM_ACCENT }}>
+                      #{edm.divisionRank} Pacific
+                      {d != null && <RankDeltaChip delta={d} />}
+                    </span>
+                  );
+                })()}
               </div>
               {edmSeries ? (() => {
                 const isTop = edmSeries.topSeed.abbrev === "EDM";
@@ -335,6 +492,15 @@ export default function SportsWidget() {
                   <span>{edm.wins}W {edm.losses}L {edm.otLosses}OTL</span>
                 </div>
               )}
+              {(() => {
+                const flash = recentEdmFlash(edmGames);
+                return flash ? (
+                  <div className="flex items-center gap-2 mb-2">
+                    <FlashBadge result={flash.result} />
+                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>vs {flash.opponent}</span>
+                  </div>
+                ) : null;
+              })()}
               <div className="flex gap-1 mb-2">
                 {edmGames.slice(0, 5).map((g, i) => {
                   const r = edmResult(g);
@@ -342,11 +508,15 @@ export default function SportsWidget() {
                 })}
                 {edmGames.length === 0 && <span className="text-xs" style={{ color: "var(--text-muted)" }}>—</span>}
               </div>
-              {edmNext && (
-                <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  Next: {edmDateLabel(edmNext)} · {edmNext.awayTeam.abbrev} @ {edmNext.homeTeam.abbrev} · {formatCEST(edmNext)}
-                </div>
-              )}
+              {edmNext && (() => {
+                const cd = nhlKickoffCountdown(edmNext.startTimeUTC);
+                return (
+                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    Next: {edmDateLabel(edmNext)} · {edmNext.awayTeam.abbrev} @ {edmNext.homeTeam.abbrev} · {formatCEST(edmNext)}
+                    {cd && <span style={{ color: "var(--accent-orange)" }}> · {cd}</span>}
+                  </div>
+                );
+              })()}
             </GradientBorder>
           </Link>
 
@@ -369,9 +539,15 @@ export default function SportsWidget() {
                     <span className="text-xs font-bold" style={{ color: teamCfg.textAccent }}>
                       {teamCfg.emoji} {teamCfg.short}
                     </span>
-                    {rankLabel && (
-                      <span className="text-xs font-bold" style={{ color: teamCfg.textAccent }}>{rankLabel}</span>
-                    )}
+                    {rankLabel && (() => {
+                      const d = rankDelta(teamCfg.slug, displayRank);
+                      return (
+                        <span className="text-xs font-bold flex items-center gap-1.5" style={{ color: teamCfg.textAccent }}>
+                          {rankLabel}
+                          {d != null && <RankDeltaChip delta={d} />}
+                        </span>
+                      );
+                    })()}
                   </div>
                   {standing ? (
                     <div className="flex gap-2 text-xs mb-2" style={{ color: "var(--text-muted)" }}>
@@ -385,6 +561,15 @@ export default function SportsWidget() {
                   ) : (
                     <div className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>No data yet</div>
                   )}
+                  {(() => {
+                    const flash = recentFlash(last5, keyword);
+                    return flash ? (
+                      <div className="flex items-center gap-2 mb-2">
+                        <FlashBadge result={flash.result} />
+                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>vs {flash.opponent}</span>
+                      </div>
+                    ) : null;
+                  })()}
                   <div className="flex gap-1 mb-2">
                     {last5.filter((e) => e.finished).slice(-5).map((e, i) => (
                       <ResultDot key={i} result={sportsResult(e, keyword)} />
@@ -393,12 +578,16 @@ export default function SportsWidget() {
                       <span className="text-xs" style={{ color: "var(--text-muted)" }}>—</span>
                     )}
                   </div>
-                  {next && (
-                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                      Next: {toCopenhagenDate(next.date, next.time)} · {nextMatchLabel(next, keyword)}
-                      {next.time && ` · ${toCopenhagenTime(next.date, next.time)} CEST`}
-                    </div>
-                  )}
+                  {next && (() => {
+                    const cd = kickoffCountdown(next.date, next.time);
+                    return (
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        Next: {toCopenhagenDate(next.date, next.time)} · {nextMatchLabel(next, keyword)}
+                        {next.time && ` · ${toCopenhagenTime(next.date, next.time)} CEST`}
+                        {cd && <span style={{ color: "var(--accent-orange)" }}> · {cd}</span>}
+                      </div>
+                    );
+                  })()}
                 </GradientBorder>
               </Link>
             );

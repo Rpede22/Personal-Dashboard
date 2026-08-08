@@ -44,6 +44,38 @@ function pace(distKm: number, durationSec: number): string {
   return `${m}:${String(s).padStart(2, "0")}/km`;
 }
 
+/** Heuristic — call a run "hard" if it's a long one (≥ 10 km) or fast
+ *  (pace < 5:00 / km). Good enough for a recovery dot without needing
+ *  session-type metadata on RunLog. */
+function isHardRun(r: { distance: number; duration: number }): boolean {
+  if (r.distance >= 10) return true;
+  if (r.distance > 0 && r.duration / r.distance < 300) return true;
+  return false;
+}
+
+/** Days since a run (date is UTC-midnight ISO). Uses local midnight for both
+ *  sides so timezone shifts don't inflate the number. */
+function daysSince(iso: string, now: Date = new Date()): number {
+  const t = new Date(iso);
+  const local = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((today.getTime() - local.getTime()) / 86400000);
+}
+
+/** Recovery state from the last 3 runs. `red` — hard run today, `orange` —
+ *  hard run in the last 2 days, `green` — otherwise well rested. */
+function recoveryState(runs: { date: string; distance: number; duration: number }[]): { color: string; label: string } | null {
+  if (!runs.length) return null;
+  const hardRecent = runs
+    .filter(isHardRun)
+    .map((r) => daysSince(r.date))
+    .sort((a, b) => a - b)[0];
+  if (hardRecent === undefined) return { color: "var(--accent-green)", label: "Well rested" };
+  if (hardRecent === 0) return { color: "var(--accent-red)", label: "Hard session today — take it easy" };
+  if (hardRecent <= 2) return { color: "var(--accent-orange)", label: `Recovering (${hardRecent}d since hard)` };
+  return { color: "var(--accent-green)", label: `Well rested (${hardRecent}d since hard)` };
+}
+
 export default function RunningWidget() {
   const [data, setData] = useState<RunSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,6 +93,8 @@ export default function RunningWidget() {
       ? Math.ceil((new Date(data.raceDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
       : null;
 
+  const recovery = data ? recoveryState(data.recentRuns ?? []) : null;
+
   return (
     <Card accentColor="var(--accent-green)">
       <CardHeader
@@ -69,6 +103,20 @@ export default function RunningWidget() {
         subtitle="Training tracker"
         accentColor="var(--accent-green)"
       />
+
+      {recovery && (
+        <div
+          className="flex items-center gap-2 mb-3 text-xs"
+          style={{ color: "var(--text-muted)" }}
+          title={recovery.label}
+        >
+          <span
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ background: recovery.color, boxShadow: `0 0 8px ${recovery.color}66` }}
+          />
+          <span>{recovery.label}</span>
+        </div>
+      )}
 
       {loading ? (
         <div className="space-y-3">

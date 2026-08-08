@@ -42,6 +42,7 @@ prisma/dev.db-journal
 .race-config.json
 .strava-tokens.json
 .school-settings.json
+.work-config.json
 
 # ── Claude Code / AI assistant files ─────────────────────────────────────────
 .claude/

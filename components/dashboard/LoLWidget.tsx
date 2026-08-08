@@ -37,6 +37,7 @@ interface MatchSummary {
   id: string;
   queueId: number;
   gameDuration: number;
+  gameCreation: number;
   me: MatchParticipant | null;
 }
 
@@ -75,11 +76,58 @@ function shortTier(tier: string, rank: string): string {
 
 const STORAGE_KEY = "dashboard.lol.expanded";
 
+/** Solo/Duo LP change since the first snapshot at or after today's local
+ *  midnight. Null when we have no snapshot from today to compare against. */
+function computeLpDeltaToday(history: Record<string, Array<{ t: number; lp: number }>> | null): number | null {
+  if (!history) return null;
+  const solo = history.RANKED_SOLO_5x5;
+  if (!solo || solo.length < 2) return null;
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const startMs = startOfDay.getTime();
+  const todaysPoints = solo.filter((p) => p.t >= startMs);
+  if (todaysPoints.length < 2) return null;
+  return todaysPoints[todaysPoints.length - 1].lp - todaysPoints[0].lp;
+}
+
+interface TopChamp { championName: string; games: number; wins: number; losses: number; kda: number }
+
+/** Best-performing champion among today's matches (kills+assists / max(1,deaths))
+ *  averaged; ties broken by wins then games. Excludes remakes. */
+function topChampionToday(matches: MatchSummary[]): TopChamp | null {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const startMs = startOfDay.getTime();
+  const groups = new Map<string, { games: number; wins: number; losses: number; k: number; d: number; a: number }>();
+  for (const m of matches) {
+    if (m.gameCreation < startMs) continue;
+    if (!m.me) continue;
+    if (m.me.gameEndedInEarlySurrender) continue;
+    const cur = groups.get(m.me.championName) ?? { games: 0, wins: 0, losses: 0, k: 0, d: 0, a: 0 };
+    cur.games += 1;
+    if (m.me.win) cur.wins += 1; else cur.losses += 1;
+    cur.k += m.me.kills; cur.d += m.me.deaths; cur.a += m.me.assists;
+    groups.set(m.me.championName, cur);
+  }
+  let best: TopChamp | null = null;
+  for (const [name, g] of groups) {
+    const kda = (g.k + g.a) / Math.max(1, g.d);
+    const cand: TopChamp = { championName: name, games: g.games, wins: g.wins, losses: g.losses, kda };
+    if (!best || cand.wins > best.wins || (cand.wins === best.wins && cand.games > best.games) || (cand.wins === best.wins && cand.games === best.games && cand.kda > best.kda)) {
+      best = cand;
+    }
+  }
+  return best;
+}
+
 export default function LoLWidget() {
   const router = useRouter();
   const [accounts, setAccounts] = useState<LolAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [summaries, setSummaries] = useState<Record<number, LoLSummary | "error">>({});
+  // Per-account LP delta since local midnight. Null when we don't have enough
+  // snapshots yet. Keyed by account id.
+  const [lpDeltas, setLpDeltas] = useState<Record<number, number | null>>({});
   // Accordion: at most one open at a time. null = all collapsed.
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
@@ -113,9 +161,17 @@ export default function LoLWidget() {
       const results = await Promise.all(
         accts.map(async (a) => {
           try {
-            const sRes = await fetch(`/api/lol/summary?accountId=${a.id}`);
-            if (!sRes.ok) return { id: a.id, summary: "error" as const };
+            const [sRes, hRes] = await Promise.all([
+              fetch(`/api/lol/summary?accountId=${a.id}`),
+              fetch(`/api/lol/rank-history?accountId=${a.id}&days=2`),
+            ]);
+            if (!sRes.ok) return { id: a.id, summary: "error" as const, lpDelta: null };
             const s = await sRes.json();
+            let lpDelta: number | null = null;
+            if (hRes.ok) {
+              const h = await hRes.json();
+              lpDelta = computeLpDeltaToday(h?.queues ?? null);
+            }
             return {
               id: a.id,
               summary: {
@@ -123,9 +179,10 @@ export default function LoLWidget() {
                 matches: s.matches ?? [],
                 dragonVersion: s.dragonVersion ?? "15.1.1",
               } as LoLSummary,
+              lpDelta,
             };
           } catch {
-            return { id: a.id, summary: "error" as const };
+            return { id: a.id, summary: "error" as const, lpDelta: null };
           }
         })
       );
@@ -136,6 +193,11 @@ export default function LoLWidget() {
         for (const { id, summary } of results) {
           if (summary !== "error" || !next[id] || next[id] === "error") next[id] = summary;
         }
+        return next;
+      });
+      setLpDeltas((prev) => {
+        const next = { ...prev };
+        for (const { id, lpDelta } of results) next[id] = lpDelta;
         return next;
       });
     } catch { /* ignore */ } finally { setLoading(false); }
@@ -230,6 +292,20 @@ export default function LoLWidget() {
                           <span className="font-semibold capitalize" style={{ color: tierColor(soloRank.tier) }}>
                             {shortTier(soloRank.tier, soloRank.rank)}
                           </span>
+                          {typeof lpDeltas[a.id] === "number" && lpDeltas[a.id] !== 0 && (() => {
+                            const d = lpDeltas[a.id]!;
+                            const up = d > 0;
+                            const color = up ? "var(--accent-green)" : "var(--accent-red)";
+                            return (
+                              <span
+                                className="text-[10px] font-semibold px-1.5 rounded-md tabular-nums"
+                                style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
+                                title="LP change since local midnight"
+                              >
+                                {up ? "▲" : "▼"} {up ? "+" : ""}{d}
+                              </span>
+                            );
+                          })()}
                           <span style={{ color: "var(--text-muted)" }}>
                             {soloRank.wins}W {soloRank.losses}L
                           </span>
@@ -247,6 +323,31 @@ export default function LoLWidget() {
                 {/* Expanded body */}
                 {isOpen && s && s !== "error" && (
                   <div className="px-3 pb-3 space-y-2">
+                    {(() => {
+                      const top = topChampionToday(s.matches);
+                      if (!top || top.games < 2) return null;
+                      const wl = top.losses === 0 ? `${top.wins}W` : `${top.wins}W ${top.losses}L`;
+                      return (
+                        <div
+                          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs"
+                          style={{ background: "var(--surface-2)", border: "1px solid var(--accent-blue)44" }}
+                          title="Best-performing champion today (2+ games)"
+                        >
+                          <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Today</span>
+                          <img
+                            src={ddragonChampionIcon(s.dragonVersion, top.championName)}
+                            alt={top.championName}
+                            width={20}
+                            height={20}
+                            className="rounded-sm"
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
+                          />
+                          <span className="font-semibold truncate">{top.championName}</span>
+                          <span style={{ color: "var(--text-muted)" }}>· {wl}</span>
+                          <span style={{ color: "var(--text-muted)" }}>· KDA {top.kda.toFixed(2)}</span>
+                        </div>
+                      );
+                    })()}
                     {/* Rank card with emblem */}
                     {soloRank ? (
                       <div

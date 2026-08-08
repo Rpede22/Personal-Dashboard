@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import WeatherLine from "@/components/dashboard/WeatherLine";
 
 interface CalEvent { uid: string; title: string; start: string; end: string; allDay: boolean; calendar: string }
 interface SportsSummary {
@@ -57,7 +58,6 @@ export default function TodayBriefing() {
 
     async function load() {
       const now = new Date();
-      const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
       const [calRes, sportsRes, nhlRes, runRes, schoolRes] = await Promise.allSettled([
         fetch("/api/calendar").then((r) => r.json()),
@@ -133,9 +133,9 @@ export default function TodayBriefing() {
         }
       }
 
-      // 2. Tracked matches — show if kickoff is today (local day) or within the
-      // next 24h. Also include matches that already kicked off today but aren't
-      // finished yet (previous rule dropped them the moment kickoff passed).
+      // 2. Tracked matches — same local day only (kicked off today, or later
+      // today). Football/hockey matches at a normal daytime slot in the next
+      // 24h would otherwise leak in the day before, cluttering the widget.
       if (sportsRes.status === "fulfilled") {
         const summaries: SportsSummary[] = sportsRes.value?.summaries ?? [];
         for (const s of summaries) {
@@ -143,7 +143,7 @@ export default function TodayBriefing() {
             if (m.finished) return false;
             const t = matchStart(m.date, m.time);
             if (!t) return false;
-            return isSameLocalDay(t, now) || (t.getTime() >= now.getTime() && t.getTime() <= in24h.getTime());
+            return isSameLocalDay(t, now);
           });
           if (upcoming) {
             const t = matchStart(upcoming.date, upcoming.time)!;
@@ -163,12 +163,17 @@ export default function TodayBriefing() {
         }
       }
 
-      // 2b. EDM (NHL) — separate endpoint. Same rule: today OR within 24h.
+      // 2b. EDM (NHL) — same local day, PLUS a special case: if tomorrow's
+      // game kicks off between 00:00 and 07:00 local time (typical for
+      // Edmonton games viewed from Denmark), surface it the evening before so
+      // the user isn't blindsided by an overnight puck-drop.
       if (nhlRes.status === "fulfilled") {
         const next = nhlRes.value?.next as { startTimeUTC?: string; homeTeam?: { abbrev?: string }; awayTeam?: { abbrev?: string } } | null;
         if (next?.startTimeUTC) {
           const t = new Date(next.startTimeUTC);
-          if (isSameLocalDay(t, now) || (t.getTime() >= now.getTime() && t.getTime() <= in24h.getTime())) {
+          const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+          const isOvernightTomorrow = isSameLocalDay(t, tomorrow) && t.getHours() < 7;
+          if (isSameLocalDay(t, now) || isOvernightTomorrow) {
             const startsIn = t.getTime() - now.getTime();
             out.push({
               key: "sport-edm",
@@ -245,13 +250,12 @@ export default function TodayBriefing() {
       className="mb-4 rounded-2xl px-4 py-3 flex items-stretch gap-3 flex-wrap"
       style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
     >
-      <div className="flex items-center pr-3" style={{ borderRight: "1px solid var(--border)" }}>
-        <div>
-          <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Today</div>
-          <div className="text-sm font-semibold">
-            {new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}
-          </div>
+      <div className="flex flex-col justify-center pr-3" style={{ borderRight: "1px solid var(--border)" }}>
+        <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Today</div>
+        <div className="text-sm font-semibold">
+          {new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}
         </div>
+        <WeatherLine />
       </div>
       {items.map((it) => (
         <Link
@@ -276,9 +280,9 @@ export default function TodayBriefing() {
 /** Build a match kickoff Date from date (YYYY-MM-DD) + time (HH:MM), local timezone. */
 function matchStart(date: string, time: string): Date | null {
   if (!date) return null;
-  const [y, m, d] = date.split("-").map(Number);
-  const [hh, mm] = (time || "00:00").split(":").map(Number);
-  if (!y || !m || !d) return null;
-  const local = new Date(y, m - 1, d, hh || 0, mm || 0);
-  return isNaN(local.getTime()) ? null : local;
+  // Fixtures from /api/sports carry FotMob's raw UTC `HH:MM`. Build a UTC
+  // instant, then downstream `toLocaleTimeString` displays it in local time.
+  const iso = `${date}T${time || "00:00"}:00Z`;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d;
 }

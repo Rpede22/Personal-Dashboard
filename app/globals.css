@@ -1,7 +1,8 @@
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
 
-:root {
+:root,
+:root[data-theme="dark"] {
   --background: #131926;
   --surface: #1e2840;
   --surface-2: #283350;
@@ -18,7 +19,44 @@
   --accent-lime: #84cc16;
   --accent-pink: #d946ef;
   --accent-cyan: #06b6d4;
+  --page-gradient: linear-gradient(135deg, #1a2240 0%, #131926 45%, #1c1438 100%);
 }
+
+:root[data-theme="light"] {
+  --background: #f5f7fb;
+  --surface: #ffffff;
+  --surface-2: #eef1f8;
+  --border: #c9d1e0;
+  --text: #14192a;
+  --text-muted: #5b6784;
+  --accent-blue: #2563eb;
+  --accent-green: #059669;
+  --accent-orange: #d97706;
+  --accent-purple: #7c3aed;
+  --accent-red: #dc2626;
+  --accent-yellow: #ca8a04;
+  --accent-indigo: #4f46e5;
+  --accent-lime: #65a30d;
+  --accent-pink: #c026d3;
+  --accent-cyan: #0891b2;
+  --page-gradient: linear-gradient(135deg, #eef2ff 0%, #f5f7fb 45%, #f5edff 100%);
+}
+
+/* ── Density: compact reduces padding + font-size across widget cards ── */
+:root[data-density="compact"] {
+  --density-scale: 0.85;
+}
+:root[data-density="compact"] .rounded-2xl { border-radius: 12px; }
+:root[data-density="compact"] .p-4 { padding: 0.65rem !important; }
+:root[data-density="compact"] .p-3 { padding: 0.5rem !important; }
+:root[data-density="compact"] .py-3 { padding-top: 0.4rem !important; padding-bottom: 0.4rem !important; }
+:root[data-density="compact"] .py-2 { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
+:root[data-density="compact"] .mb-6 { margin-bottom: 0.75rem !important; }
+:root[data-density="compact"] .mb-4 { margin-bottom: 0.5rem !important; }
+:root[data-density="compact"] .gap-6 { gap: 0.75rem !important; }
+:root[data-density="compact"] .text-sm { font-size: 0.78rem !important; }
+:root[data-density="compact"] .text-base { font-size: 0.85rem !important; }
+:root[data-density="compact"] .text-lg { font-size: 0.95rem !important; }
 
 @theme inline {
   --color-background: var(--background);
@@ -36,7 +74,7 @@ body {
 }
 
 html {
-  background: linear-gradient(135deg, #1a2240 0%, #131926 45%, #1c1438 100%);
+  background: var(--page-gradient);
   min-height: 100%;
 }
 
@@ -54,7 +92,7 @@ html {
 
 /* ── Sticky header / titlebar: viewport-anchored gradient so it blends with the page background ── */
 .page-bg {
-  background: linear-gradient(135deg, #1a2240 0%, #131926 45%, #1c1438 100%);
+  background: var(--page-gradient);
   background-attachment: fixed;
 }
 
@@ -68,7 +106,7 @@ html {
   height: 28px;
   z-index: 1000;
   pointer-events: all;
-  background: linear-gradient(135deg, #1a2240 0%, #131926 45%, #1c1438 100%);
+  background: var(--page-gradient);
   background-attachment: fixed;
 }
 

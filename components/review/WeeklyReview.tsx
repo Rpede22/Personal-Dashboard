@@ -33,12 +33,13 @@ interface SportsSummary {
 
 interface ChampAgg { name: string; games: number; wins: number; kills: number; deaths: number; assists: number }
 
+/** Start of the rolling 7-day window: midnight, 6 days ago (so today is
+ *  included as day 7). Was Monday-anchored — switched to rolling so the
+ *  review page is useful any day of the week. */
 function startOfWeek(d: Date): Date {
   const c = new Date(d);
   c.setHours(0, 0, 0, 0);
-  const day = c.getDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  c.setDate(c.getDate() + mondayOffset);
+  c.setDate(c.getDate() - 6);
   return c;
 }
 
@@ -112,8 +113,13 @@ export default function WeeklyReview() {
         calendarHours += overlap / 3600000;
       }
 
-      // LoL: fetch summary for every account, then pool this week's matches.
-      const accounts: LolAccount[] = accountsRes.status === "fulfilled" ? (accountsRes.value?.accounts ?? []) : [];
+      // LoL: only the main account (Swimmingfizz) counts for the weekly review —
+      // pooling smurfs conflates play sessions that shouldn't be summarised
+      // together. Falls back to nothing if the account isn't present.
+      const allAccounts: LolAccount[] = accountsRes.status === "fulfilled" ? (accountsRes.value?.accounts ?? []) : [];
+      const accounts = allAccounts.filter(
+        (a) => a.gameName.toLowerCase() === "swimmingfizz"
+      );
       const lolResults = await Promise.allSettled(
         accounts.map((a) => fetch(`/api/lol/summary?accountId=${a.id}&count=30`).then((r) => r.json() as Promise<LolSummary>))
       );
@@ -162,7 +168,7 @@ export default function WeeklyReview() {
     load();
   }, []);
 
-  const title = "Weekly review";
+  const title = "Last 7 days review";
 
   if (loading || !data) {
     return (
@@ -191,7 +197,7 @@ export default function WeeklyReview() {
   return (
     <HubShell title={title} emoji="🗓️" color="var(--accent-cyan)">
       <div className="mb-4 text-sm" style={{ color: "var(--text-muted)" }}>
-        Week of {weekLabel}
+        {weekLabel}
       </div>
 
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>

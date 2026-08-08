@@ -24,10 +24,24 @@ interface DaySlot {
 function getDotColor(
   a: Assignment,
   isOverdue: boolean,
-  needsHardCapMap: Record<number, boolean>
+  needsHardCapMap: Record<number, boolean>,
+  estDoneMap: Record<number, string>
 ): string {
   if (isOverdue) return "var(--accent-red)";
   if (a.estimatedHours) {
+    // Confidence based on the scheduler's own estimate: if the last scheduled
+    // work day is on or after the deadline the plan doesn't actually fit →
+    // red. Same day or day-before → orange. More than 1 day of slack → green.
+    const est = estDoneMap[a.id];
+    if (est) {
+      const estDate = new Date(`${est}T00:00:00`);
+      const dueDate = new Date(a.dueDate);
+      dueDate.setHours(0, 0, 0, 0);
+      const slackDays = Math.round((dueDate.getTime() - estDate.getTime()) / 86400000);
+      if (slackDays <= 0) return "var(--accent-red)";
+      if (slackDays === 1) return needsHardCapMap[a.id] ? "var(--accent-orange)" : "var(--accent-green)";
+      return needsHardCapMap[a.id] ? "var(--accent-orange)" : "var(--accent-green)";
+    }
     return needsHardCapMap[a.id] ? "var(--accent-orange)" : "var(--accent-green)";
   }
   const daysLeft = Math.ceil((new Date(a.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
@@ -38,6 +52,33 @@ function getDotColor(
 
 function formatDueDate(dueDate: string): string {
   return new Date(dueDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Small circular ring showing hoursSpent / estimatedHours. Colored by the
+ *  same priority palette as the plain dot; complete rings get a check tick. */
+function ProgressRing({ spent, total, color, overdue }: { spent: number; total: number; color: string; overdue: boolean }) {
+  const size = 18;
+  const stroke = 2.5;
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const pct = total > 0 ? Math.max(0, Math.min(1, spent / total)) : 0;
+  const dash = circumference * pct;
+  return (
+    <svg width={size} height={size} className="flex-shrink-0" style={{ filter: overdue ? "drop-shadow(0 0 4px var(--accent-red))" : undefined }}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="transparent" stroke="var(--border)" strokeWidth={stroke} opacity={0.4} />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="transparent"
+        stroke={color}
+        strokeWidth={stroke}
+        strokeLinecap="round"
+        strokeDasharray={`${dash} ${circumference}`}
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+      />
+    </svg>
+  );
 }
 
 export default function SchoolWidget() {
@@ -145,7 +186,7 @@ export default function SchoolWidget() {
         <div className="space-y-2">
           {assignments.map((a) => {
             const isOverdue = a.status === "overdue";
-            const dotColor = getDotColor(a, isOverdue, needsHardCapMap);
+            const dotColor = getDotColor(a, isOverdue, needsHardCapMap, estDoneMap);
             const statusColor = isOverdue ? "var(--accent-red)" : a.status === "in_progress" ? "var(--accent-blue)" : "var(--accent-indigo)";
             return (
               <div
@@ -156,10 +197,19 @@ export default function SchoolWidget() {
                   border: isOverdue ? "1px solid var(--accent-red)33" : "1px solid transparent",
                 }}
               >
-                <span
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ background: dotColor, boxShadow: isOverdue ? "0 0 6px 2px var(--accent-red)" : undefined }}
-                />
+                {a.estimatedHours ? (
+                  <ProgressRing
+                    spent={a.hoursSpent ?? 0}
+                    total={a.estimatedHours}
+                    color={dotColor}
+                    overdue={isOverdue}
+                  />
+                ) : (
+                  <span
+                    className="w-2 h-2 rounded-full flex-shrink-0"
+                    style={{ background: dotColor, boxShadow: isOverdue ? "0 0 6px 2px var(--accent-red)" : undefined }}
+                  />
+                )}
 
                 {/* Left: title + meta */}
                 <div className="flex-1 min-w-0">

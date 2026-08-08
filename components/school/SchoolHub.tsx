@@ -37,15 +37,49 @@ const STATUS_COLOR: Record<string, string> = {
 // - Has estimate + needs hard cap (tight deadline) → orange
 // - Has estimate + fits soft cap → green
 // - No estimate → based on days to deadline
+function ProgressRing({ spent, total, color, overdue }: { spent: number; total: number; color: string; overdue: boolean }) {
+  const size = 26;
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const pct = total > 0 ? Math.max(0, Math.min(1, spent / total)) : 0;
+  const dash = circumference * pct;
+  return (
+    <svg width={size} height={size} className="flex-shrink-0" style={{ filter: overdue ? "drop-shadow(0 0 4px var(--accent-red))" : undefined }}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="transparent" stroke="var(--border)" strokeWidth={stroke} opacity={0.4} />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="transparent"
+        stroke={color}
+        strokeWidth={stroke}
+        strokeLinecap="round"
+        strokeDasharray={`${dash} ${circumference}`}
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+      />
+    </svg>
+  );
+}
+
 function getDotColor(
   a: { status: string; dueDate: string; estimatedHours: number | null },
   isOverdue: boolean,
   needsHardCapMap: Record<number, boolean>,
-  id: number
+  id: number,
+  estDoneMap: Record<number, string> = {}
 ): string {
   if (isOverdue) return "var(--accent-red)";
   if (a.status === "done") return "var(--text-muted)";
   if (a.estimatedHours) {
+    const est = estDoneMap[id];
+    if (est) {
+      const estDate = new Date(`${est}T00:00:00`);
+      const dueDate = new Date(a.dueDate);
+      dueDate.setHours(0, 0, 0, 0);
+      const slackDays = Math.round((dueDate.getTime() - estDate.getTime()) / 86400000);
+      if (slackDays <= 0) return "var(--accent-red)";
+    }
     return needsHardCapMap[id] ? "var(--accent-orange)" : "var(--accent-green)";
   }
   // No estimate — use proximity to deadline
@@ -494,7 +528,7 @@ export default function SchoolHub() {
           {sortedFiltered.map((a) => {
             const due = dueInfo(a);
             const isOverdue = a.status === "overdue";
-            const dotColor = getDotColor(a, isOverdue, needsHardCapMap, a.id);
+            const dotColor = getDotColor(a, isOverdue, needsHardCapMap, a.id, estDoneMap);
 
             return (
               <div
@@ -508,16 +542,23 @@ export default function SchoolHub() {
                   opacity: a.status === "done" ? 0.5 : 1,
                 }}
               >
-                {/* Dot — glows for overdue */}
-                <span
-                  className="w-3 h-3 rounded-full flex-shrink-0"
-                  style={{
-                    background: dotColor,
-                    boxShadow: isOverdue
-                      ? "0 0 8px 3px var(--accent-red)"
-                      : undefined,
-                  }}
-                />
+                {/* Priority indicator — plain dot when no estimate, progress ring otherwise */}
+                {a.estimatedHours ? (
+                  <ProgressRing
+                    spent={a.hoursSpent ?? 0}
+                    total={a.estimatedHours}
+                    color={dotColor}
+                    overdue={isOverdue}
+                  />
+                ) : (
+                  <span
+                    className="w-3 h-3 rounded-full flex-shrink-0"
+                    style={{
+                      background: dotColor,
+                      boxShadow: isOverdue ? "0 0 8px 3px var(--accent-red)" : undefined,
+                    }}
+                  />
+                )}
 
                 <div className="flex-1 min-w-0">
                   <p
