@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Card, { CardHeader } from "@/components/Card";
 import { SkeletonList } from "@/components/Skeleton";
+import { useRefreshMs } from "@/lib/useRefreshMs";
 
 interface CalEvent {
   uid: string;
@@ -83,10 +84,14 @@ export default function CalendarWidget() {
     } catch { /* ignore */ }
 
     loadCalendar();
-    // Auto-refresh every hour so long-planned events show up without a manual refresh
-    const interval = setInterval(() => loadCalendar(true), 60 * 60 * 1000);
-    return () => clearInterval(interval);
   }, [loadCalendar]);
+
+  const refreshMs = useRefreshMs("calendar", 60);
+  useEffect(() => {
+    if (refreshMs === 0) return;
+    const interval = setInterval(() => loadCalendar(true), refreshMs);
+    return () => clearInterval(interval);
+  }, [refreshMs, loadCalendar]);
 
   const visible = enabledCals ? events.filter((e) => enabledCals.has(e.calendar)) : events;
   const eventsByDay = buildEventsByDay(visible);

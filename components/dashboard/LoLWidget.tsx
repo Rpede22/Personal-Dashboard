@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Card, { CardHeader } from "@/components/Card";
 import { SkeletonList } from "@/components/Skeleton";
 import { cdragonRankedEmblem, ddragonChampionIcon } from "@/lib/riot";
+import { useRefreshMs } from "@/lib/useRefreshMs";
 
 interface LolAccount {
   id: number;
@@ -90,36 +91,6 @@ function computeLpDeltaToday(history: Record<string, Array<{ t: number; lp: numb
   return todaysPoints[todaysPoints.length - 1].lp - todaysPoints[0].lp;
 }
 
-interface TopChamp { championName: string; games: number; wins: number; losses: number; kda: number }
-
-/** Best-performing champion among today's matches (kills+assists / max(1,deaths))
- *  averaged; ties broken by wins then games. Excludes remakes. */
-function topChampionToday(matches: MatchSummary[]): TopChamp | null {
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-  const startMs = startOfDay.getTime();
-  const groups = new Map<string, { games: number; wins: number; losses: number; k: number; d: number; a: number }>();
-  for (const m of matches) {
-    if (m.gameCreation < startMs) continue;
-    if (!m.me) continue;
-    if (m.me.gameEndedInEarlySurrender) continue;
-    const cur = groups.get(m.me.championName) ?? { games: 0, wins: 0, losses: 0, k: 0, d: 0, a: 0 };
-    cur.games += 1;
-    if (m.me.win) cur.wins += 1; else cur.losses += 1;
-    cur.k += m.me.kills; cur.d += m.me.deaths; cur.a += m.me.assists;
-    groups.set(m.me.championName, cur);
-  }
-  let best: TopChamp | null = null;
-  for (const [name, g] of groups) {
-    const kda = (g.k + g.a) / Math.max(1, g.d);
-    const cand: TopChamp = { championName: name, games: g.games, wins: g.wins, losses: g.losses, kda };
-    if (!best || cand.wins > best.wins || (cand.wins === best.wins && cand.games > best.games) || (cand.wins === best.wins && cand.games === best.games && cand.kda > best.kda)) {
-      best = cand;
-    }
-  }
-  return best;
-}
-
 export default function LoLWidget() {
   const router = useRouter();
   const [accounts, setAccounts] = useState<LolAccount[]>([]);
@@ -203,12 +174,16 @@ export default function LoLWidget() {
     } catch { /* ignore */ } finally { setLoading(false); }
   }
 
+  // The LoL widget shares its refresh interval with the Games tab wrapper — the
+  // `games` slug is what the DashboardGrid ⚡ menu writes to.
+  const refreshMs = useRefreshMs("games", 2);
   useEffect(() => {
     loadAll(true);
-    const iv = setInterval(() => loadAll(false), 2 * 60 * 1000);
+    if (refreshMs === 0) return;
+    const iv = setInterval(() => loadAll(false), refreshMs);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshMs]);
 
   function toggleExpanded(id: number) {
     setExpandedId((prev) => {
@@ -323,31 +298,6 @@ export default function LoLWidget() {
                 {/* Expanded body */}
                 {isOpen && s && s !== "error" && (
                   <div className="px-3 pb-3 space-y-2">
-                    {(() => {
-                      const top = topChampionToday(s.matches);
-                      if (!top || top.games < 2) return null;
-                      const wl = top.losses === 0 ? `${top.wins}W` : `${top.wins}W ${top.losses}L`;
-                      return (
-                        <div
-                          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs"
-                          style={{ background: "var(--surface-2)", border: "1px solid var(--accent-blue)44" }}
-                          title="Best-performing champion today (2+ games)"
-                        >
-                          <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Today</span>
-                          <img
-                            src={ddragonChampionIcon(s.dragonVersion, top.championName)}
-                            alt={top.championName}
-                            width={20}
-                            height={20}
-                            className="rounded-sm"
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
-                          />
-                          <span className="font-semibold truncate">{top.championName}</span>
-                          <span style={{ color: "var(--text-muted)" }}>· {wl}</span>
-                          <span style={{ color: "var(--text-muted)" }}>· KDA {top.kda.toFixed(2)}</span>
-                        </div>
-                      );
-                    })()}
                     {/* Rank card with emblem */}
                     {soloRank ? (
                       <div

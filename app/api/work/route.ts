@@ -4,21 +4,28 @@ import path from "path";
 
 /**
  * Simple JSON-file config for the Work widget. No Cand API exists, so this
- * powers the manual "hours worked this week" pill and the payday countdown.
+ * powers the manual work-log + payday countdown + pay-term totals.
  *
  * Shape of `.work-config.json`:
  *   {
- *     "payday": 25,                          // day-of-month (1..31), null = disabled
- *     "hoursByWeek": {                       // key = Monday of the week (YYYY-MM-DD, local)
- *       "2026-08-04": 18.5,
- *       "2026-08-11": 22
- *     }
+ *     "payday": 25 | "last-weekday" | null,   // day-of-month (1..31), sentinel, or disabled
+ *     "hoursByWeek": {                        // legacy — key = Monday YYYY-MM-DD, kept for reads only
+ *       "2026-08-04": 18.5
+ *     },
+ *     "sessions": [                           // new — per-day work entries
+ *       { "date": "2026-08-08", "hours": 4.5, "note": "morning shift" }
+ *     ]
  *   }
  */
 
+export type Payday = number | "last-weekday" | null;
+
+interface WorkSession { date: string; hours: number; note?: string }
+
 interface WorkConfig {
-  payday: number | null;
+  payday: Payday;
   hoursByWeek: Record<string, number>;
+  sessions: WorkSession[];
 }
 
 const CONFIG_PATH = path.join(process.cwd(), ".work-config.json");
@@ -27,17 +34,31 @@ function readConfig(): WorkConfig {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, "utf8");
     const parsed = JSON.parse(raw) as Partial<WorkConfig>;
+    const p = parsed.payday;
+    // Default payday is the 23rd (Cand pay cycle: term runs 24th → 23rd of the
+    // next month). If the config file doesn't yet have a payday explicitly set,
+    // this fallback surfaces the right window out of the box.
+    const payday: Payday =
+      p === "last-weekday" ? "last-weekday"
+      : typeof p === "number" ? p
+      : 23;
     return {
-      payday: typeof parsed.payday === "number" ? parsed.payday : null,
+      payday,
       hoursByWeek: parsed.hoursByWeek ?? {},
+      sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
     };
   } catch {
-    return { payday: null, hoursByWeek: {} };
+    // No config file yet — default to day-23 payday.
+    return { payday: 23, hoursByWeek: {}, sessions: [] };
   }
 }
 
 function writeConfig(cfg: WorkConfig): void {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+}
+
+function isDateStr(s: unknown): s is string {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
 export async function GET() {
@@ -51,18 +72,20 @@ export async function POST(request: Request) {
   if ("payday" in body) {
     const p = body.payday;
     if (p === null || p === "" || p === undefined) cfg.payday = null;
+    else if (p === "last-weekday") cfg.payday = "last-weekday";
     else {
       const n = Number(p);
       if (!Number.isFinite(n) || n < 1 || n > 31) {
-        return NextResponse.json({ error: "payday must be 1..31 or null" }, { status: 400 });
+        return NextResponse.json({ error: "payday must be 1..31, 'last-weekday', or null" }, { status: 400 });
       }
       cfg.payday = Math.floor(n);
     }
   }
 
+  // Legacy weekly hours (kept for read-through so old data isn't lost).
   if ("weekStart" in body && "hours" in body) {
     const week = String(body.weekStart);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) {
+    if (!isDateStr(week)) {
       return NextResponse.json({ error: "weekStart must be YYYY-MM-DD" }, { status: 400 });
     }
     const h = Number(body.hours);
@@ -73,6 +96,38 @@ export async function POST(request: Request) {
     } else {
       cfg.hoursByWeek[week] = h;
     }
+  }
+
+  // New session-based logging. Actions:
+  //   { session: { date, hours, note? } }              → add a session
+  //   { deleteSessionIndex: 0 }                        → remove by index
+  //   { updateSessionIndex: 0, session: { ... } }      → replace at index
+  if ("session" in body && !("updateSessionIndex" in body)) {
+    const s = body.session ?? {};
+    if (!isDateStr(s.date)) return NextResponse.json({ error: "session.date must be YYYY-MM-DD" }, { status: 400 });
+    const h = Number(s.hours);
+    if (!Number.isFinite(h) || h < 0 || h > 24) return NextResponse.json({ error: "session.hours must be 0..24" }, { status: 400 });
+    cfg.sessions.push({ date: s.date, hours: h, note: typeof s.note === "string" ? s.note : undefined });
+  }
+
+  if ("updateSessionIndex" in body) {
+    const idx = Number(body.updateSessionIndex);
+    const s = body.session ?? {};
+    if (!Number.isInteger(idx) || idx < 0 || idx >= cfg.sessions.length) {
+      return NextResponse.json({ error: "invalid updateSessionIndex" }, { status: 400 });
+    }
+    if (!isDateStr(s.date)) return NextResponse.json({ error: "session.date must be YYYY-MM-DD" }, { status: 400 });
+    const h = Number(s.hours);
+    if (!Number.isFinite(h) || h < 0 || h > 24) return NextResponse.json({ error: "session.hours must be 0..24" }, { status: 400 });
+    cfg.sessions[idx] = { date: s.date, hours: h, note: typeof s.note === "string" ? s.note : undefined };
+  }
+
+  if ("deleteSessionIndex" in body) {
+    const idx = Number(body.deleteSessionIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= cfg.sessions.length) {
+      return NextResponse.json({ error: "invalid deleteSessionIndex" }, { status: 400 });
+    }
+    cfg.sessions.splice(idx, 1);
   }
 
   writeConfig(cfg);

@@ -80,6 +80,22 @@ export async function GET() {
     orderBy: { date: "asc" },
   });
 
+  // Sum of ALL plan distances for the current Mon–Sun week (past + future),
+  // for the "this-week vs plan" bar. Combines pending RunPlan entries with
+  // the `plannedDistance` snapshotted on completed RunLog rows — that way
+  // completing a run doesn't wipe the week's target the way it used to.
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 7);
+  const weekPlans = await prisma.runPlan.findMany({
+    where: { date: { gte: monday, lt: sunday } },
+  });
+  const weekLogged = await prisma.runLog.findMany({
+    where: { date: { gte: monday, lt: sunday } },
+  });
+  const weekPlannedKm =
+    weekPlans.reduce((s, p) => s + (p.distance ?? 0), 0)
+    + weekLogged.reduce((s, r) => s + (r.plannedDistance ?? 0), 0);
+
   return NextResponse.json({
     recentRuns: recentRuns.map((r) => ({ date: r.date, distance: r.distance, duration: r.duration })),
     weeklyKm,
@@ -90,6 +106,7 @@ export async function GET() {
     totalRuns,
     raceDate,
     raceDistance,
+    weekPlannedKm,
     upcomingPlans: upcomingPlans.map((p) => ({ date: p.date, type: p.type, distance: p.distance, notes: p.notes })),
   });
 }

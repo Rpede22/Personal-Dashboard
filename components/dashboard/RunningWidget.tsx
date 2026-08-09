@@ -20,6 +20,7 @@ interface UpcomingPlan {
 interface RunSummary {
   recentRuns: RecentRun[];
   weeklyKm: number;
+  weekPlannedKm: number;
   monthlyKm: number;
   thisMonthKm: number;
   thisYearKm: number;
@@ -27,6 +28,23 @@ interface RunSummary {
   totalRuns: number;
   raceDate: string | null;
   upcomingPlans: UpcomingPlan[];
+}
+
+/** Distance buckets used for PR detection. A run is a PR if its pace beats
+ *  every prior run in the same bucket. Buckets grow gradually so a slow
+ *  half-marathon isn't tested against a 5 k PB. */
+const PR_BUCKETS: Array<{ label: string; min: number; max: number }> = [
+  { label: "5k",       min: 4.5,  max: 7.5 },
+  { label: "10k",      min: 9,    max: 14 },
+  { label: "half",     min: 19,   max: 24 },
+  { label: "marathon", min: 40,   max: 44 },
+];
+
+function bucketFor(distance: number): string | null {
+  for (const b of PR_BUCKETS) {
+    if (distance >= b.min && distance <= b.max) return b.label;
+  }
+  return null;
 }
 
 const PLAN_COLOR: Record<string, string> = {
@@ -76,17 +94,45 @@ function recoveryState(runs: { date: string; distance: number; duration: number 
   return { color: "var(--accent-green)", label: `Well rested (${hardRecent}d since hard)` };
 }
 
+interface AllRun { date: string; distance: number; duration: number }
+
 export default function RunningWidget() {
   const [data, setData] = useState<RunSummary | null>(null);
+  const [allRuns, setAllRuns] = useState<AllRun[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/running/summary")
-      .then((r) => r.json())
-      .then((d) => setData(d))
+    Promise.all([
+      fetch("/api/running/summary").then((r) => r.json()),
+      // 200-run history is plenty for bucket PB detection without a big payload.
+      fetch("/api/running?limit=200").then((r) => r.json()).catch(() => ({ runs: [] })),
+    ])
+      .then(([summary, hist]) => {
+        setData(summary);
+        setAllRuns(Array.isArray(hist?.runs) ? hist.runs : []);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  /** For each recent run, decide if it's a PR — i.e. its pace beats every
+   *  earlier run in the same distance bucket. Ties don't count as new PRs. */
+  const prByDate: Record<string, string> = (() => {
+    const out: Record<string, string> = {};
+    if (!allRuns.length) return out;
+    const sorted = [...allRuns].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const bestByBucket: Record<string, number> = {};
+    for (const r of sorted) {
+      const b = bucketFor(r.distance);
+      if (!b || r.distance <= 0) continue;
+      const pace = r.duration / r.distance;
+      if (bestByBucket[b] === undefined || pace < bestByBucket[b]) {
+        bestByBucket[b] = pace;
+        out[r.date] = b; // this run *set* the PR at this point in history
+      }
+    }
+    return out;
+  })();
 
   const daysToRace =
     data?.raceDate
@@ -139,6 +185,22 @@ export default function RunningWidget() {
                 {data?.weeklyKm?.toFixed(1) ?? "0.0"} <span className="text-base font-semibold">km</span>
               </div>
               <div className="text-xs" style={{ color: "var(--text-muted)" }}>this week</div>
+              {(data?.weekPlannedKm ?? 0) > 0 && (() => {
+                const done = data?.weeklyKm ?? 0;
+                const plan = data?.weekPlannedKm ?? 0;
+                const pct = Math.min(100, (done / plan) * 100);
+                const barColor = done >= plan ? "var(--accent-green)" : "var(--accent-orange)";
+                return (
+                  <div className="mt-1.5" title={`${done.toFixed(1)} / ${plan.toFixed(1)} km planned`}>
+                    <div className="rounded-full overflow-hidden" style={{ height: 4, background: "var(--border)" }}>
+                      <div style={{ width: `${pct}%`, height: "100%", background: barColor }} />
+                    </div>
+                    <div className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
+                      / {plan.toFixed(1)} plan
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             <div
               className="flex-1 rounded-xl p-3 text-center"
@@ -169,23 +231,32 @@ export default function RunningWidget() {
                 Recent runs
               </p>
               <div className="space-y-1">
-                {data.recentRuns.map((r, i) => (
+                {data.recentRuns.map((r, i) => {
+                  const prBucket = prByDate[r.date];
+                  return (
                   <div
                     key={i}
                     className="flex items-center justify-between rounded-lg px-2.5 py-1.5"
-                    style={{ background: "var(--surface-2)" }}
+                    style={{
+                      background: "var(--surface-2)",
+                      border: prBucket ? "1px solid var(--accent-orange)" : "1px solid transparent",
+                    }}
                   >
-                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    <span className="text-xs flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
+                      {prBucket && (
+                        <span title={`${prBucket} PB!`} style={{ color: "var(--accent-orange)" }}>🏆</span>
+                      )}
                       {new Date(r.date).toLocaleDateString("en-GB", { weekday: "short", month: "short", day: "numeric" })}
                     </span>
                     <span className="text-sm font-semibold" style={{ color: "var(--accent-green)" }}>
                       {r.distance.toFixed(1)} km
                     </span>
-                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    <span className="text-xs" style={{ color: prBucket ? "var(--accent-orange)" : "var(--text-muted)" }}>
                       {pace(r.distance, r.duration)}
                     </span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (

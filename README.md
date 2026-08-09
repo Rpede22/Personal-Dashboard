@@ -76,6 +76,11 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Auto-refresh:** The sports widget on the dashboard and every team hub page automatically re-fetch data every 5 minutes while the app is open — no manual refresh needed.
 
+**Sports widget extras:**
+- **Result flash badges** — a small ✅ (or ❌ for EDM's last result) overlays a team's last-5 row for 24 h after a finish.
+- **Standings-delta chip** — each team's rank is snapshotted to localStorage. When the position moves, a `+2 places` / `−1` chip appears next to the rank label, so the "since we last spoke" delta is always visible.
+- **Kickoff countdown** — inside 12 h of a fixture, the next-fixture row appends `in Xh Ym`.
+
 **NHL Playoff Predicted** (tab in the NHL hub) is always populated — the bracket loads on mount using regular-season standings + Monte Carlo win probabilities. Head-to-head records feeding the prediction are filtered to `gameType === 2` (regular season) so live playoff results never bias the pre-playoff forecast.
 
 **Team box gradient borders** use real club colours — the GradientBorder wrapper component (outer div = gradient background + 3 px padding, inner div = surface colour) is the only reliable way to get gradient borders with `border-radius` in React inline styles.
@@ -88,11 +93,21 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 
 **Loading skeletons.** While widget data loads, each card shows shape-appropriate pulsing skeleton blocks (rows for lists, a 2×2 grid for Sports, a 3-stat strip for Running) instead of a "Loading…" text — no more blank cards on first paint.
 
-**Today briefing** sits at the very top of the dashboard: a single card showing every calendar event that lands on today's local day, any tracked-team matches whose kickoff is on the same local day (kept visible after kickoff until finished — a 13.00 game doesn't disappear at 13.01), today's planned run, and the next school deadline. Fixture times are parsed as UTC (FotMob's raw format) and displayed via `toLocaleTimeString` so the local time is always right — an earlier version treated the UTC HH:MM as local and showed CEST games at the UTC hour. NHL gets a special-case rule: if EDM's next game kicks off between 00:00 and 07:00 tomorrow local, it's surfaced the evening before so overnight puck-drops aren't missed. Multiple calendar events collapse into one box (`TODAY · N events` header + `first title` + `HH.mm · started — then HH.mm Title · …`) so a busy day doesn't blow up the widget height. Empty slots collapse. Auto-refreshes every 5 min.
+**Dashboard preferences** (top of the page): a compact toolbar with:
+- **Compact / Comfortable density toggle** — flips `data-density` on `<html>`, tightening padding and font sizes across every widget when compact.
+- **Dark / Light theme toggle** — flips `data-theme` on `<html>`; both themes are fully styled (surfaces, text, borders, page gradient).
+- **`+ Add widget` popover** — checklist of every widget on the dashboard; unchecking hides it entirely from the grid (drag-reorder still works over the remaining set).
+- **Widget size classes** — widgets can declare a `wide` size hint so hungry widgets (e.g. Calendar) span two grid columns without leaving empty cells.
+- **Per-widget refresh interval** — every widget that polls (Sports 5m, Games/LoL 2m, Calendar 60m) has a ⚡ button next to its drag handle. Click for a picker (Off / 1 / 2 / 5 / 15 / 30 / 60 min). Setting a non-default value tints the ⚡ cyan; the widget hooks into the change instantly. "Off" fully disables polling.
+All settings persist to localStorage.
+
+**Today briefing** sits at the very top of the dashboard, with a **weather line** (icon, label, low/high, rain %) rendered under the date pill — pulled live from open-meteo (no API key required) for **Aarhus C** and refreshed hourly. Each row (calendar / sport / run / school) has a small ⋮⋮ drag handle so you can reorder them however you want — the order is persisted per kind, so tomorrow's rows keep the same layout.
+
+The briefing itself: a single card showing every calendar event that lands on today's local day, any tracked-team matches whose kickoff is on the same local day (kept visible after kickoff until finished — a 13.00 game doesn't disappear at 13.01), today's planned run, and the next school deadline. Fixture times are parsed as UTC (FotMob's raw format) and displayed via `toLocaleTimeString` so the local time is always right — an earlier version treated the UTC HH:MM as local and showed CEST games at the UTC hour. NHL gets a special-case rule: if EDM's next game kicks off between 00:00 and 07:00 tomorrow local, it's surfaced the evening before so overnight puck-drops aren't missed. Multiple calendar events collapse into one box (`TODAY · N events` header + `first title` + `HH.mm · started — then HH.mm Title · …`) so a busy day doesn't blow up the widget height. Empty slots collapse. Auto-refreshes every 5 min.
 
 **Race countdown** appears as a dedicated card below the Today briefing whenever a race date + distance are set — big countdown number, Riegel-predicted finish time, pace, colour-coded confidence badge, and current week km. Unmounts the day after the race.
 
-**Week-ahead heatmap** — a 7-cell strip sitting under the top cards. Each cell splits vertically into planned **school** hours (top, indigo) and **calendar-busy** hours (bottom, pink). Bars scale against a 12 h waking-hours ceiling; the cell outline goes green (≤ 8 h), orange (> 8 h) or red (> 12 h). Today gets a coloured border. Click the top half to jump to School; click the bottom half to open the calendar hub **straight to that specific day** (`/calendar?date=YYYY-MM-DD` — the hub reads the query param via `useSearchParams` and preselects the day). Answers "when is next week going to be a grind?" at one glance.
+**Week-ahead heatmap** — a 7-cell strip sitting under the top cards. Each cell splits vertically into planned **school** hours (top, indigo) and **calendar-busy** hours (bottom, pink). Bars scale against a 12 h waking-hours ceiling; the cell outline goes green (≤ 8 h), orange (> 8 h) or red (> 12 h). Today gets a coloured border. Click the top half to jump to School; click the bottom half to open the calendar hub **straight to that specific day** (`/calendar?date=YYYY-MM-DD` — the hub reads the query param via `useSearchParams` and preselects the day). **Hover any cell** for a floating tooltip listing the individual assignments (with hours) and events (with time ranges) that make up the day's totals. Days with a planned run get a small 🏃 (or 😴 for rest days), colour-coded by session type (easy/tempo/speed/long). Answers "when is next week going to be a grind?" at one glance.
 
 **Last 7 days review** (`/review`) — auto-generated recap of a **rolling 7-day window** (`today − 6 days at midnight` → tomorrow midnight): km vs plan, LoL wins/losses + top champion (Swimmingfizz account only — pooling smurfs muddied the recap), school assignments completed, calendar hours booked, and each followed team's results. One screen, no editing. Surfaced through a small **"🗓️ Review last 7 days →"** pill under the dashboard header — always visible now that the window rolls.
 
@@ -140,7 +155,9 @@ Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/
 
 Row 2 of the dashboard shows a single **`GamesWidget`** with a WoW/LoL tab bar at the top — only one game is visible at a time and the active tab is persisted to localStorage. Clicking the widget body opens the matching hub.
 
-The **LoL widget** has one expandable card per account. The collapsed header shows *Riot ID · region · short tier (e.g. `E IV`) · W/L · WR* (green ≥ 55% / red < 45%). Click the header to expand: a full **rank card with emblem icon** appears, plus the **last 5 games** with champion icon, K/D/A, KDA ratio, and CS. Expand state is remembered across dashboard reloads.
+The **LoL widget** has one expandable card per account. The collapsed header shows *Riot ID · region · short tier (e.g. `E IV`) · **LP delta today chip** (`▲ +18` / `▼ −12`) · W/L · WR* (green ≥ 55% / red < 45%). The LP delta compares the latest rank snapshot to the first snapshot at/after local midnight (from `/api/lol/rank-history?days=2`); suppressed when there's no baseline or the delta is zero. Click the header to expand: full **rank card with emblem icon**, plus the **last 5 games** with champion icon, K/D/A, KDA ratio, and CS. Expand state is remembered across dashboard reloads.
+
+The **LoL hub** goes deeper: rank card uses a **160×160 emblem** so the tier is legible at a glance, and each **session day-header** in the match list gets a per-day **`▲/▼ N LP` chip** (from solo-queue snapshots) and a **best-champion-of-session pill** (icon + W/L + KDA, shown whenever that day had ≥ 2 games).
 
 ---
 
@@ -149,7 +166,8 @@ The **LoL widget** has one expandable card per account. The collapsed header sho
 Run logs and training plans are stored in SQLite. Strava sync is optional.
 
 - **Manual logging:** add runs directly in the hub.
-- **Strava sync:** connects via OAuth (tokens stored in `.strava-config.json`, git-ignored). Imports the last 30 days of activities, deduplicates by date + distance, and stores the Strava activity ID (`stravaId`) on each run. When a Strava run is synced for a day that already has a run plan, the plan is automatically removed.
+- **Strava sync:** connects via OAuth (tokens stored in `.strava-config.json`, git-ignored). Imports the last 30 days of activities, deduplicates by date + distance, and stores the Strava activity ID (`stravaId`) on each run. Each new activity's `best_efforts` (400m / 5k / 10k / half / marathon splits) is also pulled and cached on the run so the PR grid can use real splits instead of full-run averages. When a Strava run is synced for a day that already has a run plan, the plan is automatically removed (its distance is first snapshotted onto the run so the week-vs-plan target survives).
+- **Sync PRs button** (Strava panel): backfills `best_efforts` for every Strava-imported run that doesn't have them yet — batches of 40 per click, loops until done. Only needed once to enrich your history; new sync runs pick them up automatically.
 The Running Hub has three tabs:
 - **Overview** — training progress charts, race config, Strava integration, run planner.
 - **Run Log** — the full run table with `+ Log Run` button. Shows 5 most recent by default; click **All Runs (N)** to see the full history. Click any row to open the run detail popup.
@@ -172,6 +190,7 @@ The Running Hub has three tabs:
 - **Race target:** set a race date and/or race distance in the hub. The widget and stats bar show days remaining and the target distance label.
 - **Race predictor** (Training tab): once a race distance is set, projects a finish time from your last 90 days of training via the **Riegel formula** (`T2 = T1·(D2/D1)^1.06`). Anchors on the fastest projection across every qualifying run (≥ max(3 km, 20% of race distance)), so it reflects current fitness — not just what you ran last time. Shows predicted finish, race pace, the anchor run, weeks-to-race, and a colour-coded confidence badge (high = anchor ≥ 60% of race distance + ≥ 3 qualifying runs; medium = ≥ 35% + ≥ 2; low = big extrapolation).
 - **7-day planner:** assign `easy` / `tempo` / `long` / `rest` days with optional target distance. Switch to **Month view** for a full calendar overview. Plans on days where a run has been logged are automatically cleared on sync.
+- **Recovery indicator** in the dashboard widget — small green/orange/red dot + label based on days since the last hard session (≥ 10 km OR pace < 5:00/km), so it's obvious when a rest day is overdue vs when you should be ready to push.
 
 ### Strava setup
 1. Create an app at [strava.com/settings/api](https://www.strava.com/settings/api). Set **Authorization Callback Domain** to exactly `localhost` (no port, no protocol, no slash).
@@ -198,8 +217,22 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 - **Hours per day** — set your preferred daily study target with the **h/day** input next to the day toggles (default 3 h, step 0.5). This becomes the scheduler's soft cap. Days in the Work Plan are green when at or under the target, red when over.
 - **Work Plan** — when at least one assignment has an estimated hours value, a Work Plan section appears in both the hub and the dashboard widget. A sequential scheduler completes one assignment fully before scheduling the next (sorted by deadline). If an assignment finishes with time left on its last day, the next one begins that same day. **Look-ahead:** before scheduling each assignment the scheduler checks whether future assignments can fit at the configured h/day rate after it finishes at its natural pace. If they can't, the current assignment is automatically compressed to a higher daily rate, freeing the extra days for later tasks. The cap escalates smoothly up to 10 h/day as the absolute maximum. All displayed hours are rounded up to the nearest 0.5 h. The last scheduled day for each assignment is shown as "Est. done".
 - **Finish-early buffer** — the scheduler never puts work on the deadline itself. If no due time is set, the last scheduled day is the day *before* `dueDate`. If a due time is set, the due day is capped at `(dueHour − 1 − 9)` hours instead of `(dueHour − 9)`, leaving a one-hour safety margin (change `BUFFER_HOURS` in `lib/load-distributor.ts` to widen or shrink the margin).
-- **Schedule-aware colours** — priority dots reflect the schedule: green = fits within the h/day target, orange = tight (needs hard cap), red = overdue. Tasks without estimates use days-to-deadline proximity instead.
+- **Schedule-aware colours** — priority dots reflect the schedule: green = fits within the h/day target, orange = tight (needs hard cap), red = overdue. Tasks without estimates use days-to-deadline proximity instead. **Confidence dot** blends in the load-plan's estimated finish date vs the deadline — orange/red when the plan finishes too close to (or past) the deadline.
+- **Progress ring per assignment** — when `estimatedHours` is set, the priority dot is replaced by a small SVG ring filled by `hoursSpent / estimatedHours`, visible in both the hub and the dashboard widget.
 - **Dashboard widget** mirrors the full hub view (estimated hours, due date, countdown, read-only hours spent) — navigate to the hub only to add tasks or update hours spent. Work Plan day colours always match the hub: the widget reads `hoursPerDay` from the API (not a hardcoded value).
+
+---
+
+## Work
+
+The Work widget is a small summary that links into a full `/work` hub.
+
+- **Widget** — current pay-term total (bold), days-to-payday, `Last pay-term Xh` line (visible for a few days after payday so you can still eyeball the payslip total), and the last few logged sessions. No editing from the widget.
+- **Hub** — two tabs:
+  - **Overview** — current pay-term (range + total), last pay-term summary, optional "next pay-term (already logged)" line for sessions logged after payday, a session log form (date + hours + optional note), and the sessions-this-term list. `Register hours →` / `View payslips →` external links live at the bottom. Payday editor supports **off / day-of-month / last-weekday**.
+  - **Entries** — all-time table + running total.
+- **Pay cycle** — the default payday is the **23rd**, matching the Cand cycle (term = the 24th → the 23rd of the following month). Change it at any time from the payday editor.
+- Everything persists to `.work-config.json` via `GET/POST /api/work`.
 
 ---
 
@@ -336,6 +369,7 @@ Created automatically on first use:
 | `.wow-raid-baseline.json` | Weekly raid kill baselines |
 | `.race-config.json` | Running race target date and distance |
 | `.school-settings.json` | School scheduler settings: study days + h/day soft cap |
+| `.work-config.json` | Work: payday day-of-month + per-week hours (keyed by Monday) |
 
 ---
 

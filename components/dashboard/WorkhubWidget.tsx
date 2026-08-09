@@ -1,227 +1,103 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Card, { CardHeader } from "@/components/Card";
+import {
+  type Payday,
+  currentPayTerm,
+  dateKey,
+  daysUntilPayday,
+  previousPayTerm,
+  sumHoursInTerm,
+} from "@/lib/payday";
 
-/** Monday of the local ISO week for a Date, formatted YYYY-MM-DD. */
-function mondayKey(d: Date): string {
-  const c = new Date(d);
-  c.setHours(0, 0, 0, 0);
-  const day = c.getDay(); // 0=Sun … 6=Sat
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  c.setDate(c.getDate() + mondayOffset);
-  return `${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, "0")}-${String(c.getDate()).padStart(2, "0")}`;
-}
-
-/** Days until the next occurrence of `dayOfMonth` (1..31), inclusive of today.
- *  If the target day doesn't exist in the current month (e.g. 31 in Feb) we
- *  clamp to the last day of that month before deciding whether to roll over. */
-function daysUntilPayday(dayOfMonth: number, now: Date = new Date()): number {
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const daysInThisMonth = new Date(y, m + 1, 0).getDate();
-  const clampedThis = Math.min(dayOfMonth, daysInThisMonth);
-  const today = new Date(y, m, now.getDate());
-  today.setHours(0, 0, 0, 0);
-  const thisMonthTarget = new Date(y, m, clampedThis);
-  thisMonthTarget.setHours(0, 0, 0, 0);
-  if (thisMonthTarget >= today) {
-    return Math.round((thisMonthTarget.getTime() - today.getTime()) / 86400000);
-  }
-  const daysInNextMonth = new Date(y, m + 2, 0).getDate();
-  const clampedNext = Math.min(dayOfMonth, daysInNextMonth);
-  const nextMonthTarget = new Date(y, m + 1, clampedNext);
-  nextMonthTarget.setHours(0, 0, 0, 0);
-  return Math.round((nextMonthTarget.getTime() - today.getTime()) / 86400000);
-}
-
+interface WorkSession { date: string; hours: number; note?: string }
 interface WorkConfig {
-  payday: number | null;
+  payday: Payday;
   hoursByWeek: Record<string, number>;
+  sessions: WorkSession[];
+}
+
+function formatShortDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
 export default function WorkhubWidget() {
   const [config, setConfig] = useState<WorkConfig | null>(null);
-  const [weekKey, setWeekKey] = useState(mondayKey(new Date()));
-  const [hoursDraft, setHoursDraft] = useState<string>("");
-  const [paydayDraft, setPaydayDraft] = useState<string>("");
-  const [editingHours, setEditingHours] = useState(false);
-  const [editingPayday, setEditingPayday] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setWeekKey(mondayKey(new Date()));
     fetch("/api/work").then((r) => r.json()).then((d: WorkConfig) => {
-      setConfig(d);
-      setPaydayDraft(d.payday != null ? String(d.payday) : "");
-    }).catch(() => setConfig({ payday: null, hoursByWeek: {} }));
+      setConfig({ ...d, sessions: d.sessions ?? [] });
+    }).catch(() => setConfig({ payday: null, hoursByWeek: {}, sessions: [] }));
   }, []);
 
-  useEffect(() => {
-    if (config) {
-      const h = config.hoursByWeek[weekKey];
-      setHoursDraft(h != null ? String(h) : "");
-    }
-  }, [config, weekKey]);
-
-  async function saveHours(next: string) {
-    setSaving(true);
-    try {
-      const res = await fetch("/api/work", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ weekStart: weekKey, hours: next === "" ? null : next }),
-      });
-      if (res.ok) setConfig(await res.json());
-    } finally {
-      setSaving(false);
-      setEditingHours(false);
-    }
-  }
-
-  async function savePayday(next: string) {
-    setSaving(true);
-    try {
-      const res = await fetch("/api/work", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payday: next === "" ? null : next }),
-      });
-      if (res.ok) setConfig(await res.json());
-    } finally {
-      setSaving(false);
-      setEditingPayday(false);
-    }
-  }
-
-  const hoursThisWeek = config?.hoursByWeek[weekKey];
+  const now = useMemo(() => new Date(), [config]);
   const payday = config?.payday ?? null;
-  const paydayDays = payday != null ? daysUntilPayday(payday) : null;
+  const term = payday != null ? currentPayTerm(payday, now) : null;
+  const prevTerm = payday != null ? previousPayTerm(payday, now) : null;
+  const daysLeft = payday != null ? daysUntilPayday(payday, now) : null;
+  const sessions = config?.sessions ?? [];
+  const termHours = term ? sumHoursInTerm(sessions, term) : 0;
+  const prevTermHours = prevTerm ? sumHoursInTerm(sessions, prevTerm) : 0;
+
+  // Last few sessions, newest first. Same "recent activity" pattern as the
+  // running widget's last-3-runs strip.
+  const recent = useMemo(() => {
+    return [...sessions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
+  }, [sessions]);
+
+  const termLabel = term
+    ? `${formatShortDate(dateKey(term.start))} – ${formatShortDate(dateKey(term.end))}`
+    : "no payday set";
 
   return (
     <Card accentColor="var(--accent-cyan)">
-      <CardHeader
-        icon="💼"
-        title="Work Hours"
-        subtitle="Daily reminder"
-        accentColor="var(--accent-cyan)"
-        showArrow={false}
-      />
+      <CardHeader icon="💼" title="Work Hours" subtitle={termLabel} accentColor="var(--accent-cyan)" />
 
-      {/* Stats row: this-week hours + payday countdown */}
-      <div className="flex flex-wrap gap-2 mb-3 justify-center">
-        {/* This week hours pill */}
-        {editingHours ? (
-          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            <input
-              type="number"
-              step="0.5"
-              min="0"
-              max="168"
-              value={hoursDraft}
-              onChange={(e) => setHoursDraft(e.target.value)}
-              onBlur={() => saveHours(hoursDraft)}
-              onKeyDown={(e) => { if (e.key === "Enter") saveHours(hoursDraft); if (e.key === "Escape") setEditingHours(false); }}
-              autoFocus
-              disabled={saving}
-              className="text-xs w-16 px-2 py-1 rounded-md"
-              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--accent-cyan)" }}
-            />
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>h this week</span>
+        <div className="flex gap-3 mb-3">
+          <div className="flex-1 rounded-xl p-3 text-center" style={{ background: "var(--surface-2)" }}>
+            <div className="text-2xl font-bold" style={{ color: "var(--accent-cyan)" }}>
+              {termHours.toFixed(1)}<span className="text-base font-semibold"> h</span>
+            </div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>this pay-term</div>
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); e.preventDefault(); setEditingHours(true); }}
-            className="text-xs px-2 py-1 rounded-md"
-            style={{
-              background: "var(--surface-2)",
-              color: hoursThisWeek != null ? "var(--accent-cyan)" : "var(--text-muted)",
-              border: "1px solid var(--border)",
-            }}
-            title="Click to log hours worked this week"
-          >
-            {hoursThisWeek != null ? `${hoursThisWeek}h this week` : "+ log hours"}
-          </button>
+          <div className="flex-1 rounded-xl p-3 text-center" style={{ background: "var(--surface-2)" }}>
+            <div className="text-2xl font-bold" style={{ color: "var(--text)" }}>
+              {daysLeft == null ? "—" : daysLeft === 0 ? "Today 🎉" : `${daysLeft}d`}
+            </div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>to payday</div>
+          </div>
+        </div>
+
+        {/* Last pay-term keeps showing after payday so you can still eyeball
+            the payslip total for a few days without leaving the dashboard. */}
+        {prevTerm && (
+          <div className="text-xs mb-2 flex items-baseline justify-between" style={{ color: "var(--text-muted)" }}>
+            <span>Last pay-term</span>
+            <span className="tabular-nums font-semibold" style={{ color: "var(--text)" }}>{prevTermHours.toFixed(1)}h</span>
+          </div>
         )}
 
-        {/* Payday countdown pill */}
-        {editingPayday ? (
-          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Payday day</span>
-            <input
-              type="number"
-              min="1"
-              max="31"
-              value={paydayDraft}
-              onChange={(e) => setPaydayDraft(e.target.value)}
-              onBlur={() => savePayday(paydayDraft)}
-              onKeyDown={(e) => { if (e.key === "Enter") savePayday(paydayDraft); if (e.key === "Escape") setEditingPayday(false); }}
-              autoFocus
-              disabled={saving}
-              className="text-xs w-14 px-2 py-1 rounded-md"
-              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--accent-cyan)" }}
-            />
+        {/* Recent entries — mirrors RunningWidget's "recent runs" strip. */}
+        {recent.length > 0 ? (
+          <div>
+            <p className="text-xs mb-1.5 font-medium uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+              Recent entries
+            </p>
+            <div className="space-y-1">
+              {recent.map((s, i) => (
+                <div key={i} className="flex items-center justify-between rounded-lg px-2.5 py-1.5" style={{ background: "var(--surface-2)" }}>
+                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>{formatShortDate(s.date)}</span>
+                  <span className="text-sm font-semibold tabular-nums" style={{ color: "var(--accent-cyan)" }}>{s.hours.toFixed(1)}h</span>
+                  <span className="text-xs truncate max-w-[40%]" style={{ color: "var(--text-muted)" }}>{s.note ?? ""}</span>
+                </div>
+              ))}
+            </div>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); e.preventDefault(); setEditingPayday(true); }}
-            className="text-xs px-2 py-1 rounded-md"
-            style={{
-              background: "var(--surface-2)",
-              color: payday != null ? "var(--accent-cyan)" : "var(--text-muted)",
-              border: "1px solid var(--border)",
-            }}
-            title="Click to set payday (day of month)"
-          >
-            {paydayDays != null
-              ? paydayDays === 0 ? "Payday today 🎉" : `Payday in ${paydayDays}d`
-              : "+ set payday"}
-          </button>
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>No sessions logged yet — open the hub to add one.</p>
         )}
-      </div>
-
-      <div className="flex justify-around items-end w-full">
-        <div className="flex flex-col items-center gap-1.5">
-          <p className="text-xs text-center" style={{ color: "var(--text-muted)" }}>
-            Remember to log your hours
-          </p>
-          <a
-            href="https://profil.cand.dk/work/register"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm font-semibold px-3 py-1.5 rounded-lg transition-all"
-            style={{
-              background: "var(--accent-cyan)22",
-              color: "var(--accent-cyan)",
-              border: "1px solid var(--accent-cyan)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            Register hours →
-          </a>
-        </div>
-        <div className="flex flex-col items-center gap-1.5">
-          <p className="text-xs text-center" style={{ color: "var(--text-muted)" }}>
-            View your payslips
-          </p>
-          <a
-            href="https://intect.app/selfservice/payslip"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm font-semibold px-3 py-1.5 rounded-lg transition-all"
-            style={{
-              background: "var(--accent-cyan)22",
-              color: "var(--accent-cyan)",
-              border: "1px solid var(--accent-cyan)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            View payslips →
-          </a>
-        </div>
-      </div>
     </Card>
   );
 }

@@ -191,6 +191,13 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
   const [seasonChamps, setSeasonChamps] = useState<SeasonChampsData | null>(null);
   const [seasonChampsLoading, setSeasonChampsLoading] = useState(false);
 
+  // Per-queue LP snapshots for the selected account — used to compute
+  // per-session (per-day) LP deltas rendered on each day header in the match
+  // list. Solo (420) is treated as the primary LP source since that's where
+  // the emblem/tier lives; flex is included but rarely moves.
+  interface RankSnapshot { capturedAt: number; queueType: string; tier: string; division: string; lp: number; ladder: number }
+  const [rankHistory, setRankHistory] = useState<Record<string, RankSnapshot[]>>({});
+
   // Match list controls
   type QueueFilter = "all" | "solo" | "flex" | "aram" | "other";
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
@@ -277,6 +284,35 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
     if (selectedId !== null) loadSummary(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
+
+  // Rank snapshots for the selected account, used to compute per-day LP
+  // deltas rendered on each session header. 30 days is comfortably wider
+  // than the match window the hub loads.
+  interface HistoryPoint { t: number; lp: number }
+  const [rankHistorySolo, setRankHistorySolo] = useState<HistoryPoint[]>([]);
+  void rankHistory;  // linter — rankHistory declared above kept for future use
+  useEffect(() => {
+    if (selectedId == null) { setRankHistorySolo([]); return; }
+    fetch(`/api/lol/rank-history?accountId=${selectedId}&days=30`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        const solo = d?.queues?.RANKED_SOLO_5x5 ?? [];
+        setRankHistorySolo(solo);
+      })
+      .catch(() => setRankHistorySolo([]));
+  }, [selectedId]);
+
+  /** LP delta for a local calendar day: last snapshot inside the day
+   *  minus the last snapshot before the day starts. Uses the ladder LP so
+   *  tier changes don't create fake jumps. Returns null when there isn't
+   *  enough data. */
+  function lpDeltaForDay(dayStartMs: number, dayEndMs: number): number | null {
+    if (rankHistorySolo.length === 0) return null;
+    const before = [...rankHistorySolo].reverse().find((s) => s.t < dayStartMs);
+    const inDay = [...rankHistorySolo].reverse().find((s) => s.t >= dayStartMs && s.t < dayEndMs);
+    if (!before || !inDay) return null;
+    return inDay.lp - before.lp;
+  }
 
   // Poll for new games while an account is selected. Silent mode preserves
   // the current UI: any open match modal stays open, the "Load 10 more"
@@ -688,8 +724,8 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                               <img
                                 src={emblem}
                                 alt=""
-                                width={56}
-                                height={56}
+                                width={160}
+                                height={160}
                                 className="flex-shrink-0"
                                 style={{ objectFit: "contain" }}
                                 onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
@@ -869,11 +905,67 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                               const netColor = g.wins > g.losses ? "var(--accent-green)"
                                 : g.wins < g.losses ? "var(--accent-red)"
                                 : "var(--text-muted)";
+                              // Per-session LP delta — solo queue snapshots taken during this day.
+                              const dayStart = new Date(g.key + "T00:00:00").getTime();
+                              const dayEnd = dayStart + 86400000;
+                              const lp = lpDeltaForDay(dayStart, dayEnd);
+                              // Top champion of the session — most wins, then most games,
+                              // then best KDA. Remakes excluded.
+                              const byChamp = new Map<string, { games: number; wins: number; k: number; d: number; a: number }>();
+                              for (const m of g.matches) {
+                                if (!m.me || m.me.gameEndedInEarlySurrender) continue;
+                                const cur = byChamp.get(m.me.championName) ?? { games: 0, wins: 0, k: 0, d: 0, a: 0 };
+                                cur.games++; if (m.me.win) cur.wins++;
+                                cur.k += m.me.kills; cur.d += m.me.deaths; cur.a += m.me.assists;
+                                byChamp.set(m.me.championName, cur);
+                              }
+                              let topChamp: { name: string; games: number; wins: number; kda: number } | null = null;
+                              for (const [name, s] of byChamp) {
+                                const kda = (s.k + s.a) / Math.max(1, s.d);
+                                const cand = { name, games: s.games, wins: s.wins, kda };
+                                if (!topChamp
+                                    || cand.wins > topChamp.wins
+                                    || (cand.wins === topChamp.wins && cand.games > topChamp.games)
+                                    || (cand.wins === topChamp.wins && cand.games === topChamp.games && cand.kda > topChamp.kda)) {
+                                  topChamp = cand;
+                                }
+                              }
+                              const showChamp = topChamp && topChamp.games >= 2;
                               return (
                                 <div key={g.key}>
-                                  <div className="flex items-baseline justify-between mb-1.5 px-1">
-                                    <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text)" }}>
+                                  <div className="flex items-baseline justify-between mb-1.5 px-1 gap-2 flex-wrap">
+                                    <span className="text-xs font-semibold uppercase tracking-wide flex items-center gap-2" style={{ color: "var(--text)" }}>
                                       {g.label}
+                                      {lp != null && lp !== 0 && (
+                                        <span
+                                          className="text-[10px] px-1.5 py-0.5 rounded tabular-nums"
+                                          style={{
+                                            color: lp > 0 ? "var(--accent-green)" : "var(--accent-red)",
+                                            background: lp > 0 ? "var(--accent-green)22" : "var(--accent-red)22",
+                                          }}
+                                          title="Solo queue LP change this session"
+                                        >
+                                          {lp > 0 ? "▲" : "▼"} {Math.abs(lp)} LP
+                                        </span>
+                                      )}
+                                      {showChamp && topChamp && (
+                                        <span
+                                          className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded"
+                                          style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
+                                          title="Best champion this session"
+                                        >
+                                          {summary?.dragonVersion && (
+                                            <img
+                                              src={ddragonChampionIcon(summary.dragonVersion, topChamp.name)}
+                                              alt=""
+                                              width={14} height={14}
+                                              style={{ borderRadius: 2 }}
+                                            />
+                                          )}
+                                          <span className="font-semibold" style={{ color: "var(--text)" }}>{topChamp.name}</span>
+                                          <span>· {topChamp.wins}W/{topChamp.games - topChamp.wins}L · {topChamp.kda.toFixed(1)} KDA</span>
+                                        </span>
+                                      )}
                                     </span>
                                     <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
                                       <span style={{ color: netColor, fontWeight: 600 }}>{g.wins}W · {g.losses}L</span>

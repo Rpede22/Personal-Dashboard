@@ -22,13 +22,21 @@ model Assignment {
 }
 
 model RunLog {
-  id        Int      @id @default(autoincrement())
-  date      DateTime
-  distance  Float    // km
-  duration  Int      // seconds
-  notes     String?
-  stravaId  String?  // Strava activity ID — null for manually logged runs
-  createdAt DateTime @default(now())
+  id               Int      @id @default(autoincrement())
+  date             DateTime
+  distance         Float    // km
+  duration         Int      // seconds
+  notes            String?
+  stravaId         String?  // Strava activity ID — null for manually logged runs
+  // Snapshot of the planned distance for this date, copied from the matching
+  // RunPlan before it was deleted. Lets weekPlannedKm survive after runs
+  // happen so the "vs plan" bar keeps its target through the current week.
+  plannedDistance  Float?
+  // Strava per-activity best_efforts as JSON: [{ name: "5k", movingSec: 1234 }, …].
+  // Populated on Strava sync (or via /api/strava/sync-efforts for backfill).
+  // Null for manual runs or Strava runs older than the best-efforts sync.
+  bestEffortsJson  String?
+  createdAt        DateTime @default(now())
 }
 
 model RunPlan {

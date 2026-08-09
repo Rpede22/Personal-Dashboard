@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Skeleton } from "@/components/Skeleton";
+import { useRefreshMs } from "@/lib/useRefreshMs";
 
 // ── EDM (NHL) types ────────────────────────────────────────────────────────
 interface TeamStanding {
@@ -242,11 +243,13 @@ export default function SportsWidget() {
     setLoading(false);
   }
 
+  const refreshMs = useRefreshMs("sports", 5);
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 5 * 60 * 1000); // refresh every 5 minutes
+    if (refreshMs === 0) return;
+    const interval = setInterval(loadData, refreshMs);
     return () => clearInterval(interval);
-  }, []);
+  }, [refreshMs]);
 
   // Snapshot ranks weekly so we can render "since Monday" deltas. The stored
   // baseline is refreshed the first time the widget loads on a new Monday;

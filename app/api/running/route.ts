@@ -24,12 +24,19 @@ export async function POST(request: Request) {
     );
   }
 
+  const runDate = new Date(date);
+  // Snapshot any existing plan's distance so weekPlannedKm keeps the target
+  // even after the plan is cleared. Manual logs don't delete plans right now,
+  // but the snapshot means we can start doing so without losing history.
+  const planForDay = await prisma.runPlan.findFirst({ where: { date: runDate } });
+
   const run = await prisma.runLog.create({
     data: {
-      date: new Date(date),
+      date: runDate,
       distance: parseFloat(distance),
       duration: parseInt(duration),
       notes: notes ?? null,
+      plannedDistance: planForDay?.distance ?? null,
     },
   });
 

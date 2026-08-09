@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getValidToken } from "../route";
+import { extractBestEfforts } from "@/lib/strava-efforts";
 
 // POST /api/strava/sync — import recent activities from Strava
 export async function POST() {
@@ -71,6 +72,28 @@ export async function POST() {
       continue;
     }
 
+    // Snapshot the planned distance for this date (if a plan exists) before
+    // the plan is deleted — keeps `weekPlannedKm` intact so the widget's
+    // "vs plan" bar still shows this week's target after the run happens.
+    const planForDay = await prisma.runPlan.findFirst({ where: { date: dateUTC } });
+
+    // Pull the activity detail for its `best_efforts` array. Strava only
+    // exposes best_efforts on the detail endpoint (not the summary list).
+    // Per-run cost is one extra request; the endpoint's response is cached
+    // internally by the Next.js data fetching layer if hit again. Any
+    // network/parse failure is non-fatal — we just save without efforts.
+    let bestEffortsJson: string | null = null;
+    try {
+      const detailRes = await fetch(`https://www.strava.com/api/v3/activities/${run.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (detailRes.ok) {
+        const detail = await detailRes.json();
+        const efforts = extractBestEfforts(detail?.best_efforts);
+        if (efforts.length > 0) bestEffortsJson = JSON.stringify(efforts);
+      }
+    } catch { /* silent — leave bestEffortsJson null */ }
+
     await prisma.runLog.create({
       data: {
         date: dateUTC,
@@ -78,6 +101,8 @@ export async function POST() {
         duration: durationSec,
         notes: `Strava: ${run.name}`,
         stravaId: String(run.id),
+        plannedDistance: planForDay?.distance ?? null,
+        bestEffortsJson,
       },
     });
     // Remove any run plans for this day — the run covers it

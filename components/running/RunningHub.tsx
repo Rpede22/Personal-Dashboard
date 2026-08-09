@@ -23,6 +23,7 @@ interface RunLog {
   duration: number;
   notes: string | null;
   stravaId: string | null;
+  bestEffortsJson?: string | null;
 }
 
 interface RunPlan {
@@ -194,6 +195,30 @@ export default function RunningHub() {
     await fetch("/api/strava", { method: "DELETE" });
     setStravaConnected(false);
     setStravaSyncResult(null);
+  }
+
+  // Backfill best_efforts for every Strava-imported run that doesn't have
+  // them yet. Batches of 40 per call so a big library doesn't burn the whole
+  // Strava rate budget; the button auto-loops until the server reports 0
+  // remaining or a batch fails.
+  const [effortsLoading, setEffortsLoading] = useState(false);
+  const [effortsResult, setEffortsResult] = useState<string | null>(null);
+  async function syncStravaEfforts() {
+    setEffortsLoading(true);
+    setEffortsResult(null);
+    let totalUpdated = 0;
+    try {
+      for (let iter = 0; iter < 10; iter++) {
+        const res = await fetch("/api/strava/sync-efforts", { method: "POST" });
+        const data = await res.json();
+        if (data.error) { setEffortsResult(`Error: ${data.error}`); break; }
+        totalUpdated += data.updated ?? 0;
+        setEffortsResult(`Updated ${totalUpdated}${data.remaining > 0 ? ` · ${data.remaining} left` : " · all done"}`);
+        if ((data.updated ?? 0) === 0 || (data.remaining ?? 0) === 0) break;
+      }
+      loadRuns();
+    } catch { setEffortsResult("Sync failed"); }
+    finally { setEffortsLoading(false); }
   }
 
   useEffect(() => {
@@ -577,6 +602,19 @@ export default function RunningHub() {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Personal Records */}
+      {runs.length > 0 && (
+        <div
+          className="rounded-2xl p-4 mb-6"
+          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+        >
+          <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--accent-orange)" }}>
+            🏆 Personal Records
+          </h3>
+          <PRGrid runs={runs} />
         </div>
       )}
 
@@ -1212,6 +1250,15 @@ export default function RunningHub() {
               {stravaLoading ? "Syncing…" : "Sync runs"}
             </button>
             <button
+              onClick={syncStravaEfforts}
+              disabled={effortsLoading}
+              className="px-3 py-1.5 rounded-lg text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--accent-orange)", border: "1px solid var(--accent-orange)" }}
+              title="Fetch each run's Strava best_efforts (5k / 10k / half / marathon splits) so the PR grid shows real split times, not full-run averages. Batches 40 per click; call again if there are more."
+            >
+              {effortsLoading ? "Fetching…" : "Sync PRs"}
+            </button>
+            <button
               onClick={disconnectStrava}
               className="px-3 py-1.5 rounded-lg text-sm"
               style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
@@ -1220,6 +1267,9 @@ export default function RunningHub() {
             </button>
             {stravaSyncResult && (
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>{stravaSyncResult}</span>
+            )}
+            {effortsResult && (
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>PRs: {effortsResult}</span>
             )}
           </>
         ) : stravaHasCredentials ? (
@@ -1774,4 +1824,102 @@ export default function RunningHub() {
       )}
     </div>
   );
+}
+
+/**
+ * Per-distance PR grid.
+ *
+ * For 5k / 10k / half / marathon: prefers Strava's per-activity `best_efforts`
+ * — those are real split times inside longer runs, so a 21 km long run that
+ * happened to have a fast 5k split contributes to the 5k PR rather than being
+ * ignored. Sourced from `RunLog.bestEffortsJson` (populated by `POST
+ * /api/strava/sync-efforts`). Falls back to the whole-run bucket heuristic
+ * when a run has no efforts recorded (manual entries, pre-backfill runs).
+ *
+ * 100m / 400m stay heuristic-only — Strava's standard efforts list starts at
+ * 400m but rarely fires for typical runs, and 100m isn't in the list at all,
+ * so those buckets usually render "—" unless the user explicitly logs one.
+ */
+function PRGrid({ runs }: { runs: RunLog[] }) {
+  const buckets = [
+    { label: "100m",     min: 0.08, max: 0.15, effortLabel: null      as string | null },
+    { label: "400m",     min: 0.35, max: 0.5,  effortLabel: "400m"    as string | null },
+    { label: "5k",       min: 4.5,  max: 7.5,  effortLabel: "5k"      as string | null },
+    { label: "10k",      min: 9,    max: 14,   effortLabel: "10k"     as string | null },
+    { label: "Half",     min: 19,   max: 24,   effortLabel: "Half"    as string | null },
+    { label: "Marathon", min: 40,   max: 44,   effortLabel: "Marathon" as string | null },
+  ];
+
+  // Pre-parse best-effort JSON blobs once per run.
+  interface RunEfforts { run: RunLog; efforts: Record<string, number> }
+  const runsWithEfforts: RunEfforts[] = runs.map((r) => {
+    let efforts: Record<string, number> = {};
+    if (r.bestEffortsJson) {
+      try {
+        const parsed = JSON.parse(r.bestEffortsJson) as Array<{ name: string; movingSec: number }>;
+        for (const e of parsed) if (e?.name && Number.isFinite(e.movingSec)) efforts[e.name] = e.movingSec;
+      } catch { /* silent */ }
+    }
+    return { run: r, efforts };
+  });
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+      {buckets.map((b) => {
+        // Strava-effort path (5k / 10k / half / marathon)
+        let best: { seconds: number; date: string; distance: number | null; source: "effort" | "run" } | null = null;
+        if (b.effortLabel) {
+          for (const { run, efforts } of runsWithEfforts) {
+            const sec = efforts[b.effortLabel];
+            if (!Number.isFinite(sec) || sec <= 0) continue;
+            if (!best || sec < best.seconds) best = { seconds: sec, date: run.date, distance: null, source: "effort" };
+          }
+        }
+        // Whole-run fallback — matches the earlier behaviour + covers 100m.
+        if (!best) {
+          const inBucket = runs.filter((r) => r.distance >= b.min && r.distance <= b.max && r.duration > 0);
+          const bestRun = inBucket.sort((a, b) => a.duration - b.duration)[0];
+          if (bestRun) best = { seconds: bestRun.duration, date: bestRun.date, distance: bestRun.distance, source: "run" };
+        }
+
+        return (
+          <div
+            key={b.label}
+            className="rounded-xl p-2 text-center"
+            style={{
+              background: "var(--surface-2)",
+              border: best ? "1px solid var(--accent-orange)44" : "1px solid var(--border)",
+            }}
+            title={best?.source === "effort" ? "From Strava best_efforts (split inside a longer run)" : best?.source === "run" ? "From whole-run time (no Strava split available)" : ""}
+          >
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+              {b.label}
+            </div>
+            {best ? (
+              <>
+                <div className="text-base font-bold tabular-nums" style={{ color: "var(--accent-orange)" }}>
+                  {formatTime(best.seconds)}
+                </div>
+                <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                  {best.distance != null ? `${best.distance.toFixed(2)} km · ` : ""}
+                  {new Date(best.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}
+                </div>
+              </>
+            ) : (
+              <div className="text-sm mt-1" style={{ color: "var(--border)" }}>—</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatTime(sec: number): string {
+  if (!isFinite(sec) || sec <= 0) return "—";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.round(sec % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }

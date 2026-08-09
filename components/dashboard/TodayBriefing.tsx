@@ -4,6 +4,35 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import WeatherLine from "@/components/dashboard/WeatherLine";
 
+/** Kind of a briefing row — used as the persistence key for reordering.
+ *  `cal` covers both single-event and collapsed-multi rows since only one
+ *  cal row ever renders at a time. Sport rows are grouped by slug so
+ *  each followed team can be reordered independently. */
+type ItemKind = "cal" | "sport" | "run" | "school";
+
+const ORDER_KEY = "dashboard.today.order";
+const DEFAULT_ORDER: ItemKind[] = ["cal", "sport", "run", "school"];
+
+function loadOrder(): ItemKind[] {
+  if (typeof window === "undefined") return DEFAULT_ORDER;
+  try {
+    const raw = localStorage.getItem(ORDER_KEY);
+    if (!raw) return DEFAULT_ORDER;
+    const parsed = JSON.parse(raw) as ItemKind[];
+    const known = new Set<ItemKind>(DEFAULT_ORDER);
+    const kept = parsed.filter((k): k is ItemKind => known.has(k as ItemKind));
+    for (const k of DEFAULT_ORDER) if (!kept.includes(k)) kept.push(k);
+    return kept;
+  } catch { return DEFAULT_ORDER; }
+}
+
+function itemKind(key: string): ItemKind {
+  if (key.startsWith("cal")) return "cal";
+  if (key.startsWith("sport")) return "sport";
+  if (key === "run") return "run";
+  return "school";
+}
+
 interface CalEvent { uid: string; title: string; start: string; end: string; allDay: boolean; calendar: string }
 interface SportsSummary {
   slug: string;
@@ -52,6 +81,27 @@ interface Item {
 
 export default function TodayBriefing() {
   const [items, setItems] = useState<Item[] | null>(null);
+  const [order, setOrder] = useState<ItemKind[]>(DEFAULT_ORDER);
+  const [dragKind, setDragKind] = useState<ItemKind | null>(null);
+  const [hoverKind, setHoverKind] = useState<ItemKind | null>(null);
+
+  useEffect(() => { setOrder(loadOrder()); }, []);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch { /* ignore */ }
+  }, [order]);
+
+  function swap(from: ItemKind, to: ItemKind) {
+    if (from === to) return;
+    setOrder((prev) => {
+      const next = [...prev];
+      const iF = next.indexOf(from);
+      const iT = next.indexOf(to);
+      if (iF < 0 || iT < 0) return prev;
+      [next[iF], next[iT]] = [next[iT], next[iF]];
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -245,6 +295,11 @@ export default function TodayBriefing() {
   if (items === null) return null; // silent while loading
   if (items.length === 0) return null; // collapse entirely when there's nothing to say
 
+  // Sort items by the persisted kind order; items of the same kind keep their
+  // original relative order (stable sort).
+  const kindRank = new Map<ItemKind, number>(order.map((k, i) => [k, i]));
+  const sortedItems = [...items].sort((a, b) => (kindRank.get(itemKind(a.key)) ?? 99) - (kindRank.get(itemKind(b.key)) ?? 99));
+
   return (
     <div
       className="mb-4 rounded-2xl px-4 py-3 flex items-stretch gap-3 flex-wrap"
@@ -257,22 +312,75 @@ export default function TodayBriefing() {
         </div>
         <WeatherLine />
       </div>
-      {items.map((it) => (
-        <Link
-          key={it.key}
-          href={it.href}
-          className="flex items-center gap-3 rounded-xl px-3 py-2 flex-1 min-w-[220px] hover:brightness-110"
-          style={{ background: "var(--surface-2)", border: `1px solid ${it.color}44` }}
-          title={it.detail}
-        >
-          <span className="text-xl">{it.emoji}</span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[10px] uppercase tracking-wide" style={{ color: it.color }}>{it.label}</div>
-            <div className="text-sm font-semibold truncate">{it.detail}</div>
-            {it.meta && <div className="text-xs truncate" style={{ color: "var(--text-muted)" }}>{it.meta}</div>}
+      {sortedItems.map((it) => {
+        const kind = itemKind(it.key);
+        const isHover = hoverKind === kind && dragKind !== null && dragKind !== kind;
+        const isDragging = dragKind === kind;
+        return (
+          <div
+            key={it.key}
+            className="flex-1 min-w-[220px] relative"
+            style={{
+              transition: "transform 0.15s ease, box-shadow 0.15s ease",
+              transform: isHover ? "scale(1.01)" : undefined,
+              boxShadow: isHover ? "0 0 0 2px var(--accent-blue)" : undefined,
+              borderRadius: "12px",
+              opacity: isDragging ? 0.45 : 1,
+            }}
+            onDragOver={(e) => {
+              if (!dragKind) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (hoverKind !== kind) setHoverKind(kind);
+            }}
+            onDragLeave={() => { if (hoverKind === kind) setHoverKind(null); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const from = (e.dataTransfer.getData("text/plain") || dragKind) as ItemKind | "";
+              if (from && from !== kind) swap(from as ItemKind, kind);
+              setDragKind(null);
+              setHoverKind(null);
+            }}
+          >
+            <button
+              draggable
+              onDragStart={(e) => {
+                e.stopPropagation();
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", kind);
+                setDragKind(kind);
+              }}
+              onDragEnd={() => { setDragKind(null); setHoverKind(null); }}
+              onClick={(e) => e.preventDefault()}
+              aria-label={`Drag ${it.label} to reorder`}
+              title="Drag to reorder"
+              className="absolute z-20 flex items-center justify-center rounded-md text-[10px] opacity-30 hover:opacity-100"
+              style={{
+                top: 4, right: 4, width: 18, height: 18,
+                cursor: "grab",
+                background: "var(--surface)",
+                color: "var(--text-muted)",
+                border: "1px solid var(--border)",
+                lineHeight: 1,
+              }}
+            >⋮⋮</button>
+            <Link
+              href={it.href}
+              className="flex items-center gap-3 rounded-xl px-3 py-2 hover:brightness-110"
+              style={{ background: "var(--surface-2)", border: `1px solid ${it.color}44` }}
+              title={it.detail}
+              draggable={false}
+            >
+              <span className="text-xl">{it.emoji}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase tracking-wide" style={{ color: it.color }}>{it.label}</div>
+                <div className="text-sm font-semibold truncate">{it.detail}</div>
+                {it.meta && <div className="text-xs truncate" style={{ color: "var(--text-muted)" }}>{it.meta}</div>}
+              </div>
+            </Link>
           </div>
-        </Link>
-      ))}
+        );
+      })}
     </div>
   );
 }

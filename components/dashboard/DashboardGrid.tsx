@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import WidgetErrorBoundary from "@/components/WidgetErrorBoundary";
-import DashboardPrefs from "@/components/dashboard/DashboardPrefs";
+import { REFRESH_OPTIONS_MIN, loadRefreshOverrides, saveRefreshOverride } from "@/lib/refresh";
 import SportsWidget from "@/components/dashboard/SportsWidget";
 import SchoolWidget from "@/components/dashboard/SchoolWidget";
 import GamesWidget from "@/components/dashboard/GamesWidget";
@@ -23,15 +23,17 @@ interface Entry {
   node: ReactNode;
   /** Preferred size class. `wide` spans both grid columns. Default is 1×1. */
   size?: "square" | "wide";
+  /** Default auto-refresh interval in minutes. 0 = never. Shown in the ⚡ menu. */
+  defaultRefreshMin?: number;
 }
 
 const WIDGETS: Record<Slug, Entry> = {
-  sports: { label: "Sports", node: <SportsWidget /> },
-  school: { label: "School", href: "/school", node: <SchoolWidget /> },
-  games: { label: "Games", node: <GamesWidget /> },
-  running: { label: "Running", href: "/running", node: <RunningWidget /> },
-  calendar: { label: "Calendar", href: "/calendar", node: <CalendarWidget />, size: "wide" },
-  workhub: { label: "Workhub", node: <WorkhubWidget /> },
+  sports: { label: "Sports", node: <SportsWidget />, defaultRefreshMin: 5 },
+  school: { label: "School", href: "/school", node: <SchoolWidget />, defaultRefreshMin: 0 },
+  games: { label: "Games", node: <GamesWidget />, defaultRefreshMin: 2 },
+  running: { label: "Running", href: "/running", node: <RunningWidget />, defaultRefreshMin: 0 },
+  calendar: { label: "Calendar", href: "/calendar", node: <CalendarWidget />, size: "wide", defaultRefreshMin: 60 },
+  workhub: { label: "Workhub", href: "/work", node: <WorkhubWidget />, defaultRefreshMin: 0 },
 };
 
 function loadOrder(): Slug[] {
@@ -69,11 +71,20 @@ export default function DashboardGrid() {
   const [hoverSlug, setHoverSlug] = useState<Slug | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const libraryRef = useRef<HTMLDivElement | null>(null);
+  const [refreshOverrides, setRefreshOverrides] = useState<Record<string, number>>({});
+  const [refreshMenuFor, setRefreshMenuFor] = useState<Slug | null>(null);
 
   useEffect(() => {
     setOrder(loadOrder());
     setEnabled(loadEnabled());
+    setRefreshOverrides(loadRefreshOverrides());
   }, []);
+
+  function setRefresh(slug: Slug, minutes: number | null) {
+    saveRefreshOverride(slug, minutes);
+    setRefreshOverrides(loadRefreshOverrides());
+    setRefreshMenuFor(null);
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -96,6 +107,15 @@ export default function DashboardGrid() {
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [libraryOpen]);
+
+  // Close refresh menu on any outside click. Inside-menu clicks stop
+  // propagation themselves so this doesn't fire on option clicks.
+  useEffect(() => {
+    if (!refreshMenuFor) return;
+    function onDoc() { setRefreshMenuFor(null); }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [refreshMenuFor]);
 
   function swap(from: Slug, to: Slug) {
     if (from === to) return;
@@ -129,7 +149,6 @@ export default function DashboardGrid() {
   return (
     <>
       <div className="flex justify-end items-center gap-2 mb-3">
-        <DashboardPrefs />
         <div className="relative" ref={libraryRef}>
           <button
             type="button"
@@ -218,30 +237,89 @@ export default function DashboardGrid() {
               gridColumn: w.size === "wide" ? "1 / -1" : undefined,
             };
 
+            const defaultMin = w.defaultRefreshMin ?? 0;
+            const effectiveMin = refreshOverrides[slug] ?? defaultMin;
+            const hasOverride = slug in refreshOverrides;
+            const menuOpen = refreshMenuFor === slug;
+            const canRefresh = defaultMin > 0 || hasOverride;
+
             const handle = (
-              <button
-                draggable
-                onDragStart={(e) => {
-                  e.stopPropagation();
-                  e.dataTransfer.effectAllowed = "move";
-                  e.dataTransfer.setData("text/plain", slug);
-                  setDragSlug(slug);
-                }}
-                onDragEnd={() => { setDragSlug(null); setHoverSlug(null); }}
-                onClick={(e) => e.preventDefault()}
-                aria-label={`Drag ${w.label} to reorder`}
-                title="Drag to reorder"
-                className="absolute z-20 flex items-center justify-center rounded-md text-xs opacity-40 hover:opacity-100"
-                style={{
-                  top: 8, right: 8, width: 24, height: 24,
-                  cursor: "grab",
-                  background: "var(--surface-2)",
-                  color: "var(--text-muted)",
-                  border: "1px solid var(--border)",
-                  lineHeight: 1,
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-              >⋮⋮</button>
+              <div className="absolute z-20 flex items-center gap-1" style={{ top: 8, right: 8 }}>
+                {canRefresh && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); e.preventDefault(); setRefreshMenuFor(menuOpen ? null : slug); }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      aria-label={`Refresh interval for ${w.label}`}
+                      title={`Auto-refresh: ${effectiveMin === 0 ? "off" : `${effectiveMin} min`}${hasOverride ? " (custom)" : ""}`}
+                      className="flex items-center justify-center rounded-md text-xs opacity-40 hover:opacity-100"
+                      style={{
+                        width: 24, height: 24,
+                        background: hasOverride ? "var(--accent-cyan)22" : "var(--surface-2)",
+                        color: hasOverride ? "var(--accent-cyan)" : "var(--text-muted)",
+                        border: `1px solid ${hasOverride ? "var(--accent-cyan)" : "var(--border)"}`,
+                        lineHeight: 1,
+                      }}
+                    >⚡</button>
+                    {menuOpen && (
+                      <div
+                        className="absolute rounded-lg p-2 shadow-lg z-30"
+                        style={{ top: 28, right: 0, background: "var(--surface)", border: "1px solid var(--border)", minWidth: 130 }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                      >
+                        <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>
+                          Auto-refresh
+                        </div>
+                        <div className="flex flex-col gap-0.5">
+                          {REFRESH_OPTIONS_MIN.map((m) => {
+                            const selected = effectiveMin === m;
+                            return (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => setRefresh(slug, m === defaultMin ? null : m)}
+                                className="text-xs text-left px-2 py-1 rounded"
+                                style={{
+                                  background: selected ? "var(--accent-cyan)22" : "transparent",
+                                  color: selected ? "var(--accent-cyan)" : "var(--text)",
+                                }}
+                              >
+                                {m === 0 ? "Off" : `${m} min`}
+                                {m === defaultMin && <span className="ml-1 opacity-60">·default</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                <button
+                  draggable
+                  onDragStart={(e) => {
+                    e.stopPropagation();
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", slug);
+                    setDragSlug(slug);
+                  }}
+                  onDragEnd={() => { setDragSlug(null); setHoverSlug(null); }}
+                  onClick={(e) => e.preventDefault()}
+                  aria-label={`Drag ${w.label} to reorder`}
+                  title="Drag to reorder"
+                  className="flex items-center justify-center rounded-md text-xs opacity-40 hover:opacity-100"
+                  style={{
+                    width: 24, height: 24,
+                    cursor: "grab",
+                    background: "var(--surface-2)",
+                    color: "var(--text-muted)",
+                    border: "1px solid var(--border)",
+                    lineHeight: 1,
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >⋮⋮</button>
+              </div>
             );
 
             const dropHandlers = {

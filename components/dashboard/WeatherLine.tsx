@@ -6,9 +6,9 @@ import { useEffect, useState } from "react";
  *  (no API key). Coords are hardcoded to Esbjerg — swap them out if you
  *  move. Refreshes hourly. */
 
-// Esbjerg, DK
-const LAT = 55.4676;
-const LON = 8.4536;
+// Aarhus C, DK
+const LAT = 56.1572;
+const LON = 10.2107;
 
 const WMO_ICON: Array<{ codes: number[]; icon: string; label: string }> = [
   { codes: [0], icon: "☀️", label: "Clear" },
