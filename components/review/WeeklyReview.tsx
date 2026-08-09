@@ -352,71 +352,66 @@ export default function WeeklyReview() {
         {/* Sports */}
         <Section title="🏆 Followed teams" href="/">
           <ul className="space-y-2 text-sm">
-            {/* EDM (NHL) — recent games from /api/nhl/schedule filtered to this week */}
-            {nhlGames.length === 0 ? (
-              <li className="flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
-                <span>🏒</span><span>Edmonton Oilers</span><span className="ml-auto text-xs">—</span>
-              </li>
-            ) : (
-              nhlGames.map((g, i) => {
+            {/* EDM (NHL) — W-L record across this week's games (matches the
+                aggregate style used for the football/hockey teams below). */}
+            {(() => {
+              let ew = 0, el = 0;
+              for (const g of nhlGames) {
                 const isHomeUs = g.homeTeam.abbrev === "EDM";
                 const us = isHomeUs ? g.homeTeam.score : g.awayTeam.score;
                 const them = isHomeUs ? g.awayTeam.score : g.homeTeam.score;
-                const opp = isHomeUs ? g.awayTeam.abbrev : g.homeTeam.abbrev;
-                const w = us !== undefined && them !== undefined && us > them;
-                const l = us !== undefined && them !== undefined && us < them;
-                const color = w ? "var(--accent-green)" : l ? "var(--accent-red)" : "var(--text-muted)";
-                return (
-                  <li key={`edm-${i}`} className="flex items-center gap-2">
-                    <span>🏒</span>
-                    <span className="truncate">{opp}</span>
-                    <span className="ml-auto font-semibold" style={{ color }}>{us ?? "-"}–{them ?? "-"}</span>
-                  </li>
-                );
-              })
-            )}
+                if (us == null || them == null) continue;
+                if (us > them) ew++;
+                else if (us < them) el++;
+              }
+              const total = ew + el;
+              const c = ew > el ? "var(--accent-green)" : el > ew ? "var(--accent-red)" : "var(--text-muted)";
+              return (
+                <li className="flex items-center gap-2">
+                  <span>🏒</span>
+                  <span className="truncate">Edmonton Oilers</span>
+                  <span className="ml-auto text-xs" style={{ color: total === 0 ? "var(--text-muted)" : c, fontWeight: total === 0 ? 400 : 600 }}>
+                    {total === 0 ? "no matches" : `${ew}W ${el}L`}
+                  </span>
+                </li>
+              );
+            })()}
 
             {sports.map((s) => {
-              // FotMob returns `date: "YYYY-MM-DD"` (UTC). Parsing that with
-              // `new Date(str)` gives UTC midnight — close enough to align with
-              // the local Mon–Sun window. A game is considered "played this
-              // week" when the date lands in the window AND either the
-              // `finished` flag is on OR both scores are non-null (some
-              // upstream feeds are slow to flip `finished` for a few hours
-              // after full time, which was hiding e.g. EFB's Sunday result).
-              const weekMatches = s.last5.filter((m) => {
-                if (!m.date) return false;
-                const played = m.finished || (m.homeScore != null && m.awayScore != null);
-                return played && inThisWeek(m.date, weekStart, weekEnd);
-              });
-              if (weekMatches.length === 0) {
-                return (
-                  <li key={s.slug} className="flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
-                    <span>{s.config.emoji}</span><span>{s.config.name}</span><span className="ml-auto text-xs">—</span>
-                  </li>
-                );
-              }
-              // Use the API-provided matchKeyword to identify our team — the
-              // old "first word of name" heuristic broke for teams like
-              // "Esbjerg fB" whenever their FotMob home name was slightly
-              // different from the config `name`.
+              // Aggregate the team's record over the current 7-day window —
+              // simpler than showing every individual match and matches the
+              // "how did they do this week?" framing. A match counts as
+              // played when either `finished` is set OR both scores are
+              // non-null (FotMob is slow to flip `finished` for a few hours
+              // after full time). matchKeyword identifies which side is us.
               const key = (s.config.matchKeyword ?? s.config.name?.split(" ")[0] ?? "").toLowerCase();
-              return weekMatches.map((m, i) => {
+              let wins = 0, draws = 0, losses = 0;
+              for (const m of s.last5) {
+                if (!m.date) continue;
+                if (!inThisWeek(m.date, weekStart, weekEnd)) continue;
+                const played = m.finished || (m.homeScore != null && m.awayScore != null);
+                if (!played) continue;
                 const isHomeUs = m.homeTeam.toLowerCase().includes(key);
                 const us = isHomeUs ? m.homeScore : m.awayScore;
                 const them = isHomeUs ? m.awayScore : m.homeScore;
-                const opp = isHomeUs ? m.awayTeam : m.homeTeam;
-                const w = us !== null && them !== null && us > them;
-                const l = us !== null && them !== null && us < them;
-                const color = w ? "var(--accent-green)" : l ? "var(--accent-red)" : "var(--text-muted)";
-                return (
-                  <li key={`${s.slug}-${i}`} className="flex items-center gap-2">
-                    <span>{s.config.emoji}</span>
-                    <span className="truncate">{opp}</span>
-                    <span className="ml-auto font-semibold" style={{ color }}>{us ?? "-"}–{them ?? "-"}</span>
-                  </li>
-                );
-              });
+                if (us == null || them == null) continue;
+                if (us > them) wins++;
+                else if (us < them) losses++;
+                else draws++;
+              }
+              const total = wins + draws + losses;
+              const recordColor = wins > losses ? "var(--accent-green)"
+                : losses > wins ? "var(--accent-red)"
+                : "var(--text-muted)";
+              return (
+                <li key={s.slug} className="flex items-center gap-2">
+                  <span>{s.config.emoji}</span>
+                  <span className="truncate">{s.config.name}</span>
+                  <span className="ml-auto text-xs" style={{ color: total === 0 ? "var(--text-muted)" : recordColor, fontWeight: total === 0 ? 400 : 600 }}>
+                    {total === 0 ? "no matches" : `${wins}W ${draws}D ${losses}L`}
+                  </span>
+                </li>
+              );
             })}
           </ul>
         </Section>

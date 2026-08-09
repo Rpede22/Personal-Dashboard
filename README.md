@@ -77,7 +77,7 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 **Auto-refresh:** The sports widget on the dashboard and every team hub page automatically re-fetch data every 5 minutes while the app is open — no manual refresh needed.
 
 **Sports widget extras:**
-- **Result flash badges** — a small ✅ (or ❌ for EDM's last result) overlays a team's last-5 row for 24 h after a finish.
+- **Result badge** — the last-5 row on each team box surfaces the **actual score** (`us–them`) coloured by outcome — green win / red loss / grey draw / orange OTL — for 24 h after a finish. Replaced the earlier ✕/✓ icons since the score is more informative at the same footprint.
 - **Standings-delta chip** — each team's rank is snapshotted to localStorage. When the position moves, a `+2 places` / `−1` chip appears next to the rank label, so the "since we last spoke" delta is always visible.
 - **Kickoff countdown** — inside 12 h of a fixture, the next-fixture row appends `in Xh Ym`.
 
@@ -101,7 +101,7 @@ Four teams are tracked. Each has a widget box on the dashboard and a full hub pa
 - **Per-widget refresh interval** — every widget that polls (Sports 5m, Games/LoL 2m, Calendar 60m) has a ⚡ button next to its drag handle. Click for a picker (Off / 1 / 2 / 5 / 15 / 30 / 60 min). Setting a non-default value tints the ⚡ cyan; the widget hooks into the change instantly. "Off" fully disables polling.
 All settings persist to localStorage.
 
-**Today briefing** sits at the very top of the dashboard, with a **weather line** (icon, label, low/high, rain %) rendered under the date pill — pulled live from open-meteo (no API key required) for **Aarhus C** and refreshed hourly. Each row (calendar / sport / run / school) has a small ⋮⋮ drag handle so you can reorder them however you want — the order is persisted per kind, so tomorrow's rows keep the same layout.
+**Today briefing** sits at the very top of the dashboard, with a **weather line** (icon, label, low/high, rain %) rendered under the date pill — pulled live from open-meteo (no API key required) for **Aarhus C** and refreshed hourly. Each row (calendar / sport / run / school) has a small ⋮⋮ drag handle so you can reorder them however you want — the order is persisted per kind, so tomorrow's rows keep the same layout. **Sports rows swap to the score once a today-match finishes** — before kickoff you see the fixture + countdown; the moment the final whistle lands (or FotMob flips `finished` / both scores appear), the same row switches to `us–them vs opp` coloured green (won) / red (lost) / muted (drew).
 
 The briefing itself: a single card showing every calendar event that lands on today's local day, any tracked-team matches whose kickoff is on the same local day (kept visible after kickoff until finished — a 13.00 game doesn't disappear at 13.01), today's planned run, and the next school deadline. Fixture times are parsed as UTC (FotMob's raw format) and displayed via `toLocaleTimeString` so the local time is always right — an earlier version treated the UTC HH:MM as local and showed CEST games at the UTC hour. NHL gets a special-case rule: if EDM's next game kicks off between 00:00 and 07:00 tomorrow local, it's surfaced the evening before so overnight puck-drops aren't missed. Multiple calendar events collapse into one box (`TODAY · N events` header + `first title` + `HH.mm · started — then HH.mm Title · …`) so a busy day doesn't blow up the widget height. Empty slots collapse. Auto-refreshes every 5 min.
 
@@ -155,9 +155,9 @@ Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/
 
 Row 2 of the dashboard shows a single **`GamesWidget`** with a WoW/LoL tab bar at the top — only one game is visible at a time and the active tab is persisted to localStorage. Clicking the widget body opens the matching hub.
 
-The **LoL widget** has one expandable card per account. The collapsed header shows *Riot ID · region · short tier (e.g. `E IV`) · **LP delta today chip** (`▲ +18` / `▼ −12`) · W/L · WR* (green ≥ 55% / red < 45%). The LP delta compares the latest rank snapshot to the first snapshot at/after local midnight (from `/api/lol/rank-history?days=2`); suppressed when there's no baseline or the delta is zero. Click the header to expand: full **rank card with emblem icon**, plus the **last 5 games** with champion icon, K/D/A, KDA ratio, and CS. Expand state is remembered across dashboard reloads.
+The **LoL widget** has one expandable card per account. The collapsed header shows *Riot ID · region · short tier (e.g. `E IV`) · W/L · WR* (green ≥ 55% / red < 45%). Click the header to expand: full **rank card with a 220×220 emblem**, plus the **last 5 games** with a **44×44 champion icon**, K/D/A, KDA ratio, and CS. Expand state is remembered across dashboard reloads.
 
-The **LoL hub** goes deeper: rank card uses a **160×160 emblem** so the tier is legible at a glance, and each **session day-header** in the match list gets a per-day **`▲/▼ N LP` chip** (from solo-queue snapshots) and a **best-champion-of-session pill** (icon + W/L + KDA, shown whenever that day had ≥ 2 games).
+The **LoL hub** goes deeper: rank card uses a **440×440 emblem** so the tier is legible from across the room, and each **session day-header** in the match list gets a **most-played-champion-of-session pill** (icon + W/L + KDA, ranked by games → win-rate → KDA, shown whenever that day had ≥ 2 games). (The per-session LP chip was removed — rank snapshots are only taken every ~6 h, so the delta rarely lined up with the actual games played and could show numbers like `−11 LP` next to a session that went 1W 1L.)
 
 ---
 
@@ -168,6 +168,7 @@ Run logs and training plans are stored in SQLite. Strava sync is optional.
 - **Manual logging:** add runs directly in the hub.
 - **Strava sync:** connects via OAuth (tokens stored in `.strava-config.json`, git-ignored). Imports the last 30 days of activities, deduplicates by date + distance, and stores the Strava activity ID (`stravaId`) on each run. Each new activity's `best_efforts` (400m / 5k / 10k / half / marathon splits) is also pulled and cached on the run so the PR grid can use real splits instead of full-run averages. When a Strava run is synced for a day that already has a run plan, the plan is automatically removed (its distance is first snapshotted onto the run so the week-vs-plan target survives).
 - **Sync PRs button** (Strava panel): backfills `best_efforts` for every Strava-imported run that doesn't have them yet — batches of 40 per click, loops until done. Only needed once to enrich your history; new sync runs pick them up automatically.
+- **Personal Records grid** (Overview tab): 400m / 5k / 10k / Half / Marathon (100m removed — Strava doesn't publish that effort). PRs come **only** from Strava splits; a bucket without a real split renders "—" rather than back-computing from a whole run. Each cell shows time + pace/km + date so you can compare across efforts at a glance.
 The Running Hub has three tabs:
 - **Overview** — training progress charts, race config, Strava integration, run planner.
 - **Run Log** — the full run table with `+ Log Run` button. Shows 5 most recent by default; click **All Runs (N)** to see the full history. Click any row to open the run detail popup.

@@ -345,8 +345,9 @@ export default function SportsWidget() {
   }
 
   /** Most-recent finished sports result within 24h of now, or null. Uses UTC
-   *  `date + time` (FotMob format). Returns `{ result: "W"|"D"|"L", isHome }`. */
-  function recentFlash(events: SportsEvent[], keyword: string): { result: "W" | "D" | "L"; opponent: string } | null {
+   *  `date + time` (FotMob format). Also returns the score so the widget can
+   *  render `us–them` coloured by outcome, instead of a ✓/✕ icon. */
+  function recentFlash(events: SportsEvent[], keyword: string): { result: "W" | "D" | "L"; opponent: string; us: number | null; them: number | null } | null {
     if (!events?.length) return null;
     const now = Date.now();
     const cutoff = now - 24 * 60 * 60 * 1000;
@@ -359,11 +360,13 @@ export default function SportsWidget() {
     if (!top) return null;
     const isHome = top.e.homeTeam.toLowerCase().includes(keyword.toLowerCase());
     const opponent = isHome ? top.e.awayTeam : top.e.homeTeam;
-    return { result: sportsResult(top.e, keyword), opponent: shortName(opponent) };
+    const us = isHome ? top.e.homeScore : top.e.awayScore;
+    const them = isHome ? top.e.awayScore : top.e.homeScore;
+    return { result: sportsResult(top.e, keyword), opponent: shortName(opponent), us, them };
   }
 
   /** NHL variant — uses startTimeUTC and the NHL 3-way outcome (W/L/OTL). */
-  function recentEdmFlash(games: NHLGame[]): { result: "W" | "L" | "OTL"; opponent: string } | null {
+  function recentEdmFlash(games: NHLGame[]): { result: "W" | "L" | "OTL"; opponent: string; us: number | null; them: number | null } | null {
     if (!games?.length) return null;
     const now = Date.now();
     const cutoff = now - 24 * 60 * 60 * 1000;
@@ -376,24 +379,27 @@ export default function SportsWidget() {
     if (!top) return null;
     const isHome = top.g.homeTeam.abbrev === "EDM";
     const opponent = isHome ? top.g.awayTeam.abbrev : top.g.homeTeam.abbrev;
-    return { result: edmResult(top.g), opponent };
+    const us = isHome ? (top.g.homeTeam.score ?? null) : (top.g.awayTeam.score ?? null);
+    const them = isHome ? (top.g.awayTeam.score ?? null) : (top.g.homeTeam.score ?? null);
+    return { result: edmResult(top.g), opponent, us, them };
   }
 
-  function FlashBadge({ result }: { result: "W" | "D" | "L" | "OTL" }) {
-    const map: Record<string, { color: string; icon: string }> = {
-      W:   { color: "var(--accent-green)",  icon: "✓" },
-      D:   { color: "var(--accent-orange)", icon: "=" },
-      L:   { color: "var(--accent-red)",    icon: "✕" },
-      OTL: { color: "var(--accent-orange)", icon: "○" },
+  function FlashBadge({ result, us, them }: { result: "W" | "D" | "L" | "OTL"; us?: number | null; them?: number | null }) {
+    const colorMap: Record<string, string> = {
+      W:   "var(--accent-green)",
+      D:   "var(--text-muted)",
+      L:   "var(--accent-red)",
+      OTL: "var(--accent-orange)",
     };
-    const c = map[result] ?? map.L;
+    const c = colorMap[result] ?? colorMap.L;
+    const label = us != null && them != null ? `${us}–${them}` : result;
     return (
       <span
         className="text-[10px] font-bold px-1.5 rounded-md tabular-nums"
-        style={{ background: `${c.color}22`, color: c.color, border: `1px solid ${c.color}55`, lineHeight: "1.4" }}
-        title={`Last result: ${result}`}
+        style={{ background: `${c}22`, color: c, border: `1px solid ${c}55`, lineHeight: "1.4" }}
+        title={`Last result: ${result}${us != null && them != null ? ` (${us}–${them})` : ""}`}
       >
-        {c.icon} {result}
+        {label}
       </span>
     );
   }
@@ -499,7 +505,7 @@ export default function SportsWidget() {
                 const flash = recentEdmFlash(edmGames);
                 return flash ? (
                   <div className="flex items-center gap-2 mb-2">
-                    <FlashBadge result={flash.result} />
+                    <FlashBadge result={flash.result} us={flash.us} them={flash.them} />
                     <span className="text-xs" style={{ color: "var(--text-muted)" }}>vs {flash.opponent}</span>
                   </div>
                 ) : null;
@@ -568,7 +574,7 @@ export default function SportsWidget() {
                     const flash = recentFlash(last5, keyword);
                     return flash ? (
                       <div className="flex items-center gap-2 mb-2">
-                        <FlashBadge result={flash.result} />
+                        <FlashBadge result={flash.result} us={flash.us} them={flash.them} />
                         <span className="text-xs" style={{ color: "var(--text-muted)" }}>vs {flash.opponent}</span>
                       </div>
                     ) : null;

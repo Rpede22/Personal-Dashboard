@@ -724,8 +724,8 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                               <img
                                 src={emblem}
                                 alt=""
-                                width={160}
-                                height={160}
+                                width={440}
+                                height={440}
                                 className="flex-shrink-0"
                                 style={{ objectFit: "contain" }}
                                 onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
@@ -905,12 +905,8 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                               const netColor = g.wins > g.losses ? "var(--accent-green)"
                                 : g.wins < g.losses ? "var(--accent-red)"
                                 : "var(--text-muted)";
-                              // Per-session LP delta — solo queue snapshots taken during this day.
-                              const dayStart = new Date(g.key + "T00:00:00").getTime();
-                              const dayEnd = dayStart + 86400000;
-                              const lp = lpDeltaForDay(dayStart, dayEnd);
-                              // Top champion of the session — most wins, then most games,
-                              // then best KDA. Remakes excluded.
+                              // Top champion of the session — MOST PLAYED first,
+                              // then higher win-rate, then KDA. Remakes excluded.
                               const byChamp = new Map<string, { games: number; wins: number; k: number; d: number; a: number }>();
                               for (const m of g.matches) {
                                 if (!m.me || m.me.gameEndedInEarlySurrender) continue;
@@ -919,14 +915,15 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                                 cur.k += m.me.kills; cur.d += m.me.deaths; cur.a += m.me.assists;
                                 byChamp.set(m.me.championName, cur);
                               }
-                              let topChamp: { name: string; games: number; wins: number; kda: number } | null = null;
+                              let topChamp: { name: string; games: number; wins: number; wr: number; kda: number } | null = null;
                               for (const [name, s] of byChamp) {
                                 const kda = (s.k + s.a) / Math.max(1, s.d);
-                                const cand = { name, games: s.games, wins: s.wins, kda };
+                                const wr = s.games > 0 ? s.wins / s.games : 0;
+                                const cand = { name, games: s.games, wins: s.wins, wr, kda };
                                 if (!topChamp
-                                    || cand.wins > topChamp.wins
-                                    || (cand.wins === topChamp.wins && cand.games > topChamp.games)
-                                    || (cand.wins === topChamp.wins && cand.games === topChamp.games && cand.kda > topChamp.kda)) {
+                                    || cand.games > topChamp.games
+                                    || (cand.games === topChamp.games && cand.wr > topChamp.wr)
+                                    || (cand.games === topChamp.games && cand.wr === topChamp.wr && cand.kda > topChamp.kda)) {
                                   topChamp = cand;
                                 }
                               }
@@ -936,18 +933,6 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                                   <div className="flex items-baseline justify-between mb-1.5 px-1 gap-2 flex-wrap">
                                     <span className="text-xs font-semibold uppercase tracking-wide flex items-center gap-2" style={{ color: "var(--text)" }}>
                                       {g.label}
-                                      {lp != null && lp !== 0 && (
-                                        <span
-                                          className="text-[10px] px-1.5 py-0.5 rounded tabular-nums"
-                                          style={{
-                                            color: lp > 0 ? "var(--accent-green)" : "var(--accent-red)",
-                                            background: lp > 0 ? "var(--accent-green)22" : "var(--accent-red)22",
-                                          }}
-                                          title="Solo queue LP change this session"
-                                        >
-                                          {lp > 0 ? "▲" : "▼"} {Math.abs(lp)} LP
-                                        </span>
-                                      )}
                                       {showChamp && topChamp && (
                                         <span
                                           className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded"

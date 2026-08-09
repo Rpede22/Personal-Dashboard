@@ -1827,33 +1827,29 @@ export default function RunningHub() {
 }
 
 /**
- * Per-distance PR grid.
+ * Per-distance PR grid — Strava splits ONLY.
  *
- * For 5k / 10k / half / marathon: prefers Strava's per-activity `best_efforts`
- * — those are real split times inside longer runs, so a 21 km long run that
- * happened to have a fast 5k split contributes to the 5k PR rather than being
- * ignored. Sourced from `RunLog.bestEffortsJson` (populated by `POST
- * /api/strava/sync-efforts`). Falls back to the whole-run bucket heuristic
- * when a run has no efforts recorded (manual entries, pre-backfill runs).
- *
- * 100m / 400m stay heuristic-only — Strava's standard efforts list starts at
- * 400m but rarely fires for typical runs, and 100m isn't in the list at all,
- * so those buckets usually render "—" unless the user explicitly logs one.
+ * Each bucket reads the fastest matching effort out of `RunLog.bestEffortsJson`
+ * (populated by `POST /api/strava/sync` on new imports and `POST
+ * /api/strava/sync-efforts` for backfill). No whole-run fallback — a distance
+ * without a real split simply shows "—". Distances Strava doesn't publish
+ * standard efforts for (e.g. 100m) are omitted from the grid entirely, since
+ * whole-run averages would misrepresent them as PRs. Pace is derived from the
+ * effort's nominal distance so it's directly comparable across runs.
  */
 function PRGrid({ runs }: { runs: RunLog[] }) {
-  const buckets = [
-    { label: "100m",     min: 0.08, max: 0.15, effortLabel: null      as string | null },
-    { label: "400m",     min: 0.35, max: 0.5,  effortLabel: "400m"    as string | null },
-    { label: "5k",       min: 4.5,  max: 7.5,  effortLabel: "5k"      as string | null },
-    { label: "10k",      min: 9,    max: 14,   effortLabel: "10k"     as string | null },
-    { label: "Half",     min: 19,   max: 24,   effortLabel: "Half"    as string | null },
-    { label: "Marathon", min: 40,   max: 44,   effortLabel: "Marathon" as string | null },
+  const buckets: Array<{ label: string; effortLabel: string; km: number }> = [
+    { label: "400m",     effortLabel: "400m",     km: 0.4 },
+    { label: "5k",       effortLabel: "5k",       km: 5 },
+    { label: "10k",      effortLabel: "10k",      km: 10 },
+    { label: "Half",     effortLabel: "Half",     km: 21.0975 },
+    { label: "Marathon", effortLabel: "Marathon", km: 42.195 },
   ];
 
   // Pre-parse best-effort JSON blobs once per run.
   interface RunEfforts { run: RunLog; efforts: Record<string, number> }
   const runsWithEfforts: RunEfforts[] = runs.map((r) => {
-    let efforts: Record<string, number> = {};
+    const efforts: Record<string, number> = {};
     if (r.bestEffortsJson) {
       try {
         const parsed = JSON.parse(r.bestEffortsJson) as Array<{ name: string; movingSec: number }>;
@@ -1864,23 +1860,15 @@ function PRGrid({ runs }: { runs: RunLog[] }) {
   });
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
       {buckets.map((b) => {
-        // Strava-effort path (5k / 10k / half / marathon)
-        let best: { seconds: number; date: string; distance: number | null; source: "effort" | "run" } | null = null;
-        if (b.effortLabel) {
-          for (const { run, efforts } of runsWithEfforts) {
-            const sec = efforts[b.effortLabel];
-            if (!Number.isFinite(sec) || sec <= 0) continue;
-            if (!best || sec < best.seconds) best = { seconds: sec, date: run.date, distance: null, source: "effort" };
-          }
+        let best: { seconds: number; date: string } | null = null;
+        for (const { run, efforts } of runsWithEfforts) {
+          const sec = efforts[b.effortLabel];
+          if (!Number.isFinite(sec) || sec <= 0) continue;
+          if (!best || sec < best.seconds) best = { seconds: sec, date: run.date };
         }
-        // Whole-run fallback — matches the earlier behaviour + covers 100m.
-        if (!best) {
-          const inBucket = runs.filter((r) => r.distance >= b.min && r.distance <= b.max && r.duration > 0);
-          const bestRun = inBucket.sort((a, b) => a.duration - b.duration)[0];
-          if (bestRun) best = { seconds: bestRun.duration, date: bestRun.date, distance: bestRun.distance, source: "run" };
-        }
+        const pacePerKm = best ? best.seconds / b.km : null;
 
         return (
           <div
@@ -1890,7 +1878,7 @@ function PRGrid({ runs }: { runs: RunLog[] }) {
               background: "var(--surface-2)",
               border: best ? "1px solid var(--accent-orange)44" : "1px solid var(--border)",
             }}
-            title={best?.source === "effort" ? "From Strava best_efforts (split inside a longer run)" : best?.source === "run" ? "From whole-run time (no Strava split available)" : ""}
+            title={best ? "From Strava best_efforts" : "No Strava split for this distance yet"}
           >
             <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
               {b.label}
@@ -1900,9 +1888,8 @@ function PRGrid({ runs }: { runs: RunLog[] }) {
                 <div className="text-base font-bold tabular-nums" style={{ color: "var(--accent-orange)" }}>
                   {formatTime(best.seconds)}
                 </div>
-                <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-                  {best.distance != null ? `${best.distance.toFixed(2)} km · ` : ""}
-                  {new Date(best.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}
+                <div className="text-[10px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+                  {formatPacePerKm(pacePerKm!)} · {new Date(best.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}
                 </div>
               </>
             ) : (
@@ -1913,6 +1900,14 @@ function PRGrid({ runs }: { runs: RunLog[] }) {
       })}
     </div>
   );
+}
+
+/** "5:12/km" — always minutes:seconds per km. */
+function formatPacePerKm(secPerKm: number): string {
+  if (!isFinite(secPerKm) || secPerKm <= 0) return "—";
+  const m = Math.floor(secPerKm / 60);
+  const s = Math.round(secPerKm % 60);
+  return `${m}:${String(s).padStart(2, "0")}/km`;
 }
 
 function formatTime(sec: number): string {

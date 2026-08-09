@@ -36,8 +36,9 @@ function itemKind(key: string): ItemKind {
 interface CalEvent { uid: string; title: string; start: string; end: string; allDay: boolean; calendar: string }
 interface SportsSummary {
   slug: string;
-  config: { emoji?: string; shortName?: string; name?: string };
+  config: { emoji?: string; shortName?: string; name?: string; matchKeyword?: string };
   next5: Array<{ date: string; time: string; homeTeam: string; awayTeam: string; finished: boolean; matchId?: string | null }>;
+  last5: Array<{ date: string; time: string; homeTeam: string; awayTeam: string; finished: boolean; homeScore: number | null; awayScore: number | null }>;
 }
 interface Assignment { id: number; title: string; dueDate: string; dueTime: string | null; status: string; subject: string | null }
 interface RunPlan { date: string; type: string; distance: number | null; notes: string | null }
@@ -183,12 +184,45 @@ export default function TodayBriefing() {
         }
       }
 
-      // 2. Tracked matches — same local day only (kicked off today, or later
-      // today). Football/hockey matches at a normal daytime slot in the next
-      // 24h would otherwise leak in the day before, cluttering the widget.
+      // 2. Tracked matches — same local day only. First check for a match
+      // played earlier today (last5 has the score); if none, check upcoming
+      // fixtures today so pre-match countdowns still surface.
       if (sportsRes.status === "fulfilled") {
         const summaries: SportsSummary[] = sportsRes.value?.summaries ?? [];
         for (const s of summaries) {
+          // Finished-today match: prefer this so the box swaps from countdown
+          // to result the moment the full-time whistle lands. FotMob can lag
+          // a few hours on `finished`, so treat "both scores non-null" as
+          // also finished.
+          const played = (s.last5 ?? []).find((m) => {
+            if (!m.date) return false;
+            const t = matchStart(m.date, m.time);
+            if (!t || !isSameLocalDay(t, now)) return false;
+            return m.finished || (m.homeScore != null && m.awayScore != null);
+          });
+          if (played) {
+            const key = (s.config.matchKeyword ?? s.config.name?.split(" ")[0] ?? "").toLowerCase();
+            const isHomeUs = played.homeTeam.toLowerCase().includes(key);
+            const us = isHomeUs ? played.homeScore : played.awayScore;
+            const them = isHomeUs ? played.awayScore : played.homeScore;
+            const opp = isHomeUs ? played.awayTeam : played.homeTeam;
+            const outcome = us != null && them != null && us > them ? "W"
+              : us != null && them != null && us < them ? "L"
+              : "D";
+            const color = outcome === "W" ? "var(--accent-green)"
+              : outcome === "L" ? "var(--accent-red)"
+              : "var(--text-muted)";
+            out.push({
+              key: `sport-${s.slug}`,
+              emoji: s.config.emoji ?? "🏆",
+              label: s.config.shortName ?? s.config.name ?? s.slug,
+              detail: `${us ?? "-"}–${them ?? "-"} vs ${opp}`,
+              meta: outcome === "W" ? "won today" : outcome === "L" ? "lost today" : "drew today",
+              href: SPORT_HREF[s.slug] ?? "/",
+              color,
+            });
+            continue;
+          }
           const upcoming = (s.next5 ?? []).find((m) => {
             if (m.finished) return false;
             const t = matchStart(m.date, m.time);

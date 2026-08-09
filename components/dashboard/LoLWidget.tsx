@@ -267,20 +267,6 @@ export default function LoLWidget() {
                           <span className="font-semibold capitalize" style={{ color: tierColor(soloRank.tier) }}>
                             {shortTier(soloRank.tier, soloRank.rank)}
                           </span>
-                          {typeof lpDeltas[a.id] === "number" && lpDeltas[a.id] !== 0 && (() => {
-                            const d = lpDeltas[a.id]!;
-                            const up = d > 0;
-                            const color = up ? "var(--accent-green)" : "var(--accent-red)";
-                            return (
-                              <span
-                                className="text-[10px] font-semibold px-1.5 rounded-md tabular-nums"
-                                style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
-                                title="LP change since local midnight"
-                              >
-                                {up ? "▲" : "▼"} {up ? "+" : ""}{d}
-                              </span>
-                            );
-                          })()}
                           <span style={{ color: "var(--text-muted)" }}>
                             {soloRank.wins}W {soloRank.losses}L
                           </span>
@@ -307,8 +293,8 @@ export default function LoLWidget() {
                         <img
                           src={cdragonRankedEmblem(soloRank.tier)}
                           alt=""
-                          width={44}
-                          height={44}
+                          width={220}
+                          height={220}
                           className="flex-shrink-0"
                           style={{ objectFit: "contain" }}
                           onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
@@ -368,8 +354,8 @@ export default function LoLWidget() {
                                   <img
                                     src={ddragonChampionIcon(s.dragonVersion, m.me.championName)}
                                     alt={m.me.championName}
-                                    width={26}
-                                    height={26}
+                                    width={44}
+                                    height={44}
                                     className="rounded flex-shrink-0"
                                     style={{ background: "var(--surface)" }}
                                   />
