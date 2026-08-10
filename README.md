@@ -155,9 +155,9 @@ Get a Riot dev key at [developer.riotgames.com](https://developer.riotgames.com/
 
 Row 2 of the dashboard shows a single **`GamesWidget`** with a WoW/LoL tab bar at the top — only one game is visible at a time and the active tab is persisted to localStorage. Clicking the widget body opens the matching hub.
 
-The **LoL widget** has one expandable card per account. The collapsed header shows *Riot ID · region · short tier (e.g. `E IV`) · W/L · WR* (green ≥ 55% / red < 45%). Click the header to expand: full **rank card with a 220×220 emblem**, plus the **last 5 games** with a **44×44 champion icon**, K/D/A, KDA ratio, and CS. Expand state is remembered across dashboard reloads.
+The **LoL widget** has one expandable card per account. The collapsed header shows *Riot ID · region · short tier (e.g. `E IV`) · W/L · WR* (green ≥ 55% / red < 45%). Click the header to expand: the rank card has a **130 px emblem** rendered natively (sharp) — sized to match the 4-line text stack next to it so the card doesn't grow beyond what the text already needs. Plus the **last 5 games** with a **44×44 champion icon**, K/D/A, KDA ratio, and CS. Expand state is remembered across dashboard reloads.
 
-The **LoL hub** goes deeper: rank card uses a **440×440 emblem** so the tier is legible from across the room, and each **session day-header** in the match list gets a **most-played-champion-of-session pill** (icon + W/L + KDA, ranked by games → win-rate → KDA, shown whenever that day had ≥ 2 games). (The per-session LP chip was removed — rank snapshots are only taken every ~6 h, so the delta rarely lined up with the actual games played and could show numbers like `−11 LP` next to a session that went 1W 1L.)
+The **LoL hub** goes deeper: rank card uses a **220 px emblem** (again sized to fill the text stack, no upscale — earlier `transform: scale` tricks looked blurry), and each **session day-header** in the match list gets a **most-played-champion-of-session pill** (icon + W/L + KDA, ranked by games → win-rate → KDA, shown whenever that day had ≥ 2 games). (The per-session LP chip was removed — rank snapshots are only taken every ~6 h, so the delta rarely lined up with the actual games played and could show numbers like `−11 LP` next to a session that went 1W 1L.)
 
 ---
 
@@ -177,7 +177,7 @@ The Running Hub has three tabs:
   - 8-week volume bar chart with next-week target overlaid in orange.
   - Automatic warnings if last week looked off (only 1 run, no long run, long run > 55% of volume).
   - Next-week target: **+10%** on your **rolling 3-week average** (much more stable than "last week" when training is uneven — a skipped week or one big burst doesn't whipsaw the target), **−25% cutback** after 3 up-weeks, or conservative starter volume if the avg is below ~5 km/week. Both the rolling average and last-week totals are shown so you can see what the plan is built on.
-  - Suggested sessions split by 80/20 (~30% long, 10% speed, 15% tempo, ~45% easy over 2–3 days), each with target distance and coaching notes.
+  - Suggested sessions follow fixed distance rules: **long ≥ 1.4 × easy** (the long is always the biggest run of the week), **tempo = easy** (same volume, harder effort), and **speed = fixed 7 km** (3 km warm-up + 10 × 400 m intervals + short cool-down — intervals are a stimulus, not a mileage bucket). Easy distance is solved back from the weekly target so everything adds up.
   - **Mon–Sun weekly grid** shows exactly which day each session belongs on. Standard 5-day week: `Mon Easy · Tue Speed · Wed Easy · Thu Tempo · Fri Rest · Sat Rest · Sun Long`. Rule enforced by the planner: never two hard sessions in a row.
   - **Customise the plan** — override the weekly target km (auto-suggested as placeholder) and pick 3/4/5/6 run days per week. Templates: 3 (beginner — build the base, no quality), 4 (add one tempo session), 5 (standard 80/20), 6 (advanced). Auto-picks based on volume when left as "auto" — start at 3–4 days if you're building back, bump to 5–6 once you feel steady.
   - **"Apply to next week's planner" button** — writes each non-rest session into next week's `RunPlan` rows so it shows up in the Overview tab planner. Existing next-week plans are replaced.
@@ -230,7 +230,7 @@ The Work widget is a small summary that links into a full `/work` hub.
 
 - **Widget** — current pay-term total (bold), days-to-payday, `Last pay-term Xh` line (visible for a few days after payday so you can still eyeball the payslip total), and the last few logged sessions. No editing from the widget.
 - **Hub** — two tabs:
-  - **Overview** — current pay-term (range + total), last pay-term summary, optional "next pay-term (already logged)" line for sessions logged after payday, a session log form (date + hours + optional note), and the sessions-this-term list. `Register hours →` / `View payslips →` external links live at the bottom. Payday editor supports **off / day-of-month / last-weekday**.
+  - **Overview** — current pay-term (range + total), last pay-term summary, optional "next pay-term (already logged)" line for sessions logged after payday, a session log form (date + **separate h / m inputs** + optional note — no more fiddly decimal hours; 1h 30m = "1" + "30"), and the sessions-this-term list. Entries render back as `Xh Ym`. `Register hours →` / `View payslips →` external links live at the bottom. Payday editor supports **off / day-of-month / last-weekday**.
   - **Entries** — all-time table + running total.
 - **Pay cycle** — the default payday is the **23rd**, matching the Cand cycle (term = the 24th → the 23rd of the following month). Change it at any time from the payday editor.
 - Everything persists to `.work-config.json` via `GET/POST /api/work`.
@@ -370,7 +370,9 @@ Created automatically on first use:
 | `.wow-raid-baseline.json` | Weekly raid kill baselines |
 | `.race-config.json` | Running race target date and distance |
 | `.school-settings.json` | School scheduler settings: study days + h/day soft cap |
-| `.work-config.json` | Work: payday day-of-month + per-week hours (keyed by Monday) |
+| `.work-config.json` | Work: payday day-of-month + per-day sessions |
+
+**Where they live** — dev mode keeps them in the project root (`process.cwd()`). The **packaged app** stores them in `~/Library/Application Support/Dashboard/` so they **survive a rebuild** — earlier versions kept them inside the app bundle, which got wiped every time you reinstalled the DMG. On first launch after upgrading, Electron auto-migrates any legacy files from the standalone dir into the user-data location.
 
 ---
 

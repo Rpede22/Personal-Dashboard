@@ -7,9 +7,9 @@ const RACE_DISTANCE_KEY = "race_distance";
 // Simple key-value store via the filesystem for race date config
 // (avoids adding another DB table for a single value)
 import { readFileSync, writeFileSync } from "fs";
-import path from "path";
+import { configPath } from "@/lib/config-dir";
 
-const CONFIG_PATH = path.join(process.cwd(), ".race-config.json");
+const CONFIG_PATH = configPath(".race-config.json");
 
 function loadConfig(): Record<string, string> {
   try {

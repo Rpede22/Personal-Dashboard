@@ -290,11 +290,16 @@ export default function LoLWidget() {
                         className="rounded-lg p-2 flex items-center gap-3"
                         style={{ background: "var(--surface-2)", border: `1px solid ${tierColor(soloRank.tier)}55` }}
                       >
+                        {/* Emblem renders at its natural size (~130 px). The
+                            surrounding rank card is already ~130 px tall from
+                            the 4-line text stack, so a same-size emblem fills
+                            the card vertically without making it any taller.
+                            No transform → sharp rendering. */}
                         <img
                           src={cdragonRankedEmblem(soloRank.tier)}
                           alt=""
-                          width={220}
-                          height={220}
+                          width={130}
+                          height={130}
                           className="flex-shrink-0"
                           style={{ objectFit: "contain" }}
                           onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}

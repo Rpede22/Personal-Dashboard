@@ -117,6 +117,34 @@ function startNextServer(dbPath) {
         `${Object.keys(runtimeEnv).length} overrides from ${runtimeEnvPath}`
     );
 
+    // JSON key/value configs (`.work-config.json`, `.race-config.json`, etc.)
+    // used to live under `process.cwd()` — but the packaged app's cwd is the
+    // Resources/standalone dir inside the .app bundle, which gets wiped on
+    // every rebuild. Point them at the user-data dir so they survive rebuilds.
+    // One-time migration copies any pre-existing files from the standalone dir
+    // to userData so we don't reset the user's data on this first upgrade.
+    const configDir = app.getPath("userData");
+    try {
+      const legacyDir = path.join(process.resourcesPath, "standalone");
+      const legacyFiles = [
+        ".work-config.json",
+        ".race-config.json",
+        ".school-settings.json",
+        ".strava-config.json",
+        ".wow-raid-baseline.json",
+      ];
+      for (const name of legacyFiles) {
+        const src = path.join(legacyDir, name);
+        const dst = path.join(configDir, name);
+        if (fs.existsSync(src) && !fs.existsSync(dst)) {
+          fs.copyFileSync(src, dst);
+          logLine("INFO", `Migrated ${name} → ${dst}`);
+        }
+      }
+    } catch (err) {
+      logLine("WARN", `Config migration skipped: ${err?.message || err}`);
+    }
+
     // utilityProcess.fork runs as a hidden Node.js child — no dock icon, no Electron lifecycle
     nextProcess = utilityProcess.fork(serverPath, [], {
       env: {
@@ -130,6 +158,9 @@ function startNextServer(dbPath) {
         DATABASE_URL: `file:${dbPath}`,
         NEXTJS_STATIC_DIR: staticPath,
         NEXTJS_PUBLIC_DIR: publicPath,
+        // Persistent JSON config location — read by lib/config-dir.ts. In dev
+        // this env var isn't set, so cwd (project root) is used, same as before.
+        DASHBOARD_CONFIG_DIR: configDir,
       },
       cwd: path.join(process.resourcesPath, "standalone"),
       stdio: "pipe",

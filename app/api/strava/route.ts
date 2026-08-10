@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { readFileSync, writeFileSync } from "fs";
-import path from "path";
+import { configPath } from "@/lib/config-dir";
 
-const CONFIG_PATH = path.join(process.cwd(), ".strava-config.json");
+const CONFIG_PATH = configPath(".strava-config.json");
 
 export interface StravaConfig {
   access_token?: string;

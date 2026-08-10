@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
-import path from "path";
+import { configPath } from "@/lib/config-dir";
 
 /**
  * Simple JSON-file config for the Work widget. No Cand API exists, so this
@@ -28,7 +28,7 @@ interface WorkConfig {
   sessions: WorkSession[];
 }
 
-const CONFIG_PATH = path.join(process.cwd(), ".work-config.json");
+const CONFIG_PATH = configPath(".work-config.json");
 
 function readConfig(): WorkConfig {
   try {

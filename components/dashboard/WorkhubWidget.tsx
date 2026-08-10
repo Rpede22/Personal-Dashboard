@@ -23,6 +23,17 @@ function formatShortDate(iso: string): string {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
+/** "1h 30m" / "45m" / "2h" — from decimal hours. Same shape as the hub's
+ *  helper so the number reads identically everywhere. */
+function formatHoursMinutes(decimalHours: number): string {
+  const totalMin = Math.round(decimalHours * 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
 export default function WorkhubWidget() {
   const [config, setConfig] = useState<WorkConfig | null>(null);
 
@@ -58,7 +69,7 @@ export default function WorkhubWidget() {
         <div className="flex gap-3 mb-3">
           <div className="flex-1 rounded-xl p-3 text-center" style={{ background: "var(--surface-2)" }}>
             <div className="text-2xl font-bold" style={{ color: "var(--accent-cyan)" }}>
-              {termHours.toFixed(1)}<span className="text-base font-semibold"> h</span>
+              {formatHoursMinutes(termHours)}
             </div>
             <div className="text-xs" style={{ color: "var(--text-muted)" }}>this pay-term</div>
           </div>
@@ -75,7 +86,7 @@ export default function WorkhubWidget() {
         {prevTerm && (
           <div className="text-xs mb-2 flex items-baseline justify-between" style={{ color: "var(--text-muted)" }}>
             <span>Last pay-term</span>
-            <span className="tabular-nums font-semibold" style={{ color: "var(--text)" }}>{prevTermHours.toFixed(1)}h</span>
+            <span className="tabular-nums font-semibold" style={{ color: "var(--text)" }}>{formatHoursMinutes(prevTermHours)}</span>
           </div>
         )}
 
@@ -89,7 +100,7 @@ export default function WorkhubWidget() {
               {recent.map((s, i) => (
                 <div key={i} className="flex items-center justify-between rounded-lg px-2.5 py-1.5" style={{ background: "var(--surface-2)" }}>
                   <span className="text-xs" style={{ color: "var(--text-muted)" }}>{formatShortDate(s.date)}</span>
-                  <span className="text-sm font-semibold tabular-nums" style={{ color: "var(--accent-cyan)" }}>{s.hours.toFixed(1)}h</span>
+                  <span className="text-sm font-semibold tabular-nums" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(s.hours)}</span>
                   <span className="text-xs truncate max-w-[40%]" style={{ color: "var(--text-muted)" }}>{s.note ?? ""}</span>
                 </div>
               ))}

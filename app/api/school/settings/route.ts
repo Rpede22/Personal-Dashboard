@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { configPath } from "@/lib/config-dir";
 
-const SETTINGS_PATH = join(process.cwd(), ".school-settings.json");
+const SETTINGS_PATH = configPath(".school-settings.json");
 
 export interface SchoolSettings {
   workDays: number[]; // JS day numbers: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat

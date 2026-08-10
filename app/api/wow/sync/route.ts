@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { readFileSync, writeFileSync } from "fs";
-import path from "path";
+import { configPath } from "@/lib/config-dir";
 
-const BASELINE_PATH = path.join(process.cwd(), ".wow-raid-baseline.json");
+const BASELINE_PATH = configPath(".wow-raid-baseline.json");
 
 // ── Current raid tier ─────────────────────────────────────────────────────────
 // Update this slug when a new tier releases.

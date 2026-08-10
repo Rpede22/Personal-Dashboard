@@ -721,11 +721,16 @@ export default function LoLHub(_props?: { hideHeader?: boolean }) {
                           const emblem = cdragonRankedEmblem(r.tier);
                           return (
                             <div key={r.queueType} className="rounded-2xl p-4 flex items-center gap-3" style={{ background: "var(--surface)", border: `1px solid ${color}55` }}>
+                              {/* Emblem renders at its natural size (~220 px)
+                                  and the rank card is already that tall from
+                                  the label / tier / LP / W-L text stack, so
+                                  the emblem fills the card vertically without
+                                  growing it. No transform → sharp rendering. */}
                               <img
                                 src={emblem}
                                 alt=""
-                                width={440}
-                                height={440}
+                                width={220}
+                                height={220}
                                 className="flex-shrink-0"
                                 style={{ objectFit: "contain" }}
                                 onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}

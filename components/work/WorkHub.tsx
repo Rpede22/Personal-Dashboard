@@ -30,13 +30,28 @@ function formatShortDate(iso: string): string {
   return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 }
 
+/** "1h 30m" — from a decimal-hour value. Whole hours drop the minute half
+ *  ("2h"), fractional-only shifts drop the hour half ("45m"). */
+function formatHoursMinutes(decimalHours: number): string {
+  const totalMin = Math.round(decimalHours * 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
 export default function WorkHub() {
   const [config, setConfig] = useState<WorkConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<Tab>("overview");
 
   const [addDate, setAddDate] = useState<string>(todayKey());
-  const [addHours, setAddHours] = useState<string>("");
+  // Split into hours + minutes so short shifts don't force a fiddly `0.75`
+  // decimal — combined into a fractional hour before persisting to keep the
+  // storage shape (Float) unchanged.
+  const [addHrs, setAddHrs] = useState<string>("");
+  const [addMins, setAddMins] = useState<string>("");
   const [addNote, setAddNote] = useState<string>("");
 
   const [editingPayday, setEditingPayday] = useState(false);
@@ -85,10 +100,14 @@ export default function WorkHub() {
   }
 
   async function addSession() {
-    const h = Number(addHours);
-    if (!addDate || !Number.isFinite(h) || h <= 0) return;
-    await post({ session: { date: addDate, hours: h, note: addNote || undefined } });
-    setAddHours(""); setAddNote(""); setAddDate(todayKey());
+    const hrs = addHrs === "" ? 0 : Number(addHrs);
+    const mins = addMins === "" ? 0 : Number(addMins);
+    if (!addDate || !Number.isFinite(hrs) || !Number.isFinite(mins)) return;
+    if (mins < 0 || mins >= 60) return;
+    const total = hrs + mins / 60;
+    if (total <= 0) return;
+    await post({ session: { date: addDate, hours: total, note: addNote || undefined } });
+    setAddHrs(""); setAddMins(""); setAddNote(""); setAddDate(todayKey());
   }
 
   async function deleteSession(realIdx: number) {
@@ -166,7 +185,7 @@ export default function WorkHub() {
               </button>
             </div>
             <div className="text-3xl font-bold" style={{ color: "var(--accent-cyan)" }}>
-              {termHours.toFixed(1)}<span className="text-lg font-semibold"> h</span>
+              {formatHoursMinutes(termHours)}
             </div>
 
             {editingPayday && (
@@ -212,7 +231,7 @@ export default function WorkHub() {
               <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Last pay-term</div>
               <div className="text-sm mb-1">{prevTermLabel}</div>
               <div className="text-2xl font-bold" style={{ color: "var(--text)" }}>
-                {prevTermHours.toFixed(1)}<span className="text-base font-semibold"> h</span>
+                {formatHoursMinutes(prevTermHours)}
               </div>
               <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>Reflected on your most recent payslip.</div>
             </div>
@@ -223,7 +242,7 @@ export default function WorkHub() {
               <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Next pay-term (already logged)</div>
               <div className="text-sm mb-1">{formatShortDate(dateKey(nextTermPreview.start))} → {formatShortDate(dateKey(nextTermPreview.end))}</div>
               <div className="text-xl font-bold" style={{ color: "var(--text-muted)" }}>
-                {nextTermPreviewHours.toFixed(1)}<span className="text-sm font-semibold"> h</span>
+                {formatHoursMinutes(nextTermPreviewHours)}
               </div>
             </div>
           )}
@@ -237,12 +256,22 @@ export default function WorkHub() {
                 className="text-sm px-2 py-1.5 rounded-md"
                 style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
               />
-              <input
-                type="number" step="0.25" min="0" max="24" placeholder="hrs"
-                value={addHours} onChange={(e) => setAddHours(e.target.value)}
-                className="text-sm w-20 px-2 py-1.5 rounded-md"
-                style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
-              />
+              <div className="flex items-center gap-1">
+                <input
+                  type="number" min="0" max="24" placeholder="h"
+                  value={addHrs} onChange={(e) => setAddHrs(e.target.value)}
+                  className="text-sm w-14 px-2 py-1.5 rounded-md"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+                />
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>h</span>
+                <input
+                  type="number" min="0" max="59" placeholder="m"
+                  value={addMins} onChange={(e) => setAddMins(e.target.value)}
+                  className="text-sm w-14 px-2 py-1.5 rounded-md"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+                />
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>m</span>
+              </div>
               <input
                 type="text" placeholder="note (optional)"
                 value={addNote} onChange={(e) => setAddNote(e.target.value)}
@@ -250,7 +279,7 @@ export default function WorkHub() {
                 style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
               />
               <button
-                onClick={addSession} disabled={saving || !addHours}
+                onClick={addSession} disabled={saving || (!addHrs && !addMins)}
                 className="text-sm px-3 py-1.5 rounded-md"
                 style={{ background: "var(--accent-cyan)22", color: "var(--accent-cyan)", border: "1px solid var(--accent-cyan)" }}
               >Add</button>
@@ -269,7 +298,7 @@ export default function WorkHub() {
                 {currentTermSessionsWithIdx.map(({ session, realIdx }) => (
                   <li key={realIdx} className="flex items-center gap-3 rounded-md px-2 py-1" style={{ background: "var(--surface-2)" }}>
                     <span className="tabular-nums" style={{ color: "var(--text-muted)" }}>{formatShortDate(session.date)}</span>
-                    <span className="tabular-nums font-semibold" style={{ color: "var(--accent-cyan)" }}>{session.hours.toFixed(1)}h</span>
+                    <span className="tabular-nums font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(session.hours)}</span>
                     {session.note && <span className="truncate" style={{ color: "var(--text-muted)" }}>· {session.note}</span>}
                     <button onClick={() => deleteSession(realIdx)} disabled={saving} className="ml-auto text-xs" style={{ color: "var(--accent-red)" }}>✕</button>
                   </li>
@@ -297,7 +326,7 @@ export default function WorkHub() {
         <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
           <div className="flex items-baseline justify-between mb-3">
             <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>All entries · {sessions.length}</div>
-            <div className="text-sm" style={{ color: "var(--text-muted)" }}>Total: <span className="font-semibold" style={{ color: "var(--accent-cyan)" }}>{totalAll.toFixed(1)}h</span></div>
+            <div className="text-sm" style={{ color: "var(--text-muted)" }}>Total: <span className="font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(totalAll)}</span></div>
           </div>
           {allSessionsWithIdx.length === 0 ? (
             <div className="text-sm" style={{ color: "var(--text-muted)" }}>Nothing logged yet — add sessions from the Overview tab.</div>
@@ -315,7 +344,7 @@ export default function WorkHub() {
                 {allSessionsWithIdx.map(({ session, realIdx }) => (
                   <tr key={realIdx} className="border-t" style={{ borderColor: "var(--border)" }}>
                     <td className="py-1.5">{formatShortDate(session.date)}</td>
-                    <td className="py-1.5 text-right tabular-nums font-semibold" style={{ color: "var(--accent-cyan)" }}>{session.hours.toFixed(1)}</td>
+                    <td className="py-1.5 text-right tabular-nums font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(session.hours)}</td>
                     <td className="py-1.5 pl-3" style={{ color: "var(--text-muted)" }}>{session.note ?? ""}</td>
                     <td className="py-1.5 text-right"><button onClick={() => deleteSession(realIdx)} className="text-xs" style={{ color: "var(--accent-red)" }}>✕</button></td>
                   </tr>

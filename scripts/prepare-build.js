@@ -14,6 +14,18 @@ const { execSync } = require("child_process");
 
 const root = path.join(__dirname, "..");
 
+// 0. Defensive cleanup — remove any `dist/` that leaked into standalone.
+//    The electron-builder extraResources filter also excludes this, but if
+//    an older build left it behind, the recursive tree gets copied into the
+//    fresh app bundle and codesign fails with "bundle format unrecognized"
+//    once the path depth crosses macOS's limits. Wipe it every time so a
+//    single bad build can't poison future ones.
+const standaloneDistDir = path.join(root, ".next", "standalone", "dist");
+if (fs.existsSync(standaloneDistDir)) {
+  fs.rmSync(standaloneDistDir, { recursive: true, force: true });
+  console.log("[prepare-build] Removed stale .next/standalone/dist");
+}
+
 // 1. Copy static assets into standalone so the server can serve them
 function copyDir(src, dest) {
   if (!fs.existsSync(src)) {

@@ -284,20 +284,24 @@ function buildSessions(
   const easyDesc = "Truly easy — nasal-breathing pace. This is where most of your fitness is actually built.";
 
   // ── Starter: 3 easy runs, no quality, generous rest ─────────────────────────
-  //    Overrides runDays — building the base is the priority.
+  //    Overrides runDays — building the base is the priority. Long ≥ 1.4 × easy
+  //    (matches the same ratio the regular weeks enforce).
   if (isStarter) {
-    const easyDaysArr: DayName[] = ["Tue", "Thu", "Sun"];
-    const easyEach = round05(targetKm / easyDaysArr.length);
+    // total = 2·easy + 1.4·easy = 3.4·easy → easy = target / 3.4
+    const easyStarter = round05(targetKm / 3.4);
+    const longStarter = round05(easyStarter * 1.4);
+    const layout: Array<{ day: DayName; type: SessionType; km: number }> = [
+      { day: "Tue", type: "easy", km: easyStarter },
+      { day: "Thu", type: "easy", km: easyStarter },
+      { day: "Sun", type: "long", km: longStarter },
+    ];
     return DAYS.map((d): PlannedSession => {
-      if (easyDaysArr.includes(d)) {
-        return {
-          type: "easy",
-          distanceKm: easyEach,
-          description: "Easy conversational pace. Build the aerobic base before adding harder work.",
-          day: d,
-        };
+      const slot = layout.find((s) => s.day === d);
+      if (!slot) return rest(d);
+      if (slot.type === "long") {
+        return { type: "long", distanceKm: slot.km, day: d, description: "Easy conversational pace. Your longest run of the week — this is where distance progress comes from." };
       }
-      return rest(d);
+      return { type: "easy", distanceKm: slot.km, day: d, description: "Easy conversational pace. Build the aerobic base before adding harder work." };
     });
   }
 
@@ -307,39 +311,61 @@ function buildSessions(
     description: note ?? "Easy conversational pace. Where most of your distance progress comes from.",
     day,
   });
-  const speedSession = (km: number, day: DayName = "Tue"): PlannedSession => ({
+  // Speed = fixed 3 km warmup + 10 × 400m intervals ≈ 4 km + small cooldown =
+  // ~7 km total. Same shape every week regardless of target volume — intervals
+  // are a stimulus, not a mileage bucket, so scaling them with the target
+  // makes no physiological sense.
+  const SPEED_KM = 7;
+  const SPEED_DESC = "3 km easy warm-up, then 10 × 400 m fast with 200 m jog recovery. Short cool-down to close it out (~7 km total).";
+  const speedSession = (day: DayName = "Tue"): PlannedSession => ({
     type: "speed",
-    distanceKm: km,
-    description: "Warm up, then intervals — e.g. 6–8 × 400 m fast with equal jog recovery, or 4 × 800 m at 5K pace. Total distance including warm-up/cool-down.",
+    distanceKm: SPEED_KM,
+    description: SPEED_DESC,
     day,
   });
   const tempoSession = (km: number, day: DayName): PlannedSession => ({
     type: "tempo",
     distanceKm: km,
-    description: '20–30 min at "comfortably hard" pace. You should be able to speak short sentences, not full ones.',
+    description: '20–30 min at "comfortably hard" pace. You should be able to speak short sentences, not full ones. Same total distance as your easy runs — same volume, harder effort.',
     day,
   });
   const easyOn = (day: DayName, km: number, desc: string = easyDesc): PlannedSession => ({
     type: "easy", distanceKm: km, description: desc, day,
   });
 
+  // ── Distance rules (uniform across regular + cutback weeks) ─────────────────
+  //   • long  ≥ 1.4 × easy  (long is always the biggest run of the week)
+  //   • tempo = easy         (same volume, higher intensity)
+  //   • speed = SPEED_KM     (fixed intervals, independent of target)
+  //
+  // Solving for easy from the target:
+  //   total = long + tempo + speed + N·easy
+  //         = 1.4·easy + easy + speed + N·easy
+  //         = (2.4 + N)·easy + speed
+  //   → easy = (target − speed) / (2.4 + N)
+  //
+  // The `hasSpeed` flag drops the speed line when the week doesn't include it
+  // (cutback + 3/4-run weeks). A minimum easy of 3 km keeps very short target
+  // weeks from producing 0-km runs.
+  function easySize(target: number, easyCount: number, hasSpeed: boolean): number {
+    const budget = Math.max(0, target - (hasSpeed ? SPEED_KM : 0));
+    return Math.max(3, round05(budget / (2.4 + easyCount)));
+  }
+
   // ── Cutback: one quality (tempo) session + easy + long, extra rest ──────────
   if (isCutback) {
-    const longKm  = round05(targetKm * 0.30);
-    const tempoKm = round05(targetKm * 0.20);
-    const remaining = Math.max(0, targetKm - longKm - tempoKm);
-    // Cutback keeps the same runDays count minus the speed slot (already dropped).
     const cutbackEasy = Math.max(1, runDays - 2); // 1 tempo + 1 long + N easy
-    const easyEach = round05(remaining / cutbackEasy);
+    const easyKm = easySize(targetKm, cutbackEasy, false);
+    const longKm = round05(easyKm * 1.4);
+    const tempoKm = easyKm;
 
-    // Standard cutback layout for 5-run week; scale easy count for others
     const sessions: PlannedSession[] = [
-      easyOn("Mon", easyEach),
+      easyOn("Mon", easyKm),
       rest("Tue"),
       tempoSession(tempoKm, "Wed"),
       rest("Thu"),
-      easyOn("Fri", easyEach),
-      cutbackEasy >= 3 ? easyOn("Sat", Math.max(0, remaining - easyEach * 2), "Truly easy. Optional if legs feel heavy.") : rest("Sat"),
+      easyOn("Fri", easyKm),
+      cutbackEasy >= 3 ? easyOn("Sat", easyKm, "Truly easy. Optional if legs feel heavy.") : rest("Sat"),
       longSession(longKm, "Sun", "Easy conversational pace. Shorter than usual — recovery focus."),
     ];
     return sessions;
@@ -348,47 +374,43 @@ function buildSessions(
   // ── Regular week — layout depends on runDays ────────────────────────────────
   if (runDays === 3) {
     // 3 easy runs: Tue, Thu, Sun (long) — beginner-friendly, no quality yet
-    const longKm = round05(targetKm * 0.35);
-    const remaining = Math.max(0, targetKm - longKm);
-    const easyEach = round05(remaining / 2);
+    const easyKm = easySize(targetKm, 2, false);
+    const longKm = round05(easyKm * 1.4);
     return [
       rest("Mon"),
-      easyOn("Tue", easyEach, "Easy conversational pace. Building your aerobic base."),
+      easyOn("Tue", easyKm, "Easy conversational pace. Building your aerobic base."),
       rest("Wed"),
-      easyOn("Thu", easyEach, "Easy conversational pace. Building your aerobic base."),
+      easyOn("Thu", easyKm, "Easy conversational pace. Building your aerobic base."),
       rest("Fri"),
       rest("Sat"),
       longSession(longKm, "Sun"),
     ];
   }
   if (runDays === 4) {
-    // 4 runs: one quality (tempo), 2 easy, 1 long — build phase before adding intervals
-    const longKm  = round05(targetKm * 0.32);
-    const tempoKm = round05(targetKm * 0.18);
-    const remaining = Math.max(0, targetKm - longKm - tempoKm);
-    const easyEach = round05(remaining / 2);
+    // 4 runs: one quality (tempo), 2 easy, 1 long — still no speed yet
+    const easyKm = easySize(targetKm, 2, false);
+    const longKm = round05(easyKm * 1.4);
+    const tempoKm = easyKm;
     return [
-      easyOn("Mon", easyEach),
+      easyOn("Mon", easyKm),
       rest("Tue"),
       tempoSession(tempoKm, "Wed"),
       rest("Thu"),
-      easyOn("Fri", easyEach),
+      easyOn("Fri", easyKm),
       rest("Sat"),
       longSession(longKm, "Sun"),
     ];
   }
 
-  const longKm  = round05(targetKm * 0.30);
-  const speedKm = round05(targetKm * 0.10);
-  const tempoKm = round05(targetKm * 0.15);
-  const remaining = Math.max(0, targetKm - longKm - speedKm - tempoKm);
-
   if (runDays === 5) {
-    const easyEach = round05(remaining / 2);
+    // 1 speed + 1 tempo + 2 easy + 1 long
+    const easyKm = easySize(targetKm, 2, true);
+    const longKm = round05(easyKm * 1.4);
+    const tempoKm = easyKm;
     return [
-      easyOn("Mon", easyEach),
-      speedSession(speedKm, "Tue"),
-      easyOn("Wed", easyEach),
+      easyOn("Mon", easyKm),
+      speedSession("Tue"),
+      easyOn("Wed", easyKm),
       tempoSession(tempoKm, "Thu"),
       rest("Fri"),
       rest("Sat"),
@@ -396,17 +418,21 @@ function buildSessions(
     ];
   }
 
-  // runDays === 6
-  const easyEach = round05(remaining / 3);
-  return [
-    easyOn("Mon", easyEach),
-    speedSession(speedKm, "Tue"),
-    easyOn("Wed", easyEach),
-    tempoSession(tempoKm, "Thu"),
-    easyOn("Fri", Math.max(0, remaining - easyEach * 2)),
-    rest("Sat"),
-    longSession(longKm, "Sun"),
-  ];
+  // runDays === 6 — 1 speed + 1 tempo + 3 easy + 1 long
+  {
+    const easyKm = easySize(targetKm, 3, true);
+    const longKm = round05(easyKm * 1.4);
+    const tempoKm = easyKm;
+    return [
+      easyOn("Mon", easyKm),
+      speedSession("Tue"),
+      easyOn("Wed", easyKm),
+      tempoSession(tempoKm, "Thu"),
+      easyOn("Fri", easyKm),
+      rest("Sat"),
+      longSession(longKm, "Sun"),
+    ];
+  }
 }
 
 /** Human-readable pace like "5:12/km" from seconds-per-km, or "—" if null. */
