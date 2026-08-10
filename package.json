@@ -33,7 +33,9 @@
         "to": "standalone",
         "filter": [
           "**/*",
-          "!node_modules/**"
+          "!node_modules/**",
+          "!dist/**",
+          "!.next/cache/**"
         ]
       },
       {
