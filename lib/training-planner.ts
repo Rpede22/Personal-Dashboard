@@ -49,6 +49,7 @@ export interface TrainingPlan {
   isStarter: boolean;      // true when we have no baseline to grow from
   runDaysPerWeek: RunDaysPerWeek; // how many actual run days (rest days fill the rest)
   suggestedTargetKm: number;      // auto-computed target BEFORE any override (for placeholder UI)
+  suggestedComposition: PlanComposition; // template's session-type counts (for placeholder UI)
   sessions: PlannedSession[];
   warnings: string[];
 }
@@ -144,6 +145,18 @@ const BASELINE_WEEKS = 3;
 /** How many days per week the user actually wants to run. 3–6 supported. */
 export type RunDaysPerWeek = 3 | 4 | 5 | 6;
 
+/**
+ * Explicit session counts for the week, overriding the template. Total must be
+ * 0–7 (rest days fill the remainder). When provided, this wins over
+ * `runDaysPerWeek` and the cutback/starter templates.
+ */
+export interface PlanComposition {
+  easy: number;
+  tempo: number;
+  speed: number;
+  long: number;
+}
+
 export interface PlanOptions {
   /** Override the auto-suggested weekly volume (km). Undefined = use the algorithm. */
   targetKmOverride?: number;
@@ -152,6 +165,12 @@ export interface PlanOptions {
    * volume: starter → 3, regular ≤ 24 km → 4, ≤ 40 km → 5, > 40 km → 6.
    */
   runDaysPerWeek?: RunDaysPerWeek;
+  /**
+   * Explicit session-type counts. Overrides `runDaysPerWeek` + template entirely.
+   * Distances are solved from `targetKm` using the same easy/tempo/long/speed
+   * ratios as the template weeks.
+   */
+  composition?: PlanComposition;
 }
 
 /**
@@ -230,8 +249,13 @@ export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = 
     }
   }
 
-  // 3. Build the session breakdown from the target volume
-  const sessions = buildSessions(targetKm, isCutback, isStarter, runDays);
+  // 3. Build the session breakdown — either from the user's explicit composition
+  //    or from the framework template.
+  const templateSessions = buildSessions(targetKm, isCutback, isStarter, runDays);
+  const suggestedComposition = compositionOfSessions(templateSessions);
+  const sessions = opts.composition
+    ? buildSessionsFromComposition(targetKm, opts.composition)
+    : templateSessions;
 
   return {
     targetKm,
@@ -244,9 +268,20 @@ export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = 
     isStarter,
     runDaysPerWeek: runDays,
     suggestedTargetKm,
+    suggestedComposition,
     sessions,
     warnings,
   };
+}
+
+/** Count each session type in a built week. Used to seed the composition UI. */
+function compositionOfSessions(sessions: PlannedSession[]): PlanComposition {
+  const c: PlanComposition = { easy: 0, tempo: 0, speed: 0, long: 0 };
+  for (const s of sessions) {
+    if (s.type === "rest") continue;
+    c[s.type] += 1;
+  }
+  return c;
 }
 
 /** Round to nearest 0.5 km for realistic training numbers. */
@@ -433,6 +468,108 @@ function buildSessions(
       longSession(longKm, "Sun"),
     ];
   }
+}
+
+/**
+ * Build a week from an explicit session-count composition. Distances follow
+ * the same base-unit math as the framework templates:
+ *   E = (target − speed·SPEED_KM) / (long·1.4 + tempo + easy)
+ *   long = 1.4·E · tempo = E · easy = E · speed = SPEED_KM (fixed)
+ *
+ * Sessions are laid out on Mon–Sun by priority (long → Sun/Sat, speed →
+ * Tue/Fri, tempo → Thu/Wed, easy → fills remaining) with a light no-two-hard-
+ * adjacent pass. Extra sessions beyond 7 are dropped. A rest fills every
+ * empty day so the returned array is always exactly 7 entries.
+ */
+export function buildSessionsFromComposition(
+  targetKm: number,
+  comp: PlanComposition,
+): PlannedSession[] {
+  const REST_DESC = "Full rest day — walk, mobility, sleep. Recovery is when adaptation happens.";
+  const rest = (day: DayName): PlannedSession => ({
+    type: "rest", distanceKm: 0, description: REST_DESC, day,
+  });
+
+  const clamp = (n: number) => Math.max(0, Math.floor(n));
+  const c: PlanComposition = {
+    easy:  clamp(comp.easy),
+    tempo: clamp(comp.tempo),
+    speed: clamp(comp.speed),
+    long:  clamp(comp.long),
+  };
+  const total = c.easy + c.tempo + c.speed + c.long;
+  if (total === 0) return DAYS.map(rest);
+
+  const SPEED_KM = 7;
+  const speedTotal = c.speed * SPEED_KM;
+  const unitDenom = c.long * 1.4 + c.tempo + c.easy;
+  const budget = Math.max(0, targetKm - speedTotal);
+  const E = unitDenom > 0 ? Math.max(3, round05(budget / unitDenom)) : 0;
+  const longKm  = round05(E * 1.4);
+  const tempoKm = E;
+  const easyKm  = E;
+
+  // Priority day slots per type. The order encodes "put quality where it has
+  // the most rest around it" — long anchors the weekend, speed opens the week,
+  // tempo lands mid-late, easy fills the gaps.
+  const PRIORITY: Record<Exclude<SessionType, "rest">, DayName[]> = {
+    long:  ["Sun", "Sat", "Wed"],
+    speed: ["Tue", "Fri", "Wed", "Thu"],
+    tempo: ["Thu", "Wed", "Fri", "Sat", "Tue"],
+    easy:  ["Mon", "Wed", "Fri", "Sat", "Thu", "Tue", "Sun"],
+  };
+
+  const placement = new Map<DayName, SessionType>();
+  function place(type: Exclude<SessionType, "rest">, count: number) {
+    let remaining = count;
+    for (const day of PRIORITY[type]) {
+      if (remaining === 0) break;
+      if (placement.has(day)) continue;
+      placement.set(day, type);
+      remaining -= 1;
+    }
+    // If preferred slots ran out, fall back to any empty day
+    if (remaining > 0) {
+      for (const day of DAYS) {
+        if (remaining === 0) break;
+        if (placement.has(day)) continue;
+        placement.set(day, type);
+        remaining -= 1;
+      }
+    }
+  }
+  // Order matters — hardest first so long/speed/tempo grab their preferred slots
+  place("long",  c.long);
+  place("speed", c.speed);
+  place("tempo", c.tempo);
+  place("easy",  c.easy);
+
+  // Light no-two-hard-adjacent pass: if a hard day sits next to another hard
+  // day AND there's an easy elsewhere to swap with, swap them.
+  const isHard = (t: SessionType | undefined) => t === "speed" || t === "tempo";
+  for (let i = 0; i < DAYS.length - 1; i++) {
+    const a = placement.get(DAYS[i]);
+    const b = placement.get(DAYS[i + 1]);
+    if (isHard(a) && isHard(b)) {
+      const swapDay = DAYS.find((d) => placement.get(d) === "easy" && !isHard(placement.get(DAYS[DAYS.indexOf(d) - 1])) && !isHard(placement.get(DAYS[DAYS.indexOf(d) + 1])));
+      if (swapDay) {
+        placement.set(swapDay, b!);
+        placement.set(DAYS[i + 1], "easy");
+      }
+    }
+  }
+
+  return DAYS.map((day): PlannedSession => {
+    const type = placement.get(day);
+    if (!type) return rest(day);
+    switch (type) {
+      case "long":  return { type: "long",  distanceKm: longKm,   day, description: "Easy conversational pace. Your longest run of the week — where distance progress comes from." };
+      case "speed": return { type: "speed", distanceKm: SPEED_KM, day, description: "3 km easy warm-up, then 10 × 400 m fast with 200 m jog recovery. Short cool-down (~7 km total)." };
+      case "tempo": return { type: "tempo", distanceKm: tempoKm,  day, description: '20–30 min at "comfortably hard" pace. Same total distance as easy runs — same volume, harder effort.' };
+      case "easy":  return { type: "easy",  distanceKm: easyKm,   day, description: "Truly easy — nasal-breathing pace. This is where most of your fitness is actually built." };
+      case "rest":  return rest(day);
+    }
+  });
 }
 
 /** Human-readable pace like "5:12/km" from seconds-per-km, or "—" if null. */

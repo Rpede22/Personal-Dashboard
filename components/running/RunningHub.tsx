@@ -12,6 +12,7 @@ import {
   type SessionType,
   type DayName,
   type RunDaysPerWeek,
+  type PlanComposition,
 } from "@/lib/training-planner";
 
 const RunDetailModal = dynamic(() => import("./RunDetailModal"), { ssr: false });
@@ -124,6 +125,10 @@ export default function RunningHub() {
   // Training tab manual overrides — empty means "use auto-suggested"
   const [targetKmInput, setTargetKmInput] = useState<string>("");
   const [runDaysInput, setRunDaysInput] = useState<RunDaysPerWeek | null>(null);
+  // Explicit session-type counts. `null` = follow the template (runDaysInput or
+  // auto). Any non-null value overrides runDaysInput entirely and hands the
+  // week layout to buildSessionsFromComposition.
+  const [compositionInput, setCompositionInput] = useState<PlanComposition | null>(null);
 
   // Run detail modal
   const [selectedRun, setSelectedRun] = useState<RunLog | null>(null);
@@ -1324,7 +1329,13 @@ export default function RunningHub() {
         const plan = generateNextWeekPlan(weeklyStats, {
           targetKmOverride: parsedTarget !== undefined && !isNaN(parsedTarget) ? parsedTarget : undefined,
           runDaysPerWeek: runDaysInput ?? undefined,
+          composition: compositionInput ?? undefined,
         });
+        // Effective composition shown in the counters: user's override if set,
+        // otherwise the template's own composition (so the counters read as
+        // the current plan's shape by default).
+        const effectiveComp: PlanComposition = compositionInput ?? plan.suggestedComposition;
+        const compTotal = effectiveComp.easy + effectiveComp.tempo + effectiveComp.speed + effectiveComp.long;
         const lastCompleted = weeklyStats[weeklyStats.length - 2];
         const currentWeek   = weeklyStats[weeklyStats.length - 1];
         const maxWeekly = Math.max(...weeklyStats.map((w) => w.totalKm), plan.targetKm, 1);
@@ -1643,17 +1654,18 @@ export default function RunningHub() {
 
               <div>
                 <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
-                  Run days per week
+                  Run days per week {compositionInput && <span style={{ color: "var(--text-muted)" }}>(overridden by composition)</span>}
                 </label>
                 <div className="flex gap-1">
                   {([3, 4, 5, 6] as const).map((n) => {
-                    const active = (runDaysInput ?? plan.runDaysPerWeek) === n;
+                    const active = compositionInput === null && (runDaysInput ?? plan.runDaysPerWeek) === n;
                     const isAutoValue = runDaysInput === null && plan.runDaysPerWeek === n;
                     return (
                       <button
                         key={n}
-                        onClick={() => setRunDaysInput(n)}
-                        className="px-3 py-1.5 rounded-lg text-sm font-medium"
+                        onClick={() => { setRunDaysInput(n); setCompositionInput(null); }}
+                        disabled={compositionInput !== null}
+                        className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
                         title={isAutoValue ? "Auto (based on weekly volume)" : undefined}
                         style={{
                           background: active ? "var(--accent-green)" : "var(--surface-2)",
@@ -1679,6 +1691,77 @@ export default function RunningHub() {
 
               <p className="text-xs flex-1 min-w-[15rem]" style={{ color: "var(--text-muted)" }}>
                 Tip: start at <strong>3–4</strong> days/week to build the aerobic base, then bump to <strong>5–6</strong> once you feel steady. Auto-picks 3 (starter), 4 (≤24 km), 5 (≤40 km), 6 (&gt;40 km).
+              </p>
+            </div>
+
+            {/* ── Custom composition — pick session counts per type ── */}
+            <div
+              className="rounded-2xl p-4"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+            >
+              <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
+                <label className="block text-xs" style={{ color: "var(--text-muted)" }}>
+                  Custom composition — pick how many of each type this week (up to 7 total)
+                </label>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs tabular-nums" style={{ color: compTotal > 7 ? "var(--accent-red)" : "var(--text-muted)" }}>
+                    {compTotal} / 7 runs
+                  </span>
+                  {compositionInput !== null && (
+                    <button
+                      onClick={() => setCompositionInput(null)}
+                      className="text-xs underline"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      reset to template
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {(["easy", "tempo", "speed", "long"] as const).map((t) => {
+                  const meta = {
+                    easy:  { color: "var(--accent-green)",  label: "Easy",  icon: "🌱" },
+                    tempo: { color: "var(--accent-orange)", label: "Tempo", icon: "🔥" },
+                    speed: { color: "var(--accent-red)",    label: "Speed", icon: "⚡" },
+                    long:  { color: "var(--accent-blue)",   label: "Long",  icon: "🏃" },
+                  }[t];
+                  const value = effectiveComp[t];
+                  const setValue = (next: number) => {
+                    const clamped = Math.max(0, Math.min(7, next));
+                    setCompositionInput({ ...effectiveComp, [t]: clamped });
+                  };
+                  return (
+                    <div
+                      key={t}
+                      className="rounded-xl p-3 flex flex-col gap-2"
+                      style={{ background: "var(--surface-2)", border: `1px solid ${meta.color}44` }}
+                    >
+                      <div className="flex items-center gap-2 text-xs" style={{ color: meta.color }}>
+                        <span>{meta.icon}</span>
+                        <span className="font-semibold uppercase tracking-wide">{meta.label}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          onClick={() => setValue(value - 1)}
+                          className="w-7 h-7 rounded-lg font-bold"
+                          style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}
+                          disabled={value <= 0}
+                        >−</button>
+                        <span className="text-xl font-bold tabular-nums" style={{ color: meta.color }}>{value}</span>
+                        <button
+                          onClick={() => setValue(value + 1)}
+                          className="w-7 h-7 rounded-lg font-bold"
+                          style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}
+                          disabled={compTotal >= 7}
+                        >+</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] mt-2" style={{ color: "var(--text-muted)" }}>
+                Distances are solved from the weekly target: long = 1.4·easy, tempo = easy, speed = fixed 7 km (3 km warm-up + 10 × 400 m). Empty days fill with rest.
               </p>
             </div>
 
