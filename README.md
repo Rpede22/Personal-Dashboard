@@ -15,7 +15,8 @@ The home screen is a 2-column grid of widgets, each linking to a full hub page:
 | 🧙 **World of Warcraft** | Purple | Per-character ilvl, RIO score, weekly M+/raid/custom task progress |
 | 🏃 **Running** | Green | This week's km, last 30-day km, recent runs, 7-day plan, days to race, race distance |
 | 📅 **Calendar** | Pink | Upcoming events pulled live from iCloud CalDAV |
-| 💼 **Work Hours** | Cyan | Two links side by side: register daily hours at profil.cand.dk and view payslips at intect.app |
+| 💼 **Work Hours** | Cyan | Manual session log, current pay-term totals in `Xh Ym`, estimated net kr after AM-bidrag (8%) + A-skat (38%), payday countdown |
+| 📰 **News** | Orange | Latest 5 TV2 headlines with section chip and relative timestamps; click opens the article in a new tab |
 
 ---
 
@@ -229,12 +230,21 @@ Assignments are stored in SQLite with an optional due time (`HH:MM` local time).
 
 The Work widget is a small summary that links into a full `/work` hub.
 
-- **Widget** — current pay-term total (bold), days-to-payday, `Last pay-term Xh Ym` line (visible for a few days after payday so you can still eyeball the payslip total), and the last few logged sessions. All totals show as `Xh Ym` — never a raw decimal like `1.5h`. No editing from the widget.
+- **Widget** — current pay-term total (bold), days-to-payday, an `≈ N kr net` tint under the hours whenever any session in the term carries a rate, `Last pay-term Xh Ym ≈ N kr` line (visible for a few days after payday so you can still eyeball the payslip total), and the last few logged sessions. All totals show as `Xh Ym` — never a raw decimal like `1.5h`. No editing from the widget.
 - **Hub** — two tabs:
-  - **Overview** — current pay-term (range + total), last pay-term summary, optional "next pay-term (already logged)" line for sessions logged after payday, a session log form (date + **separate h / m inputs** + optional note — no more fiddly decimal hours; 1h 30m = "1" + "30"), and the sessions-this-term list. **Every hour value** on this page (pay-term totals, session rows, entries running total) reads as `Xh Ym` (`45m`, `2h`, `1h 30m`) — never a raw decimal. `Register hours →` / `View payslips →` external links live at the bottom. Payday editor supports **off / day-of-month / last-weekday**.
-  - **Entries** — all-time table + running total.
+  - **Overview** — current pay-term (range + total), last pay-term summary, optional "next pay-term (already logged)" line for sessions logged after payday, a session log form (date + **separate h / m inputs** + a **kr/h rate** field that defaults to the last-used rate + optional note — no more fiddly decimal hours; 1h 30m = "1" + "30"), and the sessions-this-term list. When any session in the current or last pay-term carries a rate, a **compact earnings breakdown** appears under the hours total: `Gross · AM-bidrag (−8%) · A-skat (−38%) · Net`. Same on the last-pay-term card. Per-session rows show `@ rate kr/h · gross`. **Every hour value** on this page reads as `Xh Ym` (`45m`, `2h`, `1h 30m`) — never a raw decimal; every kr amount reads in Danish locale (`1.234 kr`). Payday editor supports **off / day-of-month / last-weekday**.
+  - **Entries** — all-time table with Date · Hours · Rate · Gross · Note columns, plus running totals for both hours and gross.
+- **Rate history preserved** — the hourly rate is stamped into each session on write. Getting a raise doesn't rewrite past pay: old sessions stay at the old rate; new ones use the new one.
 - **Pay cycle** — the default payday is the **23rd**, matching the Cand cycle (term = the 24th → the 23rd of the following month). Change it at any time from the payday editor.
+- **Danish tax model** — fixed-percentage: 8% AM-bidrag off the top, then 38% A-skat on what remains. Not a full tax calc (no fradrag, no personal deductions) — but honest enough for a paycheck preview.
 - Everything persists to `.work-config.json` via `GET/POST /api/work`.
+
+---
+
+## News (TV2)
+
+- **Widget** — latest 5 headlines from `nyheder.tv2.dk`: section chip · headline (2-line clamp) · relative timestamp (`today` / `yesterday` / `Nd ago` / short date after a week). Clicking opens the article in a new tab. Auto-refresh every 15 min.
+- **Hub** — full list of the last ~50 headlines with a section filter row (`All · Business · Politik · Udland …`). TV2 doesn't publish a public RSS feed, so the route scrapes the front page HTML for anchors matching `/(<section>/)?YYYY-MM-DD-<slug>`. Headlines get their section prefix stripped and HTML entities decoded. Cached 15 min server-side to be polite to their edge.
 
 ---
 

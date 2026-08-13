@@ -10,10 +10,11 @@ import GamesWidget from "@/components/dashboard/GamesWidget";
 import RunningWidget from "@/components/dashboard/RunningWidget";
 import WorkhubWidget from "@/components/dashboard/WorkhubWidget";
 import CalendarWidget from "@/components/dashboard/CalendarWidget";
+import NewsWidget from "@/components/dashboard/NewsWidget";
 
-type Slug = "sports" | "school" | "games" | "running" | "calendar" | "workhub";
+type Slug = "sports" | "school" | "games" | "running" | "calendar" | "workhub" | "news";
 
-const DEFAULT_ORDER: Slug[] = ["sports", "school", "games", "running", "calendar", "workhub"];
+const DEFAULT_ORDER: Slug[] = ["sports", "school", "games", "running", "calendar", "workhub", "news"];
 const ORDER_KEY = "dashboard.widgetOrder";
 const ENABLED_KEY = "dashboard.widgetEnabled";
 
@@ -34,6 +35,7 @@ const WIDGETS: Record<Slug, Entry> = {
   running: { label: "Running", href: "/running", node: <RunningWidget />, defaultRefreshMin: 0 },
   calendar: { label: "Calendar", href: "/calendar", node: <CalendarWidget />, size: "wide", defaultRefreshMin: 60 },
   workhub: { label: "Workhub", href: "/work", node: <WorkhubWidget />, defaultRefreshMin: 0 },
+  news:    { label: "News",    href: "/news", node: <NewsWidget />,    defaultRefreshMin: 15 },
 };
 
 function loadOrder(): Slug[] {
@@ -58,7 +60,13 @@ function loadEnabled(): Set<Slug> {
     if (!raw) return new Set(DEFAULT_ORDER);
     const parsed = JSON.parse(raw) as Slug[];
     const known = new Set(DEFAULT_ORDER);
-    return new Set(parsed.filter((s) => known.has(s)));
+    // Newly-added widgets that don't appear in the stored list should be
+    // enabled by default — otherwise `loadEnabled()` silently hides any
+    // widget added after the first time this dashboard was opened.
+    const storedKnown = parsed.filter((s) => known.has(s));
+    const seen = new Set(storedKnown);
+    for (const s of DEFAULT_ORDER) if (!seen.has(s)) storedKnown.push(s);
+    return new Set(storedKnown);
   } catch {
     return new Set(DEFAULT_ORDER);
   }

@@ -111,7 +111,18 @@ function toCopenhagenDate(dateStr: string, timeStr: string): string {
   });
 }
 
-type Tab = "standings" | "schedule" | "playoffs";
+type Tab = "standings" | "schedule" | "top-scorers" | "playoffs";
+
+interface TopScorer {
+  playerId: number | string;
+  name: string;
+  team: string;
+  position?: string;
+  gamesPlayed: number;
+  goals: number;
+  assists: number;
+  points: number;
+}
 type PlayoffMode = "projected" | "live";
 
 // Shape of the live playoffs response from /api/sports/playoffs.
@@ -368,6 +379,8 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[] | "loading" | "error">>({});
   const [statsMap, setStatsMap] = useState<Record<string, MatchStats | "loading" | "error">>({});
+  const [topScorers, setTopScorers] = useState<TopScorer[] | null>(null);
+  const [topScorersLoading, setTopScorersLoading] = useState(false);
 
   async function loadData() {
     try {
@@ -382,6 +395,17 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
     const interval = setInterval(loadData, 5 * 60 * 1000); // refresh every 5 minutes
     return () => clearInterval(interval);
   }, [teamSlug]);
+
+  // Top scorers — lazy-loaded when the user opens that tab.
+  useEffect(() => {
+    if (tab !== "top-scorers" || topScorers !== null || topScorersLoading) return;
+    setTopScorersLoading(true);
+    fetch(`/api/sports/top-scorers?team=${teamSlug}&limit=10`)
+      .then((r) => r.json())
+      .then((d: { leaders?: TopScorer[] }) => setTopScorers(d.leaders ?? []))
+      .catch(() => setTopScorers([]))
+      .finally(() => setTopScorersLoading(false));
+  }, [tab, teamSlug, topScorers, topScorersLoading]);
 
   // Live playoff bracket — lazy-loaded when the user opens the Live sub-tab.
   useEffect(() => {
@@ -445,7 +469,9 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
     return buildBracket(top8);
   }, [data, showPlayoffs]);
 
-  const tabs: Tab[] = showPlayoffs ? ["standings", "schedule", "playoffs"] : ["standings", "schedule"];
+  const tabs: Tab[] = showPlayoffs
+    ? ["standings", "schedule", "top-scorers", "playoffs"]
+    : ["standings", "schedule", "top-scorers"];
 
   // Prefer Oprykningsspil rank when it exists (matches front-page logic)
   const promoSubTable = data?.subTables?.find(
@@ -506,14 +532,14 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
           <button
             key={t}
             onClick={() => setTab(t)}
-            className="px-4 py-2 rounded-xl text-sm font-medium capitalize transition-all"
+            className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
             style={{
               background: tab === t ? accent : "var(--surface)",
               color: tab === t ? "#fff" : "var(--text-muted)",
               border: `1px solid ${tab === t ? accent : "var(--border)"}`,
             }}
           >
-            {t}
+            {t === "top-scorers" ? "Top scorers" : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
@@ -560,6 +586,65 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                 colSpan={colSpan}
               />
             ))}
+        </div>
+
+      ) : tab === "top-scorers" ? (
+
+        /* ── TOP SCORERS ── */
+        <div className="rounded-2xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div className="flex items-baseline justify-between px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+            <h3 className="text-lg font-semibold" style={{ color: accent }}>
+              Top 10 scorers — {cfg?.leagueName}
+            </h3>
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {isHockey ? "Sorted by points (G + A)" : "Sorted by goals"}
+            </span>
+          </div>
+          {topScorersLoading && topScorers === null ? (
+            <div className="p-8 text-center" style={{ color: "var(--text-muted)" }}>Loading scoring leaders…</div>
+          ) : !topScorers || topScorers.length === 0 ? (
+            <div className="p-8 text-center" style={{ color: "var(--text-muted)" }}>
+              No data available right now — league may be between seasons.
+            </div>
+          ) : (
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
+                  <th className="text-left px-3 py-2 font-medium">#</th>
+                  <th className="text-left px-3 py-2 font-medium">Player</th>
+                  <th className="text-left px-3 py-2 font-medium">Team</th>
+                  {isHockey && <th className="text-left px-3 py-2 font-medium">Pos</th>}
+                  <th className="text-right px-3 py-2 font-medium">GP</th>
+                  <th className="text-right px-3 py-2 font-medium">G</th>
+                  <th className="text-right px-3 py-2 font-medium">A</th>
+                  {isHockey && <th className="text-right px-3 py-2 font-medium">P</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {topScorers.map((p, i) => {
+                  const isMyTeam = p.team.toLowerCase().includes(keyword.toLowerCase());
+                  return (
+                    <tr
+                      key={String(p.playerId)}
+                      style={{
+                        background: isMyTeam ? `${accent}11` : "transparent",
+                        borderTop: "1px solid var(--border)",
+                      }}
+                    >
+                      <td className="px-3 py-2 font-semibold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
+                      <td className="px-3 py-2 font-semibold">{p.name}</td>
+                      <td className="px-3 py-2" style={{ color: isMyTeam ? accent : "var(--text-muted)" }}>{p.team}</td>
+                      {isHockey && <td className="px-3 py-2" style={{ color: "var(--text-muted)" }}>{p.position ?? ""}</td>}
+                      <td className="px-3 py-2 text-right" style={{ color: "var(--text-muted)" }}>{p.gamesPlayed}</td>
+                      <td className="px-3 py-2 text-right">{p.goals}</td>
+                      <td className="px-3 py-2 text-right">{p.assists}</td>
+                      {isHockey && <td className="px-3 py-2 text-right font-bold" style={{ color: accent }}>{p.points}</td>}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
 
       ) : tab === "schedule" ? (

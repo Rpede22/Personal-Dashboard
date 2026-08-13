@@ -4,14 +4,17 @@ import { useEffect, useMemo, useState } from "react";
 import Card, { CardHeader } from "@/components/Card";
 import {
   type Payday,
+  computeEarnings,
   currentPayTerm,
   dateKey,
   daysUntilPayday,
+  formatDkk,
   previousPayTerm,
+  sumEarningsInTerm,
   sumHoursInTerm,
 } from "@/lib/payday";
 
-interface WorkSession { date: string; hours: number; note?: string }
+interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 interface WorkConfig {
   payday: Payday;
   hoursByWeek: Record<string, number>;
@@ -51,6 +54,10 @@ export default function WorkhubWidget() {
   const sessions = config?.sessions ?? [];
   const termHours = term ? sumHoursInTerm(sessions, term) : 0;
   const prevTermHours = prevTerm ? sumHoursInTerm(sessions, prevTerm) : 0;
+  // Net kr this term after AM-bidrag + A-skat, only when at least one session
+  // in the term carries a rate.
+  const termNet = term ? computeEarnings(sumEarningsInTerm(sessions, term)).net : 0;
+  const prevTermNet = prevTerm ? computeEarnings(sumEarningsInTerm(sessions, prevTerm)).net : 0;
 
   // Last few sessions, newest first. Same "recent activity" pattern as the
   // running widget's last-3-runs strip.
@@ -72,6 +79,11 @@ export default function WorkhubWidget() {
               {formatHoursMinutes(termHours)}
             </div>
             <div className="text-xs" style={{ color: "var(--text-muted)" }}>this pay-term</div>
+            {termNet > 0 && (
+              <div className="text-xs mt-1 tabular-nums" style={{ color: "var(--accent-green)" }}>
+                ≈ {formatDkk(termNet)} net
+              </div>
+            )}
           </div>
           <div className="flex-1 rounded-xl p-3 text-center" style={{ background: "var(--surface-2)" }}>
             <div className="text-2xl font-bold" style={{ color: "var(--text)" }}>
@@ -86,7 +98,10 @@ export default function WorkhubWidget() {
         {prevTerm && (
           <div className="text-xs mb-2 flex items-baseline justify-between" style={{ color: "var(--text-muted)" }}>
             <span>Last pay-term</span>
-            <span className="tabular-nums font-semibold" style={{ color: "var(--text)" }}>{formatHoursMinutes(prevTermHours)}</span>
+            <span className="tabular-nums font-semibold" style={{ color: "var(--text)" }}>
+              {formatHoursMinutes(prevTermHours)}
+              {prevTermNet > 0 && <span className="ml-2 font-normal" style={{ color: "var(--accent-green)" }}>≈ {formatDkk(prevTermNet)}</span>}
+            </span>
           </div>
         )}
 

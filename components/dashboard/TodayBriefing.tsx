@@ -327,7 +327,31 @@ export default function TodayBriefing() {
   }, []);
 
   if (items === null) return null; // silent while loading
-  if (items.length === 0) return null; // collapse entirely when there's nothing to say
+
+  // Empty day → render a small "quiet day" card instead of collapsing entirely,
+  // so the top of the dashboard doesn't feel dead on days with nothing booked.
+  if (items.length === 0) {
+    return (
+      <div
+        className="mb-4 rounded-2xl px-4 py-3 flex items-stretch gap-3 flex-wrap"
+        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+      >
+        <div className="flex flex-col justify-center pr-3" style={{ borderRight: "1px solid var(--border)" }}>
+          <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Today</div>
+          <div className="text-sm font-semibold">
+            {new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}
+          </div>
+          <WeatherLine />
+        </div>
+        <div className="flex-1 min-w-[220px] flex items-center gap-2 px-2 py-2">
+          <span className="text-xl">☀️</span>
+          <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+            Quiet day — nothing scheduled.
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   // Sort items by the persisted kind order; items of the same kind keep their
   // original relative order (stable sort).

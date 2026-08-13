@@ -109,6 +109,56 @@ export function dateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/**
+ * Danish take-home for a gross amount. Fixed-percentage model matching the
+ * user's setup: 8% AM-bidrag off the top, then 38% A-skat on what remains.
+ * Not a full tax calc (no fradrag, no deductions) — but honest enough for a
+ * paycheck-preview widget.
+ */
+export const AM_BIDRAG_PCT = 0.08;
+export const A_SKAT_PCT = 0.38;
+
+export interface Earnings {
+  gross: number;
+  amBidrag: number;
+  aSkat: number;
+  net: number;
+}
+
+export function computeEarnings(gross: number): Earnings {
+  const amBidrag = gross * AM_BIDRAG_PCT;
+  const afterAm = gross - amBidrag;
+  const aSkat = afterAm * A_SKAT_PCT;
+  return { gross, amBidrag, aSkat, net: afterAm - aSkat };
+}
+
+/**
+ * Sum gross earnings from every session in the given term. Sessions without
+ * an `hourlyRate` contribute 0 kr (they still count for hours totals via
+ * `sumHoursInTerm`); the UI can flag them so old data isn't silently
+ * miscounted.
+ */
+export function sumEarningsInTerm(
+  sessions: Array<{ date: string; hours: number; hourlyRate?: number }>,
+  term: { start: Date; end: Date }
+): number {
+  const startKey = dateKey(term.start);
+  const endKey = dateKey(term.end);
+  let gross = 0;
+  for (const s of sessions) {
+    if (s.date >= startKey && s.date <= endKey && typeof s.hourlyRate === "number") {
+      gross += s.hours * s.hourlyRate;
+    }
+  }
+  return gross;
+}
+
+/** Format a kr amount in Danish locale, no decimals for whole kr. */
+export function formatDkk(amount: number): string {
+  const rounded = Math.round(amount);
+  return `${rounded.toLocaleString("da-DK")} kr`;
+}
+
 export function formatPaydayLabel(payday: Payday): string {
   if (payday == null) return "not set";
   if (payday === "last-weekday") return "last weekday";

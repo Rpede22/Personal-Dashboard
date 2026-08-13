@@ -147,6 +147,17 @@ const STANDINGS_HEADERS: { label: string; title: string }[] = [
 
 const ROUND_LABELS = ["First Round", "Second Round", "Conference Final"];
 
+interface TopPointsLeader {
+  playerId: number;
+  name: string;
+  team: string;
+  position: string;
+  gamesPlayed: number;
+  goals: number;
+  assists: number;
+  points: number;
+}
+
 
 export default function NHLHub() {
   const [standings, setStandings] = useState<Standing[]>([]);
@@ -158,7 +169,9 @@ export default function NHLHub() {
   const [gamesAhead, setGamesAhead] = useState(5);
   const [loadingStandings, setLoadingStandings] = useState(true);
   const [loadingPlayoffs, setLoadingPlayoffs] = useState(false);
-  const [tab, setTab] = useState<"standings" | "schedule" | "playoffs" | "predicted" | "playoff-predicted">("standings");
+  const [tab, setTab] = useState<"standings" | "schedule" | "playoffs" | "predicted" | "playoff-predicted" | "top-points">("standings");
+  const [topPoints, setTopPoints] = useState<TopPointsLeader[] | null>(null);
+  const [loadingTopPoints, setLoadingTopPoints] = useState(false);
   const [predictedResults, setPredictedResults] = useState<Record<string, ProbResult[]>>({});
   const [loadingPredicted, setLoadingPredicted] = useState(false);
   const [bracket, setBracket] = useState<BracketData | null>(null);
@@ -199,6 +212,17 @@ export default function NHLHub() {
       setBracket(data.error ? null : data);
     } finally {
       setLoadingBracket(false);
+    }
+  }, []);
+
+  const loadTopPoints = useCallback(async () => {
+    setLoadingTopPoints(true);
+    try {
+      const res = await fetch("/api/nhl/scoring-leaders?limit=10");
+      const data = await res.json();
+      setTopPoints(data.leaders ?? []);
+    } finally {
+      setLoadingTopPoints(false);
     }
   }, []);
 
@@ -380,6 +404,7 @@ export default function NHLHub() {
         {([
           ["standings", "Standings"],
           ["schedule", "Schedule"],
+          ["top-points", "Top Points"],
           ["playoffs", "Playoffs"],
           ["predicted", "Predicted"],
           ["playoff-predicted", "Playoff Predicted"],
@@ -391,6 +416,7 @@ export default function NHLHub() {
               if (t === "predicted" && Object.keys(predictedResults).length === 0) loadPredicted();
               if (t === "playoff-predicted" && playoffs === null) loadPlayoffs();
               if (t === "playoffs" && bracket === null) loadBracket();
+              if (t === "top-points" && topPoints === null) loadTopPoints();
             }}
             className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             style={{
@@ -1073,6 +1099,71 @@ export default function NHLHub() {
                 );
               })()}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Top Points ── */}
+      {tab === "top-points" && (
+        <div
+          className="rounded-2xl overflow-hidden"
+          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+        >
+          <div className="flex items-baseline justify-between px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+            <h2 className="text-lg font-semibold" style={{ color: "var(--accent-blue)" }}>
+              Top 10 scorers — current regular season
+            </h2>
+            <button
+              onClick={loadTopPoints}
+              className="text-xs underline"
+              style={{ color: "var(--text-muted)" }}
+              disabled={loadingTopPoints}
+            >
+              {loadingTopPoints ? "Refreshing…" : "↻ Refresh"}
+            </button>
+          </div>
+          {loadingTopPoints && topPoints === null ? (
+            <div className="p-8 text-center" style={{ color: "var(--text-muted)" }}>Loading scoring leaders…</div>
+          ) : !topPoints || topPoints.length === 0 ? (
+            <div className="p-8 text-center" style={{ color: "var(--text-muted)" }}>No data yet — new season may not have started.</div>
+          ) : (
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
+                  <th className="text-left px-3 py-2 font-medium">#</th>
+                  <th className="text-left px-3 py-2 font-medium">Player</th>
+                  <th className="text-left px-3 py-2 font-medium">Team</th>
+                  <th className="text-left px-3 py-2 font-medium">Pos</th>
+                  <th className="text-right px-3 py-2 font-medium">GP</th>
+                  <th className="text-right px-3 py-2 font-medium">G</th>
+                  <th className="text-right px-3 py-2 font-medium">A</th>
+                  <th className="text-right px-3 py-2 font-medium">P</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topPoints.map((p, i) => {
+                  const isEdm = p.team === "EDM";
+                  return (
+                    <tr
+                      key={p.playerId}
+                      style={{
+                        background: isEdm ? "var(--accent-blue)11" : "transparent",
+                        borderTop: "1px solid var(--border)",
+                      }}
+                    >
+                      <td className="px-3 py-2 font-semibold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
+                      <td className="px-3 py-2 font-semibold">{p.name}</td>
+                      <td className="px-3 py-2" style={{ color: isEdm ? "var(--accent-blue)" : "var(--text-muted)" }}>{p.team}</td>
+                      <td className="px-3 py-2" style={{ color: "var(--text-muted)" }}>{p.position}</td>
+                      <td className="px-3 py-2 text-right" style={{ color: "var(--text-muted)" }}>{p.gamesPlayed}</td>
+                      <td className="px-3 py-2 text-right">{p.goals}</td>
+                      <td className="px-3 py-2 text-right">{p.assists}</td>
+                      <td className="px-3 py-2 text-right font-bold" style={{ color: "var(--accent-blue)" }}>{p.points}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
         </div>
       )}

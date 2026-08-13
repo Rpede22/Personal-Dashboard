@@ -32,6 +32,22 @@ interface Weather {
   high: number;
   low: number;
   rainChance: number;
+  feelsLike: number;      // current apparent temp (°C)
+  windSpeedMs: number;    // current wind speed (m/s)
+}
+
+/** Rule-of-thumb outfit chip from feelsLike + wind + rain probability. Kept
+ *  simple on purpose — no per-hour lookup, no fancy layering rules. */
+function outfitChip(w: Weather): { icon: string; label: string } | null {
+  let icon = "";
+  let label = "";
+  if (w.feelsLike < 0)       { icon = "🧥"; label = "Winter coat"; }
+  else if (w.feelsLike < 8)  { icon = "🧥"; label = "Jacket weather"; }
+  else if (w.feelsLike < 16) { icon = "👕"; label = "Light layer"; }
+  else                       { icon = "👕"; label = "T-shirt weather"; }
+  if (w.rainChance >= 40) label += " · ☔ umbrella";
+  if (w.windSpeedMs >= 8) label += " · 💨 windproof";
+  return { icon, label };
 }
 
 export default function WeatherLine() {
@@ -43,8 +59,9 @@ export default function WeatherLine() {
     async function load() {
       try {
         const url = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}` +
-          `&current=weather_code` +
+          `&current=weather_code,apparent_temperature,wind_speed_10m` +
           `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code` +
+          `&wind_speed_unit=ms` +
           `&timezone=Europe%2FCopenhagen`;
         const res = await fetch(url);
         if (!res.ok) return;
@@ -53,8 +70,10 @@ export default function WeatherLine() {
         const high = Math.round(j?.daily?.temperature_2m_max?.[0] ?? 0);
         const low = Math.round(j?.daily?.temperature_2m_min?.[0] ?? 0);
         const rain = Math.round(j?.daily?.precipitation_probability_max?.[0] ?? 0);
+        const feels = Math.round(j?.current?.apparent_temperature ?? j?.daily?.temperature_2m_max?.[0] ?? 0);
+        const wind = j?.current?.wind_speed_10m ?? 0;
         const dec = decode(code);
-        if (!cancelled) setW({ icon: dec.icon, label: dec.label, high, low, rainChance: rain });
+        if (!cancelled) setW({ icon: dec.icon, label: dec.label, high, low, rainChance: rain, feelsLike: feels, windSpeedMs: wind });
       } catch {
         /* silent */
       }
@@ -66,11 +85,20 @@ export default function WeatherLine() {
   }, []);
 
   if (!w) return null;
+  const outfit = outfitChip(w);
 
   return (
-    <div className="flex items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
-      <span className="text-base">{w.icon}</span>
-      <span>{w.label} · {w.low}°/{w.high}° · rain {w.rainChance}%</span>
+    <div className="flex flex-col gap-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+      <div className="flex items-center gap-2">
+        <span className="text-base">{w.icon}</span>
+        <span>{w.label} · {w.low}°/{w.high}° · rain {w.rainChance}%</span>
+      </div>
+      {outfit && (
+        <div className="flex items-center gap-1.5">
+          <span>{outfit.icon}</span>
+          <span>{outfit.label}</span>
+        </div>
+      )}
     </div>
   );
 }

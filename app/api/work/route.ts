@@ -20,7 +20,7 @@ import { configPath } from "@/lib/config-dir";
 
 export type Payday = number | "last-weekday" | null;
 
-interface WorkSession { date: string; hours: number; note?: string }
+interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 
 interface WorkConfig {
   payday: Payday;
@@ -59,6 +59,16 @@ function writeConfig(cfg: WorkConfig): void {
 
 function isDateStr(s: unknown): s is string {
   return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+/** Accept an optional hourly-rate value; return `undefined` if omitted, a
+ *  number if it validates, or the sentinel string `"invalid"` so the caller
+ *  can respond with 400. Keeps legacy sessions (no rate) working. */
+function parseRate(v: unknown): number | undefined | "invalid" {
+  if (v === null || v === undefined || v === "") return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 10000) return "invalid";
+  return n;
 }
 
 export async function GET() {
@@ -107,7 +117,9 @@ export async function POST(request: Request) {
     if (!isDateStr(s.date)) return NextResponse.json({ error: "session.date must be YYYY-MM-DD" }, { status: 400 });
     const h = Number(s.hours);
     if (!Number.isFinite(h) || h < 0 || h > 24) return NextResponse.json({ error: "session.hours must be 0..24" }, { status: 400 });
-    cfg.sessions.push({ date: s.date, hours: h, note: typeof s.note === "string" ? s.note : undefined });
+    const rate = parseRate(s.hourlyRate);
+    if (rate === "invalid") return NextResponse.json({ error: "session.hourlyRate must be 0..10000" }, { status: 400 });
+    cfg.sessions.push({ date: s.date, hours: h, hourlyRate: rate, note: typeof s.note === "string" ? s.note : undefined });
   }
 
   if ("updateSessionIndex" in body) {
@@ -119,7 +131,9 @@ export async function POST(request: Request) {
     if (!isDateStr(s.date)) return NextResponse.json({ error: "session.date must be YYYY-MM-DD" }, { status: 400 });
     const h = Number(s.hours);
     if (!Number.isFinite(h) || h < 0 || h > 24) return NextResponse.json({ error: "session.hours must be 0..24" }, { status: 400 });
-    cfg.sessions[idx] = { date: s.date, hours: h, note: typeof s.note === "string" ? s.note : undefined };
+    const rate = parseRate(s.hourlyRate);
+    if (rate === "invalid") return NextResponse.json({ error: "session.hourlyRate must be 0..10000" }, { status: 400 });
+    cfg.sessions[idx] = { date: s.date, hours: h, hourlyRate: rate, note: typeof s.note === "string" ? s.note : undefined };
   }
 
   if ("deleteSessionIndex" in body) {

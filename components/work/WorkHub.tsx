@@ -4,17 +4,20 @@ import { useEffect, useMemo, useState } from "react";
 import HubShell from "@/components/HubShell";
 import {
   type Payday,
+  computeEarnings,
   currentPayTerm,
   dateKey,
   daysUntilPayday,
+  formatDkk,
   formatPaydayLabel,
   nextPayday,
   previousPayTerm,
   resolvePayday,
+  sumEarningsInTerm,
   sumHoursInTerm,
 } from "@/lib/payday";
 
-interface WorkSession { date: string; hours: number; note?: string }
+interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 interface WorkConfig {
   payday: Payday;
   hoursByWeek: Record<string, number>;
@@ -52,6 +55,7 @@ export default function WorkHub() {
   // storage shape (Float) unchanged.
   const [addHrs, setAddHrs] = useState<string>("");
   const [addMins, setAddMins] = useState<string>("");
+  const [addRate, setAddRate] = useState<string>("");
   const [addNote, setAddNote] = useState<string>("");
 
   const [editingPayday, setEditingPayday] = useState(false);
@@ -74,6 +78,20 @@ export default function WorkHub() {
   const sessions = config?.sessions ?? [];
   const termHours = term ? sumHoursInTerm(sessions, term) : 0;
   const prevTermHours = prevTerm ? sumHoursInTerm(sessions, prevTerm) : 0;
+
+  // Most recent session's rate is the sensible default when logging a new one
+  // — a raise still needs one manual override, but the common case is nothing
+  // changed since last shift. Empty when no rate has ever been logged.
+  const lastKnownRate = useMemo(() => {
+    const sorted = [...sessions].sort((a, b) => b.date.localeCompare(a.date));
+    for (const s of sorted) if (typeof s.hourlyRate === "number") return s.hourlyRate;
+    return null;
+  }, [sessions]);
+
+  const termGross = term ? sumEarningsInTerm(sessions, term) : 0;
+  const prevTermGross = prevTerm ? sumEarningsInTerm(sessions, prevTerm) : 0;
+  const termEarnings = computeEarnings(termGross);
+  const prevTermEarnings = computeEarnings(prevTermGross);
 
   // Preview of the pay-term that STARTS after `next`. Useful during the first
   // couple of days after payday, when sessions logged today already count
@@ -106,8 +124,13 @@ export default function WorkHub() {
     if (mins < 0 || mins >= 60) return;
     const total = hrs + mins / 60;
     if (total <= 0) return;
-    await post({ session: { date: addDate, hours: total, note: addNote || undefined } });
+    // Rate: use the input if set, else fall back to the most recent known rate
+    // so the user doesn't have to retype it every shift.
+    const rateStr = addRate.trim() !== "" ? addRate : (lastKnownRate != null ? String(lastKnownRate) : "");
+    const rateNum = rateStr === "" ? undefined : Number(rateStr);
+    await post({ session: { date: addDate, hours: total, hourlyRate: rateNum, note: addNote || undefined } });
     setAddHrs(""); setAddMins(""); setAddNote(""); setAddDate(todayKey());
+    // Keep addRate as-is so the next log defaults to the same value without retyping.
   }
 
   async function deleteSession(realIdx: number) {
@@ -139,6 +162,7 @@ export default function WorkHub() {
   }, [sessions]);
 
   const totalAll = sessions.reduce((s, x) => s + x.hours, 0);
+  const grossAll = sessions.reduce((s, x) => s + (typeof x.hourlyRate === "number" ? x.hours * x.hourlyRate : 0), 0);
 
   const termLabel = term ? `${formatShortDate(dateKey(term.start))} → ${formatShortDate(dateKey(term.end))}` : "no payday set";
   const prevTermLabel = prevTerm ? `${formatShortDate(dateKey(prevTerm.start))} → ${formatShortDate(dateKey(prevTerm.end))}` : null;
@@ -188,6 +212,10 @@ export default function WorkHub() {
               {formatHoursMinutes(termHours)}
             </div>
 
+            {termGross > 0 && (
+              <EarningsBreakdown label="This term" e={termEarnings} accent="var(--accent-cyan)" />
+            )}
+
             {editingPayday && (
               <div
                 className="mt-3 flex items-center gap-2 p-2 rounded-lg"
@@ -233,6 +261,9 @@ export default function WorkHub() {
               <div className="text-2xl font-bold" style={{ color: "var(--text)" }}>
                 {formatHoursMinutes(prevTermHours)}
               </div>
+              {prevTermGross > 0 && (
+                <EarningsBreakdown label="Last payslip" e={prevTermEarnings} accent="var(--text)" />
+              )}
               <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>Reflected on your most recent payslip.</div>
             </div>
           )}
@@ -272,10 +303,21 @@ export default function WorkHub() {
                 />
                 <span className="text-xs" style={{ color: "var(--text-muted)" }}>m</span>
               </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number" min="0" max="10000" step="0.01"
+                  placeholder={lastKnownRate != null ? String(lastKnownRate) : "rate"}
+                  value={addRate} onChange={(e) => setAddRate(e.target.value)}
+                  className="text-sm w-20 px-2 py-1.5 rounded-md"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+                  title="Hourly rate in kr — defaults to last-used"
+                />
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>kr/h</span>
+              </div>
               <input
                 type="text" placeholder="note (optional)"
                 value={addNote} onChange={(e) => setAddNote(e.target.value)}
-                className="text-sm flex-1 min-w-[160px] px-2 py-1.5 rounded-md"
+                className="text-sm flex-1 min-w-[140px] px-2 py-1.5 rounded-md"
                 style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
               />
               <button
@@ -299,6 +341,11 @@ export default function WorkHub() {
                   <li key={realIdx} className="flex items-center gap-3 rounded-md px-2 py-1" style={{ background: "var(--surface-2)" }}>
                     <span className="tabular-nums" style={{ color: "var(--text-muted)" }}>{formatShortDate(session.date)}</span>
                     <span className="tabular-nums font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(session.hours)}</span>
+                    {typeof session.hourlyRate === "number" && (
+                      <span className="tabular-nums text-xs" style={{ color: "var(--text-muted)" }}>
+                        @ {session.hourlyRate} kr/h · {formatDkk(session.hours * session.hourlyRate)}
+                      </span>
+                    )}
                     {session.note && <span className="truncate" style={{ color: "var(--text-muted)" }}>· {session.note}</span>}
                     <button onClick={() => deleteSession(realIdx)} disabled={saving} className="ml-auto text-xs" style={{ color: "var(--accent-red)" }}>✕</button>
                   </li>
@@ -326,7 +373,10 @@ export default function WorkHub() {
         <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
           <div className="flex items-baseline justify-between mb-3">
             <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>All entries · {sessions.length}</div>
-            <div className="text-sm" style={{ color: "var(--text-muted)" }}>Total: <span className="font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(totalAll)}</span></div>
+            <div className="text-sm" style={{ color: "var(--text-muted)" }}>
+              Total: <span className="font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(totalAll)}</span>
+              {grossAll > 0 && <> · gross <span className="font-semibold" style={{ color: "var(--text)" }}>{formatDkk(grossAll)}</span></>}
+            </div>
           </div>
           {allSessionsWithIdx.length === 0 ? (
             <div className="text-sm" style={{ color: "var(--text-muted)" }}>Nothing logged yet — add sessions from the Overview tab.</div>
@@ -336,6 +386,8 @@ export default function WorkHub() {
                 <tr style={{ color: "var(--text-muted)" }}>
                   <th className="text-left py-1">Date</th>
                   <th className="text-right py-1">Hours</th>
+                  <th className="text-right py-1 pl-3">Rate</th>
+                  <th className="text-right py-1 pl-3">Gross</th>
                   <th className="text-left py-1 pl-3">Note</th>
                   <th className="py-1" />
                 </tr>
@@ -345,6 +397,12 @@ export default function WorkHub() {
                   <tr key={realIdx} className="border-t" style={{ borderColor: "var(--border)" }}>
                     <td className="py-1.5">{formatShortDate(session.date)}</td>
                     <td className="py-1.5 text-right tabular-nums font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(session.hours)}</td>
+                    <td className="py-1.5 pl-3 text-right tabular-nums" style={{ color: "var(--text-muted)" }}>
+                      {typeof session.hourlyRate === "number" ? `${session.hourlyRate} kr/h` : "—"}
+                    </td>
+                    <td className="py-1.5 pl-3 text-right tabular-nums" style={{ color: "var(--text)" }}>
+                      {typeof session.hourlyRate === "number" ? formatDkk(session.hours * session.hourlyRate) : "—"}
+                    </td>
                     <td className="py-1.5 pl-3" style={{ color: "var(--text-muted)" }}>{session.note ?? ""}</td>
                     <td className="py-1.5 text-right"><button onClick={() => deleteSession(realIdx)} className="text-xs" style={{ color: "var(--accent-red)" }}>✕</button></td>
                   </tr>
@@ -355,5 +413,30 @@ export default function WorkHub() {
         </div>
       )}
     </HubShell>
+  );
+}
+
+/** Compact gross → AM-bidrag → A-skat → net breakdown used under the term
+ *  totals. Shown only when there's a gross amount to break down. */
+function EarningsBreakdown({ label, e, accent }: { label: string; e: import("@/lib/payday").Earnings; accent: string }) {
+  return (
+    <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+      <div className="rounded-md px-2 py-1.5" style={{ background: "var(--surface-2)" }}>
+        <div style={{ color: "var(--text-muted)" }}>{label} gross</div>
+        <div className="tabular-nums font-semibold" style={{ color: accent }}>{formatDkk(e.gross)}</div>
+      </div>
+      <div className="rounded-md px-2 py-1.5" style={{ background: "var(--surface-2)" }}>
+        <div style={{ color: "var(--text-muted)" }}>AM-bidrag (8%)</div>
+        <div className="tabular-nums" style={{ color: "var(--accent-red)" }}>−{formatDkk(e.amBidrag)}</div>
+      </div>
+      <div className="rounded-md px-2 py-1.5" style={{ background: "var(--surface-2)" }}>
+        <div style={{ color: "var(--text-muted)" }}>A-skat (38%)</div>
+        <div className="tabular-nums" style={{ color: "var(--accent-red)" }}>−{formatDkk(e.aSkat)}</div>
+      </div>
+      <div className="rounded-md px-2 py-1.5" style={{ background: "var(--surface-2)" }}>
+        <div style={{ color: "var(--text-muted)" }}>Net</div>
+        <div className="tabular-nums font-semibold" style={{ color: "var(--accent-green)" }}>{formatDkk(e.net)}</div>
+      </div>
+    </div>
   );
 }
