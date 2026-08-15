@@ -296,7 +296,6 @@ export default function RunningHub() {
   }
 
   const syncStravaEfforts = () => batchSync("/api/strava/sync-efforts", setEffortsLoading, setEffortsResult);
-  const syncStravaZones = () => batchSync("/api/strava/sync-hr-zones", setZonesLoading, setZonesResult);
   const recomputeStravaZones = async () => {
     setZonesLoading(true);
     setZonesResult("Clearing…");
@@ -1461,6 +1460,7 @@ export default function RunningHub() {
               disabled={stravaLoading}
               className="px-3 py-1.5 rounded-lg text-sm"
               style={{ background: "var(--accent-orange)", color: "#fff" }}
+              title="Import last 30 days of activities. Also pulls HR streams so each new run gets its Z1..Z5 breakdown in the same pass — no separate button needed."
             >
               {stravaLoading ? "Syncing…" : "Sync runs"}
             </button>
@@ -1469,27 +1469,9 @@ export default function RunningHub() {
               disabled={effortsLoading}
               className="px-3 py-1.5 rounded-lg text-sm"
               style={{ background: "var(--surface-2)", color: "var(--accent-orange)", border: "1px solid var(--accent-orange)" }}
-              title="Fetch each run's Strava best_efforts (5k / 10k / half / marathon splits) so the PR grid shows real split times, not full-run averages. Batches 40 per click; call again if there are more."
+              title="Fetch each run's Strava best_efforts (5k / 10k / half / marathon splits) so the PR grid shows real split times. Rarely needed — Strava exposes these on new imports; re-run only after a new PB."
             >
               {effortsLoading ? "Fetching…" : "Sync PRs"}
-            </button>
-            <button
-              onClick={syncStravaZones}
-              disabled={zonesLoading}
-              className="px-3 py-1.5 rounded-lg text-sm"
-              style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
-              title="Backfill HR zones (Z1..Z5 seconds) from each run's Strava HR stream. Skips runs recorded without a HR sensor. Batches 40."
-            >
-              {zonesLoading ? "Fetching…" : "Sync HR zones"}
-            </button>
-            <button
-              onClick={recomputeStravaZones}
-              disabled={zonesLoading}
-              className="px-3 py-1.5 rounded-lg text-sm"
-              style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
-              title="Clears every cached HR-zones value and re-fetches from Strava. Uses your athlete zones from strava.com (requires the profile:read_all scope — Disconnect + Connect Strava again if the zones still look off). Falls back to Strava's default % model if the zones can't be read."
-            >
-              {zonesLoading ? "Fetching…" : "Recompute HR zones"}
             </button>
             <button
               onClick={disconnectStrava}
@@ -1498,13 +1480,22 @@ export default function RunningHub() {
             >
               Disconnect
             </button>
+            <button
+              onClick={recomputeStravaZones}
+              disabled={zonesLoading}
+              className="text-xs underline"
+              style={{ color: "var(--text-muted)" }}
+              title="Clears every cached HR-zones value and re-fetches from Strava under your athlete zones (or Strava's default % model as fallback). Only needed when zones look wrong across old runs."
+            >
+              {zonesLoading ? "Recomputing HR…" : "Recompute HR zones"}
+            </button>
             {stravaSyncResult && (
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>{stravaSyncResult}</span>
             )}
             {effortsResult && (
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>PRs: {effortsResult}</span>
             )}
-{zonesResult && (
+            {zonesResult && (
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>HR: {zonesResult}</span>
             )}
           </>

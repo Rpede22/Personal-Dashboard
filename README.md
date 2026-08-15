@@ -1,51 +1,55 @@
 # Personal Dashboard — Vibe Coded
 
-A local-only personal dashboard desktop app built with **Next.js 16 + Electron**. It aggregates sports scores, WoW weekly progress, school deadlines, running training, and your iCloud calendar into a single always-available dark-themed window — no browser, no cloud, no accounts needed beyond the optional integrations you configure.
+A local-only personal dashboard desktop app built with **Next.js 16 + Electron**. It aggregates sports scores, WoW weekly progress, LoL rank history, school deadlines, running training, work hours, weather, TV news, and your iCloud calendar into a single always-available dark-themed window — no browser, no cloud, no accounts needed beyond the optional integrations you configure. A Today Briefing pins the day's calendar / sport / run / school / media rows above the grid, and a 7-day Week-ahead heatmap sits below it.
 
 ---
 
 ## Dashboard overview
 
-The home screen is a 2-column grid of widgets, each linking to a full hub page:
+The home screen is a 2-column grid of drag-reorderable widgets, each linking to a full hub page. Widgets can be toggled on/off from **⚙️ Widgets** in the header and their auto-refresh cadence overridden per-tile.
 
 | Widget | Accent | What it shows |
 |--------|--------|---------------|
-| 🏆 **Sports** | Rainbow stripe | 2×2 grid of live data for EDM, Esbjerg fB, FC Barcelona, Esbjerg Energy |
-| 📚 **School** | Indigo | Upcoming deadlines sorted by urgency; overdue items glow red |
-| 🧙 **World of Warcraft** | Purple | Per-character ilvl, RIO score, weekly M+/raid/custom task progress |
-| 🏃 **Running** | Green | This week's km, last 30-day km, recent runs, 7-day plan, days to race, race distance |
-| 📅 **Calendar** | Pink | Upcoming events pulled live from iCloud CalDAV |
-| 💼 **Work Hours** | Cyan | Manual session log, current pay-term totals in `Xh Ym`, estimated net kr after AM-bidrag (8%) + A-skat (38%), payday countdown |
-| 📰 **News** | Orange | Latest 5 TV2 headlines with section chip and relative timestamps; click opens the article in a new tab |
-| 📺 **Tonight on TV** | Purple | Manually-tracked Danish TV shows airing tonight — chip per show with `HH:MM · title · channel · in Xh Ym` |
+| 🏆 **Sports** | Rainbow stripe | 2×2 grid of live data for EDM, Esbjerg fB, FC Barcelona, Esbjerg Energy — last 5 results, next fixture, rank + delta chip, match-of-the-week strip |
+| 📚 **School** | Indigo | Upcoming deadlines sorted by urgency; hoursSpent progress rings; overdue items glow red |
+| 🎮 **Games** | Purple / Blue | Tab switcher — WoW: per-character ilvl / RIO / weekly M+/raid progress · LoL: expandable per-account cards with rank, W/L, recent matches |
+| 🏃 **Running** | Green | This week's km vs plan, recent runs, 7-day plan, race countdown, recovery-day dot |
+| 📅 **Calendar** | Pink | 7-day grid pulled live from iCloud CalDAV + configured ICS feeds |
+| 💼 **Work Hours** | Cyan | Manual session log, current pay-term totals (`Xh Ym`), estimated net kr after AM-bidrag (8%) + A-skat (38%). **Pay-term** and **payday** are independent: the term flips on a configurable day-of-month (default 23), the payday countdown targets the last weekday of the month by default |
+| 📰 **News** | Orange | Latest 10 TV2 headlines with section chip and relative timestamps; **Live** articles get a 🔴 red accent; click opens the article in a new tab |
+| 📺 **Media** | Purple | "Next up" — 3 soonest-airing shows with next-episode number and countdown; auto-hides shows once you've watched every known episode |
+| 🌦️ **Weather** | Cyan | Current temp + today's hi/lo + rain %, a 6-block 24 h forecast strip, and a best-run-window pill scored against the current season |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│  Electron (electron/main.js)        │  ← Desktop wrapper, custom 28px titlebar drag strip
-│  Loads http://localhost:3000        │
-└────────────────┬────────────────────┘
+┌─────────────────────────────────────────┐
+│  Electron (electron/main.js)            │  ← Desktop wrapper, custom 28px titlebar drag strip
+│  Loads http://localhost:3000            │     Auto-migrates dashboard.db on launch
+└────────────────┬────────────────────────┘
                  │
-┌────────────────▼────────────────────┐
-│  Next.js 16 App Router (Turbopack)  │  ← UI + API routes in one process
-│  React 19 · TypeScript             │
-│                                     │
-│  /app/page.tsx          Dashboard   │
-│  /app/api/**            API routes  │
-│  /components/**         UI          │
-└────────────────┬────────────────────┘
+┌────────────────▼────────────────────────┐
+│  Next.js 16 App Router (Turbopack)      │  ← UI + API routes in one process
+│  React 19 · TypeScript                  │
+│                                         │
+│  /app/page.tsx           Dashboard      │
+│  /app/api/**             API routes     │
+│  /components/**          UI             │
+└────────────────┬────────────────────────┘
                  │
-┌────────────────▼────────────────────┐
-│  SQLite (dev.db at project root)    │  ← Prisma 7 + better-sqlite3 driver adapter
-│  Models: WowCharacter, WowChecklist │
-│          RunLog, RunPlan, Assignment│
-└─────────────────────────────────────┘
+┌────────────────▼────────────────────────┐
+│  SQLite (dev.db at project root)        │  ← Prisma 7 + better-sqlite3 driver adapter
+│  Models: WowCharacter, WowChecklist,    │
+│    WowChecklistTemplate, WowGearWishlist│
+│    LolAccount, LolRankSnapshot          │
+│    RunLog, RunPlan, Shoe, Assignment    │
+│    MediaShow                            │
+└─────────────────────────────────────────┘
 ```
 
-Everything runs locally. No data leaves your machine except outbound API calls to sports/WoW/Strava services.
+Everything runs locally. No data leaves your machine except outbound API calls to the third-party services you opt into (Strava, Riot, Blizzard, FotMob, TV2, open-meteo, iCloud CalDAV).
 
 ---
 

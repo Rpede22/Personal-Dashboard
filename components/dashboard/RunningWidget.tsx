@@ -188,15 +188,19 @@ export default function RunningWidget() {
               {(data?.weekPlannedKm ?? 0) > 0 && (() => {
                 const done = data?.weeklyKm ?? 0;
                 const plan = data?.weekPlannedKm ?? 0;
+                const remaining = Math.max(0, plan - done);
                 const pct = Math.min(100, (done / plan) * 100);
                 const barColor = done >= plan ? "var(--accent-green)" : "var(--accent-orange)";
                 return (
-                  <div className="mt-1.5" title={`${done.toFixed(1)} / ${plan.toFixed(1)} km planned`}>
+                  <div className="mt-1.5" title={`${done.toFixed(1)} / ${plan.toFixed(1)} km planned · ${remaining.toFixed(1)} km remaining`}>
                     <div className="rounded-full overflow-hidden" style={{ height: 4, background: "var(--border)" }}>
                       <div style={{ width: `${pct}%`, height: "100%", background: barColor }} />
                     </div>
-                    <div className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
-                      / {plan.toFixed(1)} plan
+                    <div className="text-[10px] mt-0.5 flex items-baseline justify-between gap-2" style={{ color: "var(--text-muted)" }}>
+                      <span>/ {plan.toFixed(1)} plan</span>
+                      <span style={{ color: done >= plan ? "var(--accent-green)" : "var(--accent-orange)" }}>
+                        {done >= plan ? "✓ done" : `${remaining.toFixed(1)} km left`}
+                      </span>
                     </div>
                   </div>
                 );
