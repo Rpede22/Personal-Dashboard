@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getValidToken } from "../route";
 import { extractBestEfforts } from "@/lib/strava-efforts";
+import { fetchRunWeather } from "@/lib/run-weather";
+import { bucketHrZonesFromStreams, boundariesFromStravaZones } from "@/lib/hr-zones";
 
 // POST /api/strava/sync — import recent activities from Strava
 export async function POST() {
@@ -40,7 +42,35 @@ export async function POST() {
     distance: number;
     moving_time: number;
     name: string;
+    start_latlng?: [number, number] | null;
   }>).filter((a) => a.type === "Run");
+
+  // Default shoe for auto-imports = the most recently-used, non-retired shoe.
+  // Users can reassign on the run row if they wore something else.
+  const lastShoeRun = await prisma.runLog.findFirst({
+    where: { shoeId: { not: null } },
+    orderBy: { date: "desc" },
+    include: { /* nothing — we only need shoeId */ } as never,
+  });
+  let defaultShoeId: number | null = lastShoeRun?.shoeId ?? null;
+  if (defaultShoeId) {
+    const shoe = await prisma.shoe.findUnique({ where: { id: defaultShoeId } });
+    if (!shoe || shoe.retired) defaultShoeId = null;
+  }
+
+  // Fetch the athlete's configured HR zones once so every run this batch
+  // gets bucketed against exactly the ranges they see on strava.com. Silent
+  // on failure — bucketing then falls back to the % model.
+  let hrZoneBoundaries: number[] | null = null;
+  try {
+    const zonesRes = await fetch("https://www.strava.com/api/v3/athlete/zones", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (zonesRes.ok) {
+      const j = await zonesRes.json();
+      hrZoneBoundaries = boundariesFromStravaZones(j?.heart_rate?.zones);
+    }
+  } catch { /* silent */ }
 
   let imported = 0;
   let skipped = 0;
@@ -94,6 +124,25 @@ export async function POST() {
       }
     } catch { /* silent — leave bestEffortsJson null */ }
 
+    // Weather at the run's start (open-meteo archive; free, no key).
+    const [lat, lon] = run.start_latlng ?? [null, null];
+    const weather = await fetchRunWeather(run.start_date, lat, lon);
+    const weatherJson = weather ? JSON.stringify(weather) : null;
+
+    // Strava HR streams → Z1..Z5 breakdown. One extra request per run.
+    let hrZonesJson: string | null = null;
+    try {
+      const streamsRes = await fetch(
+        `https://www.strava.com/api/v3/activities/${run.id}/streams?keys=heartrate,time&key_by_type=true`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (streamsRes.ok) {
+        const streams = await streamsRes.json();
+        const zones = bucketHrZonesFromStreams(streams?.heartrate?.data, streams?.time?.data, { zoneBoundaries: hrZoneBoundaries });
+        if (zones) hrZonesJson = JSON.stringify(zones);
+      }
+    } catch { /* silent — leave hrZonesJson null */ }
+
     await prisma.runLog.create({
       data: {
         date: dateUTC,
@@ -103,6 +152,9 @@ export async function POST() {
         stravaId: String(run.id),
         plannedDistance: planForDay?.distance ?? null,
         bestEffortsJson,
+        weatherJson,
+        hrZonesJson,
+        shoeId: defaultShoeId,
       },
     });
     // Remove any run plans for this day — the run covers it

@@ -186,19 +186,28 @@ function extractCalendarData(xml: string): string[] {
 // starting with that name (e.g. `Rasmus_skole`, `Rasmus_arbejde`) alongside
 // the ICS feeds of the same name — the ICS entries stay read-only, but a
 // matching iCloud calendar becomes writeable.
-const CALDAV_INCLUDE = ["Arbejde", "Kalender", "Rasmus"];
-
-// Rename iCloud-side display names to the labels shown in the app.
-// Keyed by the CALDAV_INCLUDE prefix that matched — the app label replaces
-// the raw iCloud name for every calendar under that prefix.
-// `Rasmus` remaps to `Rasmus_arbejde` so any iCloud calendar starting with
-// `Rasmus` (e.g. `Rasmus Arbejde`) collapses onto the existing ICS feed name
-// and gets skipped by the collision guard rather than showing up as a
-// duplicate chip.
-const CALDAV_DISPLAY_NAME: Record<string, string> = {
-  Arbejde: "Jennifer_arbejde",
-  Rasmus:  "Rasmus_arbejde",
-};
+/**
+ * iCloud calendars to surface in the app. `match` is a prefix compared
+ * against the raw iCloud display name; the first entry whose prefix
+ * matches wins, so more-specific names must be listed BEFORE shorter
+ * prefixes they overlap with (e.g. `Kalender Rasmus` before `Kalender`).
+ * `display` renames the calendar to the label shown in the app.
+ */
+interface CalDAVMapping { match: string; display?: string }
+const CALDAV_INCLUDE: CalDAVMapping[] = [
+  // Rasmus's own personal calendar — new, writeable, distinct from
+  // Jennifer's shared `Kalender`.
+  { match: "Kalender Rasmus" },
+  // Jennifer's shared personal calendar — renamed in the app so it's
+  // obvious which one is hers vs Rasmus's.
+  { match: "Kalender", display: "Kalender Jennifer" },
+  // Jennifer's shared work calendar.
+  { match: "Arbejde", display: "Jennifer_arbejde" },
+  // Rasmus's own work calendar. Remapped to `Rasmus_arbejde` so it
+  // collides with the ICS feed of the same name (feed is dropped in favor
+  // of the writeable CalDAV copy).
+  { match: "Rasmus", display: "Rasmus_arbejde" },
+];
 
 async function fetchCalDAVCalendars(auth: string): Promise<{ url: string; name: string }[]> {
   // Discover principal
@@ -240,11 +249,12 @@ async function fetchCalDAVCalendars(auth: string): Promise<{ url: string; name: 
     if (pathname.replace(/\/$/, "") === homePathname) continue;
     const names = extractDisplayNames(block);
     const name = names[0] ?? href.split("/").filter(Boolean).pop() ?? "Calendar";
-    // Only include calendars whose names start with one of our target prefixes
-    const matchedPrefix = CALDAV_INCLUDE.find((prefix) => name.startsWith(prefix));
-    if (!matchedPrefix) continue;
-    // Prefer the explicit display-name mapping (matched by prefix); otherwise keep the iCloud name.
-    const displayName = CALDAV_DISPLAY_NAME[matchedPrefix] ?? name;
+    // First matching entry wins — the array is ordered longest-prefix-first
+    // so `Kalender Rasmus` grabs its own row before `Kalender` (Jennifer's)
+    // catches it.
+    const matched = CALDAV_INCLUDE.find((e) => name.startsWith(e.match));
+    if (!matched) continue;
+    const displayName = matched.display ?? name;
     calendars.push({ url: resolveHref(href, cFinal), name: displayName });
   }
   return calendars;

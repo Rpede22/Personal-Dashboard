@@ -3,6 +3,17 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import PlayoffRace from "@/components/nhl/PlayoffRace";
+import ReorderableTabs from "@/components/ReorderableTabs";
+
+type NhlTab = "standings" | "schedule" | "top-points" | "playoffs" | "predicted";
+const NHL_TAB_LABELS: Record<NhlTab, string> = {
+  standings:    "Standings",
+  schedule:     "Schedule",
+  "top-points": "Top Points",
+  playoffs:     "Playoffs",
+  predicted:    "Predicted",
+};
+const NHL_TAB_DEFAULTS: readonly NhlTab[] = ["standings", "schedule", "top-points", "playoffs", "predicted"];
 
 type ScopeType = "division" | "conference" | "league";
 type Division = "pacific" | "central" | "atlantic" | "metropolitan";
@@ -169,7 +180,11 @@ export default function NHLHub() {
   const [gamesAhead, setGamesAhead] = useState(5);
   const [loadingStandings, setLoadingStandings] = useState(true);
   const [loadingPlayoffs, setLoadingPlayoffs] = useState(false);
-  const [tab, setTab] = useState<"standings" | "schedule" | "playoffs" | "predicted" | "playoff-predicted" | "top-points">("standings");
+  const [tab, setTab] = useState<"standings" | "schedule" | "playoffs" | "predicted" | "top-points">("standings");
+  // Which view is shown inside the merged Playoffs tab. Mirrors the
+  // Esbjerg Energy hub — Projected = what the bracket would look like if
+  // playoffs started today; Live = the real, published bracket.
+  const [playoffMode, setPlayoffMode] = useState<"projected" | "live">("projected");
   const [topPoints, setTopPoints] = useState<TopPointsLeader[] | null>(null);
   const [loadingTopPoints, setLoadingTopPoints] = useState(false);
   const [predictedResults, setPredictedResults] = useState<Record<string, ProbResult[]>>({});
@@ -399,36 +414,23 @@ export default function NHLHub() {
           </h1>
         </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 flex-wrap">
-        {([
-          ["standings", "Standings"],
-          ["schedule", "Schedule"],
-          ["top-points", "Top Points"],
-          ["playoffs", "Playoffs"],
-          ["predicted", "Predicted"],
-          ["playoff-predicted", "Playoff Predicted"],
-        ] as const).map(([t, label]) => (
-          <button
-            key={t}
-            onClick={() => {
-              setTab(t);
-              if (t === "predicted" && Object.keys(predictedResults).length === 0) loadPredicted();
-              if (t === "playoff-predicted" && playoffs === null) loadPlayoffs();
-              if (t === "playoffs" && bracket === null) loadBracket();
-              if (t === "top-points" && topPoints === null) loadTopPoints();
-            }}
-            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-            style={{
-              background: tab === t ? "var(--surface)" : "transparent",
-              color: tab === t ? "var(--accent-blue)" : "var(--text-muted)",
-              border: tab === t ? "1px solid var(--border)" : "1px solid transparent",
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* Tabs — drag any label onto another to reorder; persisted to localStorage. */}
+      <ReorderableTabs
+        hubKey="nhl"
+        defaults={NHL_TAB_DEFAULTS}
+        active={tab}
+        labels={NHL_TAB_LABELS}
+        onSelect={(t) => {
+          setTab(t);
+          if (t === "predicted" && Object.keys(predictedResults).length === 0) loadPredicted();
+          if (t === "playoffs") {
+            if (playoffs === null) loadPlayoffs();
+            if (bracket === null) loadBracket();
+          }
+          if (t === "top-points" && topPoints === null) loadTopPoints();
+        }}
+        accent="var(--accent-blue)"
+      />
       </div> {/* end sticky header */}
 
       {/* Scope controls — standings only, below tabs */}
@@ -838,17 +840,45 @@ export default function NHLHub() {
         </div>
       )}
 
-      {/* ── Live Playoffs Bracket ── */}
+      {/* ── Playoffs (merged Projected + Live) ── */}
       {tab === "playoffs" && (
         <div>
           <PlayoffRace teamAbbrev="EDM" />
+
+          {/* Sub-tab picker — mirrors the Esbjerg Energy hub */}
+          <div className="flex gap-1 mb-4">
+            {([
+              ["projected", "If playoffs started today"],
+              ["live",      "Live playoffs"],
+            ] as const).map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => setPlayoffMode(m)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                style={{
+                  background: playoffMode === m ? "var(--accent-blue)22" : "var(--surface)",
+                  color: playoffMode === m ? "var(--accent-blue)" : "var(--text-muted)",
+                  border: `1px solid ${playoffMode === m ? "var(--accent-blue)" : "var(--border)"}`,
+                }}
+              >{label}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Live Playoffs Bracket ── */}
+      {tab === "playoffs" && playoffMode === "live" && (
+        <div>
           {loadingBracket ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <div style={{ color: "var(--text-muted)" }}>Loading live bracket…</div>
             </div>
           ) : bracket === null || bracket.series.length === 0 ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-              <p style={{ color: "var(--text-muted)" }}>No bracket data yet — playoffs may not have started</p>
+              <p style={{ color: "var(--text-muted)" }}>No bracket data yet — playoffs may not have started.</p>
+              <button onClick={() => setPlayoffMode("projected")} className="mt-3 mr-2 px-4 py-1.5 rounded-lg text-sm font-medium" style={{ background: "var(--surface-2)", color: "var(--accent-blue)", border: "1px solid var(--accent-blue)" }}>
+                Show projected instead
+              </button>
               <button onClick={loadBracket} className="mt-3 px-4 py-1.5 rounded-lg text-sm font-medium" style={{ background: "var(--accent-blue)", color: "#fff" }}>
                 Retry
               </button>
@@ -956,8 +986,8 @@ export default function NHLHub() {
         </div>
       )}
 
-      {/* ── Playoff Predicted ── */}
-      {tab === "playoff-predicted" && (
+      {/* ── Projected Playoffs — client-side bracket from current standings ── */}
+      {tab === "playoffs" && playoffMode === "projected" && (
         <div>
           {loadingPlayoffs ? (
             <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
@@ -989,7 +1019,7 @@ export default function NHLHub() {
                     {roundLabel}
                   </h3>
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {(["western", "eastern"] as const).map((conf) => {
+                    {(["eastern", "western"] as const).map((conf) => {
                       const confData = playoffs[conf];
                       const roundMatchups = confData?.rounds?.[roundIdx] ?? [];
                       if (roundMatchups.length === 0) return null;

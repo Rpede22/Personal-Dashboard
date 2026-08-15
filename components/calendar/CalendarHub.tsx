@@ -26,7 +26,8 @@ function calColor(name: string): string {
   if (name === "Rasmus_skole")     return "var(--accent-red)";
   if (name === "Cand")             return "var(--accent-indigo)";
   if (name === "Jennifer_arbejde") return "var(--accent-green)";
-  if (name === "Kalender")         return "var(--accent-blue)";
+  if (name === "Kalender Jennifer") return "var(--accent-blue)";
+  if (name === "Kalender Rasmus")  return "var(--accent-cyan)";
   if (name === "Rasmus_arbejde")   return "var(--accent-pink)";
   return "var(--accent-blue)";
 }
@@ -121,7 +122,11 @@ export default function CalendarHub() {
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addForm, setAddForm] = useState({
-    calendar: "Kalender",
+    // Default to Rasmus's own writeable calendar. If the API returns a
+    // list of writeable calendars, the effect below will re-select the
+    // first one so a rename in `CALDAV_INCLUDE` doesn't leave us pointing
+    // at a stale name.
+    calendar: "Kalender Rasmus",
     title: "",
     date: new Date().toISOString().slice(0, 10),   // yyyy-mm-dd
     startTime: "12:00",
@@ -138,16 +143,22 @@ export default function CalendarHub() {
     setAddSaving(true);
     setAddError(null);
     try {
-      // Interpret the input date + time as Europe/Copenhagen local. We build
-      // the ISO in UTC by asking the browser to format the components; the
-      // simplest reliable way is to send the local-string and let the server
-      // interpret it. iCloud handles UTC ISO strings correctly.
-      const startLocal = addForm.allDay
-        ? `${addForm.date}T00:00:00`
-        : `${addForm.date}T${addForm.startTime}:00`;
-      const endLocal = addForm.allDay
-        ? `${addForm.date}T23:59:59`
-        : `${addForm.date}T${addForm.endTime}:00`;
+      // All-day events must not go through local-timezone conversion —
+      // otherwise a Sep 12 date in CEST becomes 2026-09-11T22:00:00Z, which
+      // the ICS builder then floors to `20260911` (bug: event landed one day
+      // early). Send UTC midnight of the picked calendar date so the ICS
+      // helper's getUTC* extractors produce the intended `YYYYMMDD`.
+      // Timed events keep the local interpretation (they're supposed to shift
+      // to UTC — that's what CalDAV wants for VALUE=DATE-TIME).
+      const [yy, mm, dd] = addForm.date.split("-").map((n) => parseInt(n, 10));
+      const startISO = addForm.allDay
+        ? new Date(Date.UTC(yy, mm - 1, dd)).toISOString()
+        : new Date(`${addForm.date}T${addForm.startTime}:00`).toISOString();
+      // RFC 5545: all-day DTEND is exclusive → +1 day. Server default (+24h)
+      // handles this, so omit endISO for all-day.
+      const endISO = addForm.allDay
+        ? undefined
+        : new Date(`${addForm.date}T${addForm.endTime}:00`).toISOString();
 
       const res = await fetch("/api/calendar/add", {
         method: "POST",
@@ -155,8 +166,8 @@ export default function CalendarHub() {
         body: JSON.stringify({
           calendar: addForm.calendar,
           title: addForm.title.trim(),
-          startISO: new Date(startLocal).toISOString(),
-          endISO: new Date(endLocal).toISOString(),
+          startISO,
+          endISO,
           allDay: addForm.allDay,
           location: addForm.location.trim() || undefined,
         }),
@@ -304,7 +315,7 @@ export default function CalendarHub() {
               className="rounded-lg px-2 py-1.5 text-sm"
               style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
             >
-              {writeableCalendars.length === 0 && <option value="Kalender">Kalender</option>}
+              {writeableCalendars.length === 0 && <option value="Kalender Rasmus">Kalender Rasmus</option>}
               {writeableCalendars.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}

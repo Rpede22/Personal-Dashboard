@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import { parseRunWeather } from "@/lib/run-weather";
+import { parseHrZones, ZONE_META, type HrZones } from "@/lib/hr-zones";
 
 const RunMap = dynamic(() => import("./RunMap"), { ssr: false });
 
@@ -12,6 +14,24 @@ interface RunLog {
   duration: number;
   notes: string | null;
   stravaId: string | null;
+  weatherJson?: string | null;
+  hrZonesJson?: string | null;
+}
+
+const WMO_ICON: Record<number, string> = {
+  0: "☀️", 1: "🌤️", 2: "🌤️", 3: "☁️",
+  45: "🌫️", 48: "🌫️",
+  51: "🌦️", 53: "🌦️", 55: "🌦️", 56: "🌦️", 57: "🌦️",
+  61: "🌧️", 63: "🌧️", 65: "🌧️", 66: "🌧️", 67: "🌧️", 80: "🌧️", 81: "🌧️", 82: "🌧️",
+  71: "🌨️", 73: "🌨️", 75: "🌨️", 77: "🌨️", 85: "🌨️", 86: "🌨️",
+  95: "⛈️", 96: "⛈️", 99: "⛈️",
+};
+
+function fmtHms(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 interface StravaActivity {
@@ -217,6 +237,69 @@ export default function RunDetailModal({
               </div>
             ))}
           </div>
+
+          {/* Weather at run start (open-meteo archive; cached per-run on disk) */}
+          {(() => {
+            const w = parseRunWeather(run.weatherJson);
+            if (!w) return null;
+            const icon = WMO_ICON[w.weatherCode] ?? "🌡️";
+            return (
+              <div
+                className="rounded-xl p-3 flex items-center gap-4"
+                style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}
+              >
+                <span className="text-3xl">{icon}</span>
+                <div className="text-sm">
+                  <div className="font-semibold">{w.label} · {w.tempC}° (feels {w.feelsLikeC}°)</div>
+                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    💨 {w.windMs.toFixed(1)} m/s{w.rainMm > 0 ? ` · ☔ ${w.rainMm.toFixed(1)} mm` : ""}
+                    {w.source === "manual" && <span> · Aarhus fallback</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* HR zone breakdown from Strava streams */}
+          {(() => {
+            const z = parseHrZones(run.hrZonesJson);
+            if (!z) return null;
+            const total = z.totalSec;
+            const rows: Array<{ key: keyof HrZones; sec: number }> = [
+              { key: "z1", sec: z.z1 }, { key: "z2", sec: z.z2 },
+              { key: "z3", sec: z.z3 }, { key: "z4", sec: z.z4 },
+              { key: "z5", sec: z.z5 },
+            ];
+            return (
+              <div>
+                <h4 className="text-sm font-semibold mb-2" style={{ color: "var(--text-muted)" }}>
+                  HR zones <span className="font-normal">· max ~{z.maxHrEstimate} bpm</span>
+                </h4>
+                {/* Stacked bar */}
+                <div className="rounded-lg overflow-hidden flex mb-2" style={{ height: 14, background: "var(--surface-2)" }}>
+                  {rows.map((r) => {
+                    const pct = (r.sec / total) * 100;
+                    if (pct === 0) return null;
+                    const meta = ZONE_META[r.key as "z1" | "z2" | "z3" | "z4" | "z5"];
+                    return <div key={r.key} title={`${meta.label}: ${fmtHms(r.sec)}`} style={{ width: `${pct}%`, background: meta.color }} />;
+                  })}
+                </div>
+                {/* Per-zone rows */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                  {rows.map((r) => {
+                    const meta = ZONE_META[r.key as "z1" | "z2" | "z3" | "z4" | "z5"];
+                    const pct = Math.round((r.sec / total) * 100);
+                    return (
+                      <div key={r.key} className="rounded-md p-2" style={{ background: "var(--surface-2)", borderLeft: `3px solid ${meta.color}` }}>
+                        <div className="font-semibold" style={{ color: meta.color }}>{r.key.toUpperCase()} · {meta.label}</div>
+                        <div className="tabular-nums" style={{ color: "var(--text-muted)" }}>{fmtHms(r.sec)} · {pct}%</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* HR + cadence (Strava only) */}
           {activity && (activity.average_heartrate || activity.average_cadence) && (

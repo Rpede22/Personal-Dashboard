@@ -12,7 +12,6 @@ import {
   formatPaydayLabel,
   nextPayday,
   previousPayTerm,
-  resolvePayday,
   sumEarningsInTerm,
   sumHoursInTerm,
 } from "@/lib/payday";
@@ -20,6 +19,7 @@ import {
 interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 interface WorkConfig {
   payday: Payday;
+  payTermEnd: number;
   hoursByWeek: Record<string, number>;
   sessions: WorkSession[];
 }
@@ -60,24 +60,28 @@ export default function WorkHub() {
 
   const [editingPayday, setEditingPayday] = useState(false);
   const [paydayDraft, setPaydayDraft] = useState<string>("");
+  const [editingPayTerm, setEditingPayTerm] = useState(false);
+  const [payTermDraft, setPayTermDraft] = useState<string>("23");
 
   useEffect(() => {
     fetch("/api/work").then((r) => r.json()).then((d: WorkConfig) => {
       setConfig({ ...d, sessions: d.sessions ?? [] });
       setPaydayDraft(d.payday == null ? "" : d.payday === "last-weekday" ? "last-weekday" : String(d.payday));
-    }).catch(() => setConfig({ payday: null, hoursByWeek: {}, sessions: [] }));
+      setPayTermDraft(String(d.payTermEnd ?? 23));
+    }).catch(() => setConfig({ payday: null, payTermEnd: 23, hoursByWeek: {}, sessions: [] }));
   }, []);
 
   const now = useMemo(() => new Date(), [config]);
   const payday = config?.payday ?? null;
-  const term = payday != null ? currentPayTerm(payday, now) : null;
-  const prevTerm = payday != null ? previousPayTerm(payday, now) : null;
+  const payTermEnd = config?.payTermEnd ?? 23;
+  const term = currentPayTerm(payTermEnd, now);
+  const prevTerm = previousPayTerm(payTermEnd, now);
   const daysLeft = payday != null ? daysUntilPayday(payday, now) : null;
   const next = payday != null ? nextPayday(payday, now) : null;
 
   const sessions = config?.sessions ?? [];
-  const termHours = term ? sumHoursInTerm(sessions, term) : 0;
-  const prevTermHours = prevTerm ? sumHoursInTerm(sessions, prevTerm) : 0;
+  const termHours = sumHoursInTerm(sessions, term);
+  const prevTermHours = sumHoursInTerm(sessions, prevTerm);
 
   // Most recent session's rate is the sensible default when logging a new one
   // — a raise still needs one manual override, but the common case is nothing
@@ -88,23 +92,29 @@ export default function WorkHub() {
     return null;
   }, [sessions]);
 
-  const termGross = term ? sumEarningsInTerm(sessions, term) : 0;
-  const prevTermGross = prevTerm ? sumEarningsInTerm(sessions, prevTerm) : 0;
+  const termGross = sumEarningsInTerm(sessions, term);
+  const prevTermGross = sumEarningsInTerm(sessions, prevTerm);
   const termEarnings = computeEarnings(termGross);
   const prevTermEarnings = computeEarnings(prevTermGross);
 
-  // Preview of the pay-term that STARTS after `next`. Useful during the first
-  // couple of days after payday, when sessions logged today already count
-  // toward the upcoming payslip.
+  // The pay-term after the current one — useful preview in the last couple
+  // of days before the boundary flips.
   const nextTermPreview = useMemo(() => {
-    if (!payday || !next) return null;
-    const start = new Date(next);
-    start.setDate(start.getDate() + 1);
-    const end = resolvePayday(payday, next.getFullYear(), next.getMonth() + 1);
-    if (!end) return null;
+    const start = new Date(term.end); start.setDate(start.getDate() + 1);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    // Advance to that month's payTermEnd (clamped).
+    const daysInMonth = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
+    end.setDate(Math.min(payTermEnd, daysInMonth));
+    end.setHours(0, 0, 0, 0);
+    // If start > end (rare edge with early payTermEnd), roll end into next month.
+    if (end < start) {
+      end.setMonth(end.getMonth() + 1);
+      const dim = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
+      end.setDate(Math.min(payTermEnd, dim));
+    }
     return { start, end };
-  }, [payday, next]);
-  const nextTermPreviewHours = nextTermPreview ? sumHoursInTerm(sessions, nextTermPreview) : 0;
+  }, [term.end, payTermEnd]);
+  const nextTermPreviewHours = sumHoursInTerm(sessions, nextTermPreview);
 
   async function post(body: Record<string, unknown>) {
     setSaving(true);
@@ -144,10 +154,16 @@ export default function WorkHub() {
     setEditingPayday(false);
   }
 
+  async function savePayTermEnd(draft: string) {
+    const n = Number(draft);
+    if (!Number.isFinite(n) || n < 1 || n > 31) return;
+    await post({ payTermEnd: Math.floor(n) });
+    setEditingPayTerm(false);
+  }
+
   // Sessions in the current pay-term (indexed pointers back to `sessions` so
   // delete-by-index still works after sorting).
   const currentTermSessionsWithIdx = useMemo(() => {
-    if (!term) return [];
     const s = dateKey(term.start), e = dateKey(term.end);
     const out: Array<{ session: WorkSession; realIdx: number }> = [];
     sessions.forEach((sess, i) => { if (sess.date >= s && sess.date <= e) out.push({ session: sess, realIdx: i }); });
@@ -164,8 +180,8 @@ export default function WorkHub() {
   const totalAll = sessions.reduce((s, x) => s + x.hours, 0);
   const grossAll = sessions.reduce((s, x) => s + (typeof x.hourlyRate === "number" ? x.hours * x.hourlyRate : 0), 0);
 
-  const termLabel = term ? `${formatShortDate(dateKey(term.start))} → ${formatShortDate(dateKey(term.end))}` : "no payday set";
-  const prevTermLabel = prevTerm ? `${formatShortDate(dateKey(prevTerm.start))} → ${formatShortDate(dateKey(prevTerm.end))}` : null;
+  const termLabel = `${formatShortDate(dateKey(term.start))} → ${formatShortDate(dateKey(term.end))}`;
+  const prevTermLabel = `${formatShortDate(dateKey(prevTerm.start))} → ${formatShortDate(dateKey(prevTerm.end))}`;
 
   return (
     <HubShell
@@ -198,15 +214,26 @@ export default function WorkHub() {
                 <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Current pay-term</div>
                 <div className="text-sm">{termLabel}</div>
               </div>
-              <button
-                type="button"
-                onClick={() => setEditingPayday(true)}
-                className="text-xs px-2 py-1 rounded-md"
-                style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
-                title={`Payday: ${formatPaydayLabel(payday)}`}
-              >
-                {daysLeft == null ? "Set payday" : daysLeft === 0 ? "Payday today 🎉" : `Payday in ${daysLeft}d`}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingPayTerm(true)}
+                  className="text-xs px-2 py-1 rounded-md"
+                  style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
+                  title="Day-of-month the pay-term ends. Sessions from (this+1) to next month's (this) roll up to one payslip."
+                >
+                  Term ends day {payTermEnd}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingPayday(true)}
+                  className="text-xs px-2 py-1 rounded-md"
+                  style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
+                  title={`Payday: ${formatPaydayLabel(payday)}`}
+                >
+                  {daysLeft == null ? "Set payday" : daysLeft === 0 ? "Payday today 🎉" : `Payday in ${daysLeft}d`}
+                </button>
+              </div>
             </div>
             <div className="text-3xl font-bold" style={{ color: "var(--accent-cyan)" }}>
               {formatHoursMinutes(termHours)}
@@ -250,25 +277,42 @@ export default function WorkHub() {
                 <button onClick={() => setEditingPayday(false)} className="text-xs" style={{ color: "var(--text-muted)" }}>Cancel</button>
               </div>
             )}
+
+            {editingPayTerm && (
+              <div
+                className="mt-3 flex items-center gap-2 p-2 rounded-lg"
+                style={{ background: "var(--surface-2)", border: "1px solid var(--accent-cyan)" }}
+              >
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>Pay-term ends day</span>
+                <input
+                  type="number" min="1" max="31"
+                  value={payTermDraft}
+                  onChange={(e) => setPayTermDraft(e.target.value)}
+                  className="text-sm w-16 px-2 py-1 rounded"
+                  style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)" }}
+                />
+                <button onClick={() => savePayTermEnd(payTermDraft)} disabled={saving} className="text-sm px-2 py-1 rounded"
+                        style={{ background: "var(--accent-cyan)22", color: "var(--accent-cyan)", border: "1px solid var(--accent-cyan)" }}>Save</button>
+                <button onClick={() => setEditingPayTerm(false)} className="text-xs" style={{ color: "var(--text-muted)" }}>Cancel</button>
+              </div>
+            )}
           </div>
 
-          {/* Previous pay-term — always visible when one exists, so the payslip
-              stays checkable for a while after the 23rd. */}
-          {prevTerm && (
-            <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-              <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Last pay-term</div>
-              <div className="text-sm mb-1">{prevTermLabel}</div>
-              <div className="text-2xl font-bold" style={{ color: "var(--text)" }}>
-                {formatHoursMinutes(prevTermHours)}
-              </div>
-              {prevTermGross > 0 && (
-                <EarningsBreakdown label="Last payslip" e={prevTermEarnings} accent="var(--text)" />
-              )}
-              <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>Reflected on your most recent payslip.</div>
+          {/* Previous pay-term — always visible so the payslip stays checkable
+              for a while after the 23rd. */}
+          <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+            <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Last pay-term</div>
+            <div className="text-sm mb-1">{prevTermLabel}</div>
+            <div className="text-2xl font-bold" style={{ color: "var(--text)" }}>
+              {formatHoursMinutes(prevTermHours)}
             </div>
-          )}
+            {prevTermGross > 0 && (
+              <EarningsBreakdown label="Last payslip" e={prevTermEarnings} accent="var(--text)" />
+            )}
+            <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>Paid out on the payday for this term.</div>
+          </div>
 
-          {nextTermPreview && nextTermPreviewHours > 0 && (
+          {nextTermPreviewHours > 0 && (
             <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Next pay-term (already logged)</div>
               <div className="text-sm mb-1">{formatShortDate(dateKey(nextTermPreview.start))} → {formatShortDate(dateKey(nextTermPreview.end))}</div>

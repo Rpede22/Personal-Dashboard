@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import HubShell from "@/components/HubShell";
 import { ddragonChampionIcon } from "@/lib/riot";
+import { computeEarnings, dateKey, formatDkk } from "@/lib/payday";
 
 interface Run { date: string; distance: number; duration: number }
 interface Assignment { id: number; title: string; subject: string | null; status: string; dueDate: string }
@@ -80,6 +81,11 @@ export default function WeeklyReview() {
     kmStreak: number;
     /** Weeks with a positive LoL W-L, counted backwards from the current week. */
     lolStreak: number;
+    workHours: number;
+    prevWorkHours: number;
+    workNet: number;
+    prevWorkNet: number;
+    workSessionCount: number;
   } | null>(null);
 
   useEffect(() => {
@@ -94,7 +100,7 @@ export default function WeeklyReview() {
       const prevStart = new Date(weekStart);
       prevStart.setDate(prevStart.getDate() - 7);
 
-      const [runsRes, schoolRes, calRes, accountsRes, sportsRes, nhlRes] = await Promise.allSettled([
+      const [runsRes, schoolRes, calRes, accountsRes, sportsRes, nhlRes, workRes] = await Promise.allSettled([
         // Widened to 200 runs so streak detection has enough history.
         fetch("/api/running?limit=200").then((r) => r.json()),
         fetch("/api/school?status=done").then((r) => r.json()),
@@ -102,6 +108,7 @@ export default function WeeklyReview() {
         fetch("/api/lol/account").then((r) => r.json()),
         fetch("/api/sports").then((r) => r.json()),
         fetch("/api/nhl/schedule").then((r) => r.json()),
+        fetch("/api/work").then((r) => r.json()),
       ]);
 
       const allRuns: Run[] = runsRes.status === "fulfilled" ? (runsRes.value?.runs ?? []) : [];
@@ -203,6 +210,29 @@ export default function WeeklyReview() {
         else break;
       }
 
+      // Work hours + net kr for the rolling 7-day window. Sessions carry a
+      // `date` (YYYY-MM-DD) + `hours` + optional `hourlyRate`. Sum both
+      // windows so we can show a delta vs the previous 7 days.
+      interface WorkSession { date: string; hours: number; hourlyRate?: number }
+      const workCfg = workRes.status === "fulfilled" ? workRes.value : null;
+      const workSessions: WorkSession[] = workCfg?.sessions ?? [];
+      const wStartKey = dateKey(weekStart);
+      const wEndKey = dateKey(new Date(weekEnd.getTime() - 1));
+      const pStartKey = dateKey(prevStart);
+      const pEndKey = dateKey(new Date(weekStart.getTime() - 1));
+      let workHours = 0, workGross = 0, prevWorkHours = 0, prevWorkGross = 0;
+      for (const s of workSessions) {
+        if (s.date >= wStartKey && s.date <= wEndKey) {
+          workHours += s.hours;
+          if (typeof s.hourlyRate === "number") workGross += s.hours * s.hourlyRate;
+        } else if (s.date >= pStartKey && s.date <= pEndKey) {
+          prevWorkHours += s.hours;
+          if (typeof s.hourlyRate === "number") prevWorkGross += s.hours * s.hourlyRate;
+        }
+      }
+      const workNet = computeEarnings(workGross).net;
+      const prevWorkNet = computeEarnings(prevWorkGross).net;
+
       if (!cancelled) {
         setData({
           weekStart, weekEnd,
@@ -214,6 +244,7 @@ export default function WeeklyReview() {
           nhlGames,
           dragonVersion,
           kmStreak, lolStreak,
+          workHours, prevWorkHours, workNet, prevWorkNet, workSessionCount: workSessions.filter((s) => s.date >= wStartKey && s.date <= wEndKey).length,
         });
         setLoading(false);
       }
@@ -231,7 +262,7 @@ export default function WeeklyReview() {
     );
   }
 
-  const { weekStart, weekEnd, runs, prevRuns, schoolDone, prevSchoolDone, calendarHours, prevCalendarHours, lolMatches, prevLolMatches, topChamp, sports, nhlGames, dragonVersion, kmStreak, lolStreak } = data;
+  const { weekStart, weekEnd, runs, prevRuns, schoolDone, prevSchoolDone, calendarHours, prevCalendarHours, lolMatches, prevLolMatches, topChamp, sports, nhlGames, dragonVersion, kmStreak, lolStreak, workHours, prevWorkHours, workNet, prevWorkNet, workSessionCount } = data;
   const kmThisWeek = runs.reduce((s, r) => s + r.distance, 0);
   const kmPrev = prevRuns.reduce((s, r) => s + r.distance, 0);
   const runsSecs = runs.reduce((s, r) => s + r.duration, 0);
@@ -336,6 +367,31 @@ export default function WeeklyReview() {
                 <li className="text-xs" style={{ color: "var(--text-muted)" }}>…and {schoolDone.length - 5} more</li>
               )}
             </ul>
+          )}
+        </Section>
+
+        {/* Work */}
+        <Section title="💼 Work" href="/work">
+          {workHours === 0 ? (
+            <div className="text-sm" style={{ color: "var(--text-muted)" }}>No hours logged this week.</div>
+          ) : (
+            <>
+              <StatRow
+                label="Hours worked"
+                value={`${Math.floor(workHours)}h ${Math.round((workHours - Math.floor(workHours)) * 60)}m`}
+                sub={`across ${workSessionCount} session${workSessionCount === 1 ? "" : "s"}`}
+                delta={{ current: workHours, previous: prevWorkHours, unit: "h" }}
+              />
+              {workNet > 0 && (
+                <StatRow
+                  label="Estimated net"
+                  value={formatDkk(workNet)}
+                  sub="after AM-bidrag + A-skat"
+                  valueColor="var(--accent-green)"
+                  delta={prevWorkNet > 0 ? { current: workNet, previous: prevWorkNet, unit: " kr", decimals: 0 } : undefined}
+                />
+              )}
+            </>
           )}
         </Section>
 

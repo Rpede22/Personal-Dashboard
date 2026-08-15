@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import TitleRace from "@/components/sports/TitleRace";
+import ReorderableTabs from "@/components/ReorderableTabs";
 
 interface MatchStats {
   homeTeam: string | null;
@@ -153,6 +154,8 @@ interface LivePlayoffSeries {
   bottom: LivePlayoffSide;
   complete: boolean;
   games: LivePlayoffGame[];
+  bronzeFormat?: boolean;
+  bronzeWinner?: string;
 }
 interface LivePlayoffs {
   season: string;
@@ -526,23 +529,22 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-2">
-        {tabs.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
-            style={{
-              background: tab === t ? accent : "var(--surface)",
-              color: tab === t ? "#fff" : "var(--text-muted)",
-              border: `1px solid ${tab === t ? accent : "var(--border)"}`,
-            }}
-          >
-            {t === "top-scorers" ? "Top scorers" : t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
-      </div>
+      {/* Tabs — reorderable per team (hockey adds a Playoffs tab; the picker
+          only shows tabs available for this team). */}
+      <ReorderableTabs
+        hubKey={`sports:${teamSlug}`}
+        defaults={tabs}
+        active={tab}
+        labels={{
+          "standings":    "Standings",
+          "schedule":     "Schedule",
+          "top-scorers":  "Top scorers",
+          "playoffs":     "Playoffs",
+        }}
+        onSelect={setTab}
+        accent={accent}
+        variant="pill"
+      />
       </div> {/* end sticky header */}
 
       {loading ? (
@@ -863,14 +865,30 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                   <div key={r.name}>
                     <h3 className="font-semibold text-sm mb-3 uppercase tracking-wide" style={{ color: r.active ? accent : "var(--text-muted)" }}>
                       {r.name}{r.active ? " · active" : ""}
+                      {r.series.some((s) => s.bronzeFormat) && (
+                        <span className="ml-2 text-[10px] font-normal normal-case tracking-normal" style={{ color: "var(--text-muted)" }}>
+                          (2-game aggregate · OT golden goal on tie)
+                        </span>
+                      )}
                     </h3>
                     <div className={r.series.length === 1 ? "" : "grid grid-cols-1 md:grid-cols-2 gap-3"}>
                       {r.series.map((s, si) => {
                         const isThisTeam =
                           s.top.team.toLowerCase().includes(keyword.toLowerCase()) ||
                           s.bottom.team.toLowerCase().includes(keyword.toLowerCase());
-                        const topWon = s.complete && s.top.wins > s.bottom.wins;
-                        const bottomWon = s.complete && s.bottom.wins > s.top.wins;
+                        // Bronze is a two-game aggregate + OT golden-goal
+                        // decider. `bronzeWinner` is set by the metalligaen
+                        // lib once both games are finished — win pips read
+                        // 1-1 in that case but the winner is unambiguous.
+                        const topWon = s.bronzeFormat
+                          ? s.bronzeWinner === s.top.shortcut
+                          : s.complete && s.top.wins > s.bottom.wins;
+                        const bottomWon = s.bronzeFormat
+                          ? s.bronzeWinner === s.bottom.shortcut
+                          : s.complete && s.bottom.wins > s.top.wins;
+                        // For bronze, only two pips per side (best-of-2 aggregate).
+                        const pipCount = s.bronzeFormat ? 2 : 4;
+                        const pipIndexes = Array.from({ length: pipCount }, (_, i) => i);
                         return (
                           <div
                             key={si}
@@ -897,29 +915,70 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                                 </div>
                               </div>
                               <div className="text-center shrink-0 flex items-center gap-1">
-                                {[0, 1, 2, 3].map((i) => (
-                                  <div
-                                    key={i}
-                                    className="w-3.5 h-3.5 rounded-sm"
-                                    style={{
-                                      background: i < s.top.wins ? (topWon ? "var(--accent-green)" : accent) : "var(--surface)",
-                                      border: "1px solid var(--border)",
-                                    }}
-                                  />
-                                ))}
+                                {pipIndexes.map((i) => {
+                                  // For bronze: green pip = won that game;
+                                  // otherwise mirror the best-of-7 look
+                                  // (accent while active, green when the
+                                  // series is over and this side won).
+                                  let filled: boolean;
+                                  if (s.bronzeFormat) {
+                                    const g = s.games[i];
+                                    filled = !!g?.finished && (g.homeScore ?? 0) + (g.awayScore ?? 0) > 0 && (
+                                      (g.homeTeam === s.top.team && (g.homeScore ?? 0) > (g.awayScore ?? 0)) ||
+                                      (g.awayTeam === s.top.team && (g.awayScore ?? 0) > (g.homeScore ?? 0))
+                                    );
+                                  } else {
+                                    filled = i < s.top.wins;
+                                  }
+                                  return (
+                                    <div
+                                      key={i}
+                                      className="w-3.5 h-3.5 rounded-sm"
+                                      style={{
+                                        background: filled ? (topWon ? "var(--accent-green)" : accent) : "var(--surface)",
+                                        border: "1px solid var(--border)",
+                                      }}
+                                    />
+                                  );
+                                })}
                                 <span className="text-sm font-bold mx-1" style={{ color: "var(--text-muted)" }}>
-                                  {s.top.wins}–{s.bottom.wins}
+                                  {s.bronzeFormat
+                                    ? (() => {
+                                        // Aggregate goals across the pair — much more
+                                        // informative than "1-1 wins" on a best-of-2.
+                                        let topGoals = 0, botGoals = 0;
+                                        for (const g of s.games.filter((x) => x.finished)) {
+                                          if (g.homeTeam === s.top.team)    topGoals += (g.homeScore ?? 0);
+                                          if (g.awayTeam === s.top.team)    topGoals += (g.awayScore ?? 0);
+                                          if (g.homeTeam === s.bottom.team) botGoals += (g.homeScore ?? 0);
+                                          if (g.awayTeam === s.bottom.team) botGoals += (g.awayScore ?? 0);
+                                        }
+                                        return `${topGoals}–${botGoals}`;
+                                      })()
+                                    : `${s.top.wins}–${s.bottom.wins}`}
                                 </span>
-                                {[0, 1, 2, 3].map((i) => (
-                                  <div
-                                    key={i}
-                                    className="w-3.5 h-3.5 rounded-sm"
-                                    style={{
-                                      background: i < s.bottom.wins ? (bottomWon ? "var(--accent-green)" : "var(--accent-orange)") : "var(--surface)",
-                                      border: "1px solid var(--border)",
-                                    }}
-                                  />
-                                ))}
+                                {pipIndexes.map((i) => {
+                                  let filled: boolean;
+                                  if (s.bronzeFormat) {
+                                    const g = s.games[i];
+                                    filled = !!g?.finished && (
+                                      (g.homeTeam === s.bottom.team && (g.homeScore ?? 0) > (g.awayScore ?? 0)) ||
+                                      (g.awayTeam === s.bottom.team && (g.awayScore ?? 0) > (g.homeScore ?? 0))
+                                    );
+                                  } else {
+                                    filled = i < s.bottom.wins;
+                                  }
+                                  return (
+                                    <div
+                                      key={i}
+                                      className="w-3.5 h-3.5 rounded-sm"
+                                      style={{
+                                        background: filled ? (bottomWon ? "var(--accent-green)" : "var(--accent-orange)") : "var(--surface)",
+                                        border: "1px solid var(--border)",
+                                      }}
+                                    />
+                                  );
+                                })}
                               </div>
                               <div className="flex-1 min-w-0 text-right">
                                 <div className="flex items-center justify-end gap-1.5">

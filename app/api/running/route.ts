@@ -15,7 +15,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { date, distance, duration, notes } = body;
+  const { date, distance, duration, notes, shoeId } = body;
 
   if (!date || !distance || !duration) {
     return NextResponse.json(
@@ -30,6 +30,7 @@ export async function POST(request: Request) {
   // but the snapshot means we can start doing so without losing history.
   const planForDay = await prisma.runPlan.findFirst({ where: { date: runDate } });
 
+  const parsedShoeId = shoeId == null || shoeId === "" ? null : Number(shoeId);
   const run = await prisma.runLog.create({
     data: {
       date: runDate,
@@ -37,6 +38,7 @@ export async function POST(request: Request) {
       duration: parseInt(duration),
       notes: notes ?? null,
       plannedDistance: planForDay?.distance ?? null,
+      shoeId: Number.isInteger(parsedShoeId) ? parsedShoeId : null,
     },
   });
 

@@ -17,6 +17,7 @@ The home screen is a 2-column grid of widgets, each linking to a full hub page:
 | 📅 **Calendar** | Pink | Upcoming events pulled live from iCloud CalDAV |
 | 💼 **Work Hours** | Cyan | Manual session log, current pay-term totals in `Xh Ym`, estimated net kr after AM-bidrag (8%) + A-skat (38%), payday countdown |
 | 📰 **News** | Orange | Latest 5 TV2 headlines with section chip and relative timestamps; click opens the article in a new tab |
+| 📺 **Tonight on TV** | Purple | Manually-tracked Danish TV shows airing tonight — chip per show with `HH:MM · title · channel · in Xh Ym` |
 
 ---
 
@@ -187,6 +188,9 @@ The Running Hub has three tabs:
   - All logic lives in [lib/training-planner.ts](lib/training-planner.ts) — pure functions, easy to tweak the framework.
 
 - **Run detail popup:** for Strava-imported runs, shows a large Leaflet route map (400 px tall with a **⛶ Fullscreen** button that expands to the full viewport). Fullscreen has a solid black background, a bright red **✕ Exit fullscreen** button (always visible over any map colour), locks body scroll while active, and swallows wheel/touch events so the modal underneath doesn't scroll behind. Escape also exits. The map uses a `ResizeObserver` to re-invalidate Leaflet's tile layout whenever the container resizes, which fixes the half-loaded / partial-tile bug during fullscreen transitions. Popup also shows core stats (distance, duration, pace, elevation), heart rate and cadence (if recorded), and a per-km splits table. Manually logged runs show basic stats only. Fixed header (title + close button always visible), rest scrolls below.
+- **Weather-at-run overlay:** every Strava-imported run stores the historic weather at its start (open-meteo archive endpoint — free, no key; uses the activity's `start_latlng`, falls back to Aarhus for manual runs). Displayed in the Run Detail popup as `☀️ Clear · 15° (feels 13°) · 💨 2.3 m/s · ☔ 0.4 mm`. Backfill button `Sync weather` in the Strava panel batches 40 per click until all runs are stamped.
+- **HR-zone breakdown:** Strava's raw HR + time streams are bucketed into Z1..Z5 (60/70/80/90 % of an estimated max) and cached per-run. Run Detail shows a stacked bar + per-zone `seconds · %` cards. Backfill button `Sync HR zones` in the Strava panel. Runs recorded without a HR sensor get a sentinel so we don't keep asking.
+- **Shoe-mileage tracker:** add pairs to the `👟 My shoes` panel; a green→orange→red progress bar tracks each pair against **600 km** (rotate warning) and **800 km** (retire). Every logged/synced run auto-picks the last-used non-retired shoe (Strava sync too); each row in the Run Log has a `Shoe` cell you can change to fix mistakes. Retiring a shoe hides it from the log form's default without deleting historical mileage.
 - **Strava errors** are shown with actionable hints — 403 (missing scope, reconnect Strava), 401 (token expired), 429 (rate limit).
 - **Training progress:** two bar charts appear once you have runs logged — *Weekly Kilometers* (last 12 weeks, current week highlighted; label shows the Mon–Sun date range, e.g. `18 May – 24 May`) and *Longest Run* (best run per month for the last 6 months; label is just the month name, e.g. `Dec`).
 - **Stats bar** at the top of the hub (This week / Last 30 days / etc.) is shown to 2 decimals so nothing is rounded away.
@@ -243,8 +247,36 @@ The Work widget is a small summary that links into a full `/work` hub.
 
 ## News (TV2)
 
-- **Widget** — latest 5 headlines from `nyheder.tv2.dk`: section chip · headline (2-line clamp) · relative timestamp (`today` / `yesterday` / `Nd ago` / short date after a week). Clicking opens the article in a new tab. Auto-refresh every 15 min.
-- **Hub** — full list of the last ~50 headlines with a section filter row (`All · Business · Politik · Udland …`). TV2 doesn't publish a public RSS feed, so the route scrapes the front page HTML for anchors matching `/(<section>/)?YYYY-MM-DD-<slug>`. Headlines get their section prefix stripped and HTML entities decoded. Cached 15 min server-side to be polite to their edge.
+- **Widget** — latest 5 headlines from **`nyheder.tv2.dk` + `sport.tv2.dk`** (scraped in parallel): section chip · headline (2-line clamp) · relative timestamp. For the top 20 headlines the timestamp is a real publish time (`14m` / `3h` / `today` / `yesterday` / `Nd ago`); older articles fall back to the date from the URL. Clicking opens the article in a new tab. Auto-refresh every 15 min.
+- **Hub** — full list of the last ~50 headlines with a section filter row (`All · Business · Politik · Sport · Udland …`) and a **Flat / Grouped** view toggle in the header. Grouped view renders one card per section with its own headline list, which is much easier to skim when there are 50 articles. TV2 doesn't publish a public RSS feed, so the route scrapes each host's front-page HTML for anchors matching `/(<section>(/<subsection>)?/)?YYYY-MM-DD-<slug>`. The two-segment path pattern was added so live articles under `/live/krimi/…` surface (they were being skipped before). Headlines get their section prefix stripped (deepest segment first) and HTML entities decoded. Cached 15 min server-side; publish-time lookups per URL are cached indefinitely.
+
+---
+
+## Weather
+
+- **Header strip** — the small icon + high/low + rain-% line at the top of the Today briefing (`components/dashboard/WeatherLine.tsx`) now doubles as the entry point to the full hub. Click anywhere on the strip → opens `/weather`.
+- **Hub (`/weather`)** — a single-column, single-city view (defaults to Aarhus C but the city is user-selectable — see below):
+  - **Now** — big current temperature + `feels-like` + wind (m/s) + UV + today's high/low, decoded from open-meteo's WMO code table (`☀️ 🌤️ ☁️ 🌫️ 🌦️ 🌧️ 🌨️ ⛈️`).
+  - **Best run window today** — scores every 06:00–22:00 hour by rain probability (heavy penalty), how close feels-like is to the ideal 14 °C, and wind above 4 m/s. Picks the best 2h block and shows it with a 0–100 score.
+  - **Today hourly** + **Tomorrow hourly** — scrollable 24-cell strips with icon + °C + rain %; hovering a cell reveals feels-like + wind.
+  - **Next 7 days** — icon + high/low + rain % + max UV per day, with today outlined in cyan.
+  - **Sunrise / sunset / daylight** — plus a `± N min vs yesterday` delta (approximated as `tomorrow − today`, since open-meteo's forecast starts from today and there's no yesterday row in the response).
+- **City picker** in the hub header — chips for every stored city (defaults: Aarhus C, Copenhagen, Esbjerg, Odense, Aalborg) plus a search box that geocodes new cities via open-meteo (no key). Selecting a chip re-fetches immediately and the header WeatherLine on the dashboard follows the same selection (persisted to `localStorage["dashboard.weather.city"]`).
+- Data source: [open-meteo](https://open-meteo.com/) — free, no API key. Refreshes every 60 min in both the strip and the hub.
+
+---
+
+## Media (Danish TV)
+
+Manual tracker — no scrape, no third-party account.
+
+- **Widget** — tonight's chips (one per show airing on today's weekday), sorted by air time. Rows within the next 2 h are tinted purple; aired shows fade. `HH:MM · title · channel · in Xh Ym`.
+- **Hub (`/media`)** — three sections:
+  - **Tonight** — the same today-chips as the widget with the addition of a `🔴 N shows within the next 2h` badge.
+  - **This week** — a Mon–Sun grid, one card per day listing the shows on it. Today's card is outlined in the purple accent.
+  - **All shows** — every tracked show as a row you can inline-edit, mark on hiatus, delete, or bump `+1 ep` on for the running episode counter.
+- **Add form** — title (required) + optional channel + air time (`HH:MM`; leave blank if it varies) + weekday multi-select chips + optional notes.
+- **Schema** — a single `MediaShow` model with `airDays` stored as a comma-separated string of JS day numbers (`0=Sun … 6=Sat`) so SQLite doesn't need JSON columns. CRUD via `GET/POST/PATCH/DELETE /api/media`.
 
 ---
 

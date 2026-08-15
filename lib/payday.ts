@@ -1,11 +1,27 @@
 /**
- * Payday helpers. Payday can be:
+ * Payday helpers.
+ *
+ * The **pay-term** and **payday** are two separate concepts:
+ *   - `PayTermEnd` (day-of-month, 1..31) defines the boundary of the accounting
+ *     window. Default 23. A term runs `(prevEnd + 1) → thisEnd`, so with
+ *     payTermEnd=23 the current window is "24th of last month → 23rd of this
+ *     month". Everything worked inside the window rolls up to one payslip.
+ *   - `Payday` is when that payslip actually pays out. Common Danish shape:
+ *     work-period ends on the 23rd, kroner arrive on the last banking day of
+ *     the month — several days after the term has already flipped to the next
+ *     window.
+ *
+ * `Payday` can be:
  *   - a day-of-month (1..31), clamped to the target month's length
  *   - "last-weekday": the last Mon–Fri of the target month
  *   - null: no payday configured
  */
 
 export type Payday = number | "last-weekday" | null;
+
+/** Day-of-month (1..31) — the end of one pay-term / start of the next. */
+export type PayTermEnd = number;
+export const DEFAULT_PAY_TERM_END: PayTermEnd = 23;
 
 /** Last weekday (Mon–Fri) of the given year/month (0-indexed month). */
 export function lastWeekdayOfMonth(year: number, monthIdx: number): number {
@@ -50,45 +66,42 @@ export function daysUntilPayday(payday: Payday, now: Date = new Date()): number 
 }
 
 /**
- * The pay-term is the window that ends at the next payday and begins the
- * day after the previous payday (exclusive of the previous, inclusive of
- * the current). Returns { start, end } — both local midnight; `end` is the
- * payday itself (inclusive on the day, so we compare with `date <= end`).
+ * Resolve a pay-term-end day for (year, monthIdx) to a local-midnight Date.
+ * Day is clamped to the month's length (Feb 30 → Feb 28/29).
  */
-export function currentPayTerm(payday: Payday, now: Date = new Date()): { start: Date; end: Date } | null {
-  if (payday == null) return null;
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const end = nextPayday(payday, now);
-  if (!end) return null;
-  // Previous payday = the payday of the month before `end`'s month
-  // (or same month if end is >1 payday per month — not the case here).
-  const prev = resolvePayday(payday, end.getFullYear(), end.getMonth() - 1);
-  if (!prev) return null;
-  const start = new Date(prev);
-  start.setDate(start.getDate() + 1); // exclusive of previous payday
-  return { start, end };
+function resolvePayTermEnd(payTermEnd: PayTermEnd, year: number, monthIdx: number): Date {
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+  const day = Math.max(1, Math.min(payTermEnd, daysInMonth));
+  const d = new Date(year, monthIdx, day);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 /**
- * The most-recently-completed pay term: end = previous payday (today or earlier),
- * start = one day after the payday before that. Returns null if the payday isn't
- * set or the previous term can't be resolved yet.
+ * The pay-term that contains `now`. Term ends on `payTermEnd` and begins the
+ * day after the previous month's `payTermEnd`. With payTermEnd=23:
+ *   - Aug 10 → term Jul 24 → Aug 23
+ *   - Aug 23 → term Jul 24 → Aug 23 (last day of term)
+ *   - Aug 24 → term Aug 24 → Sep 23 (first day of next term)
  */
-export function previousPayTerm(payday: Payday, now: Date = new Date()): { start: Date; end: Date } | null {
-  if (payday == null) return null;
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const next = nextPayday(payday, now);
-  if (!next) return null;
-  // Previous payday = last month's payday (or same month if next is next month's)
-  const prev = resolvePayday(payday, next.getFullYear(), next.getMonth() - 1);
-  if (!prev) return null;
-  const prevPrev = resolvePayday(payday, prev.getFullYear(), prev.getMonth() - 1);
-  if (!prevPrev) return null;
-  const start = new Date(prevPrev);
-  start.setDate(start.getDate() + 1);
-  return { start, end: prev };
+export function currentPayTerm(payTermEnd: PayTermEnd, now: Date = new Date()): { start: Date; end: Date } {
+  const today = new Date(now); today.setHours(0, 0, 0, 0);
+  const thisMonthEnd = resolvePayTermEnd(payTermEnd, today.getFullYear(), today.getMonth());
+  const end = today <= thisMonthEnd
+    ? thisMonthEnd
+    : resolvePayTermEnd(payTermEnd, today.getFullYear(), today.getMonth() + 1);
+  const prev = resolvePayTermEnd(payTermEnd, end.getFullYear(), end.getMonth() - 1);
+  const start = new Date(prev); start.setDate(start.getDate() + 1);
+  return { start, end };
+}
+
+/** The pay-term immediately preceding the current one. */
+export function previousPayTerm(payTermEnd: PayTermEnd, now: Date = new Date()): { start: Date; end: Date } {
+  const cur = currentPayTerm(payTermEnd, now);
+  const prevEnd = new Date(cur.start); prevEnd.setDate(prevEnd.getDate() - 1);
+  const prevPrev = resolvePayTermEnd(payTermEnd, prevEnd.getFullYear(), prevEnd.getMonth() - 1);
+  const start = new Date(prevPrev); start.setDate(start.getDate() + 1);
+  return { start, end: prevEnd };
 }
 
 /** Sum session hours whose `date` (YYYY-MM-DD) falls within [start, end] inclusive on both ends. */

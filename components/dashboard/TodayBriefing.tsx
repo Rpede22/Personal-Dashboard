@@ -8,10 +8,10 @@ import WeatherLine from "@/components/dashboard/WeatherLine";
  *  `cal` covers both single-event and collapsed-multi rows since only one
  *  cal row ever renders at a time. Sport rows are grouped by slug so
  *  each followed team can be reordered independently. */
-type ItemKind = "cal" | "sport" | "run" | "school";
+type ItemKind = "cal" | "sport" | "run" | "school" | "media";
 
 const ORDER_KEY = "dashboard.today.order";
-const DEFAULT_ORDER: ItemKind[] = ["cal", "sport", "run", "school"];
+const DEFAULT_ORDER: ItemKind[] = ["cal", "sport", "run", "school", "media"];
 
 function loadOrder(): ItemKind[] {
   if (typeof window === "undefined") return DEFAULT_ORDER;
@@ -30,6 +30,7 @@ function itemKind(key: string): ItemKind {
   if (key.startsWith("cal")) return "cal";
   if (key.startsWith("sport")) return "sport";
   if (key === "run") return "run";
+  if (key === "media") return "media";
   return "school";
 }
 
@@ -110,12 +111,13 @@ export default function TodayBriefing() {
     async function load() {
       const now = new Date();
 
-      const [calRes, sportsRes, nhlRes, runRes, schoolRes] = await Promise.allSettled([
+      const [calRes, sportsRes, nhlRes, runRes, schoolRes, mediaRes] = await Promise.allSettled([
         fetch("/api/calendar").then((r) => r.json()),
         fetch("/api/sports").then((r) => r.json()),
         fetch("/api/nhl/schedule").then((r) => r.json()),
         fetch("/api/running/summary").then((r) => r.json()),
         fetch("/api/school?status=pending,in_progress,overdue").then((r) => r.json()),
+        fetch("/api/media").then((r) => r.json()),
       ]);
 
       const out: Item[] = [];
@@ -274,16 +276,18 @@ export default function TodayBriefing() {
         }
       }
 
-      // 3. Today's run plan
+      // 3. Today's run plan. Rest days count as "nothing scheduled" — no
+      // entry — so if the rest of the day is also empty, the quiet-day card
+      // triggers instead of a filler "Rest day" row.
       if (runRes.status === "fulfilled") {
         const plans: RunPlan[] = runRes.value?.upcomingPlans ?? [];
         const today = plans.find((p) => isSameLocalDay(new Date(p.date), now));
-        if (today) {
-          const label = today.type === "rest" ? "Rest day" : `${today.type[0].toUpperCase()}${today.type.slice(1)} run`;
-          const detail = today.distance ? `${today.distance.toFixed(1)} km` : today.type === "rest" ? "recovery" : "planned";
+        if (today && today.type !== "rest") {
+          const label = `${today.type[0].toUpperCase()}${today.type.slice(1)} run`;
+          const detail = today.distance ? `${today.distance.toFixed(1)} km` : "planned";
           out.push({
             key: "run",
-            emoji: today.type === "rest" ? "😴" : "🏃",
+            emoji: "🏃",
             label: "Today's run",
             detail: label,
             meta: today.notes ?? detail,
@@ -313,6 +317,38 @@ export default function TodayBriefing() {
             meta: overdue ? "overdue" : `due in ${formatCountdown(startsIn)}`,
             href: "/school",
             color: overdue ? "var(--accent-red)" : "var(--accent-indigo)",
+          });
+        }
+      }
+
+      // 5. Media shows airing tonight (today's weekday). Skip shows that are
+      // finished (episodesSeen ≥ maxEpisodes) so the briefing doesn't nag
+      // about a series you've already wrapped.
+      if (mediaRes.status === "fulfilled") {
+        interface Show { id: number; title: string; channel: string; airDays: string; airTime: string; active: boolean; episodesSeen: number; maxEpisodes: number | null }
+        const shows: Show[] = mediaRes.value?.shows ?? [];
+        const todayN = now.getDay();
+        const airing = shows
+          .filter((s) => s.active
+            && !(typeof s.maxEpisodes === "number" && s.maxEpisodes > 0 && s.episodesSeen >= s.maxEpisodes)
+            && s.airDays.split(",").some((d) => Number(d) === todayN))
+          .sort((a, b) => (a.airTime || "99:99").localeCompare(b.airTime || "99:99"));
+        if (airing.length > 0) {
+          const first = airing[0];
+          const rest = airing.slice(1);
+          const label = airing.length === 1 ? "Tonight on TV" : `📺 ${airing.length} shows tonight`;
+          const detail = `${first.airTime ? first.airTime + " " : ""}${first.title}${first.channel ? " · " + first.channel : ""}`;
+          const meta = rest.length > 0
+            ? "— then " + rest.map((s) => `${s.airTime || "?"} ${s.title}`).join(" · ")
+            : (first.channel || "");
+          out.push({
+            key: "media",
+            emoji: "📺",
+            label,
+            detail,
+            meta,
+            href: "/media",
+            color: "var(--accent-purple)",
           });
         }
       }

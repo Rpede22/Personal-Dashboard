@@ -392,7 +392,7 @@ function buildSessions(
     const cutbackEasy = Math.max(1, runDays - 2); // 1 tempo + 1 long + N easy
     const easyKm = easySize(targetKm, cutbackEasy, false);
     const longKm = round05(easyKm * 1.4);
-    const tempoKm = easyKm;
+    const tempoKm = Math.min(6, easyKm); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo and becomes a race effort.
 
     const sessions: PlannedSession[] = [
       easyOn("Mon", easyKm),
@@ -425,7 +425,7 @@ function buildSessions(
     // 4 runs: one quality (tempo), 2 easy, 1 long — still no speed yet
     const easyKm = easySize(targetKm, 2, false);
     const longKm = round05(easyKm * 1.4);
-    const tempoKm = easyKm;
+    const tempoKm = Math.min(6, easyKm); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo and becomes a race effort.
     return [
       easyOn("Mon", easyKm),
       rest("Tue"),
@@ -441,7 +441,7 @@ function buildSessions(
     // 1 speed + 1 tempo + 2 easy + 1 long
     const easyKm = easySize(targetKm, 2, true);
     const longKm = round05(easyKm * 1.4);
-    const tempoKm = easyKm;
+    const tempoKm = Math.min(6, easyKm); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo and becomes a race effort.
     return [
       easyOn("Mon", easyKm),
       speedSession("Tue"),
@@ -457,7 +457,7 @@ function buildSessions(
   {
     const easyKm = easySize(targetKm, 3, true);
     const longKm = round05(easyKm * 1.4);
-    const tempoKm = easyKm;
+    const tempoKm = Math.min(6, easyKm); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo and becomes a race effort.
     return [
       easyOn("Mon", easyKm),
       speedSession("Tue"),
@@ -506,7 +506,7 @@ export function buildSessionsFromComposition(
   const budget = Math.max(0, targetKm - speedTotal);
   const E = unitDenom > 0 ? Math.max(3, round05(budget / unitDenom)) : 0;
   const longKm  = round05(E * 1.4);
-  const tempoKm = E;
+  const tempoKm = Math.min(6, E); // Cap tempo at 6 km — see comment in buildSessions().
   const easyKm  = E;
 
   // Priority day slots per type. The order encodes "put quality where it has

@@ -25,7 +25,24 @@ interface RunLog {
   notes: string | null;
   stravaId: string | null;
   bestEffortsJson?: string | null;
+  weatherJson?: string | null;
+  hrZonesJson?: string | null;
+  shoeId?: number | null;
 }
+
+interface Shoe {
+  id: number;
+  name: string;
+  purchaseDate: string | null;
+  retired: boolean;
+  notes: string;
+  sortOrder: number;
+  totalKm: number;
+  runs: number;
+}
+
+const SHOE_WARN_KM = 600;
+const SHOE_RETIRE_KM = 800;
 
 interface RunPlan {
   id: number;
@@ -104,6 +121,7 @@ export default function RunningHub() {
     durationMin: "",
     durationSec: "",
     notes: "",
+    shoeId: "",
   });
 
   // Planner state
@@ -208,28 +226,99 @@ export default function RunningHub() {
   // remaining or a batch fails.
   const [effortsLoading, setEffortsLoading] = useState(false);
   const [effortsResult, setEffortsResult] = useState<string | null>(null);
-  async function syncStravaEfforts() {
-    setEffortsLoading(true);
-    setEffortsResult(null);
+  const [zonesLoading, setZonesLoading] = useState(false);
+  const [zonesResult, setZonesResult] = useState<string | null>(null);
+
+  const [shoes, setShoes] = useState<Shoe[]>([]);
+  const [newShoeName, setNewShoeName] = useState("");
+  const [newShoePurchase, setNewShoePurchase] = useState("");
+  async function loadShoes() {
+    try {
+      const res = await fetch("/api/running/shoes");
+      const j = await res.json();
+      setShoes(j.shoes ?? []);
+    } catch { /* silent */ }
+  }
+  async function addShoe() {
+    if (!newShoeName.trim()) return;
+    await fetch("/api/running/shoes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newShoeName.trim(), purchaseDate: newShoePurchase || null }),
+    });
+    setNewShoeName(""); setNewShoePurchase("");
+    loadShoes();
+  }
+  async function toggleShoeRetired(shoe: Shoe) {
+    await fetch("/api/running/shoes", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: shoe.id, retired: !shoe.retired }),
+    });
+    loadShoes();
+  }
+  async function deleteShoe(id: number) {
+    if (!confirm("Delete this shoe? Runs using it stay logged but lose the shoe assignment.")) return;
+    await fetch(`/api/running/shoes?id=${id}`, { method: "DELETE" });
+    loadShoes();
+    loadRuns();
+  }
+  async function assignShoeToRun(runId: number, shoeId: number | null) {
+    await fetch(`/api/running/${runId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shoeId }),
+    });
+    loadRuns();
+    loadShoes();
+  }
+
+  async function batchSync(
+    endpoint: string,
+    setLoading: (b: boolean) => void,
+    setResult: (s: string | null) => void,
+  ) {
+    setLoading(true);
+    setResult(null);
     let totalUpdated = 0;
     try {
       for (let iter = 0; iter < 10; iter++) {
-        const res = await fetch("/api/strava/sync-efforts", { method: "POST" });
+        const res = await fetch(endpoint, { method: "POST" });
         const data = await res.json();
-        if (data.error) { setEffortsResult(`Error: ${data.error}`); break; }
+        if (data.error) { setResult(`Error: ${data.error}`); break; }
         totalUpdated += data.updated ?? 0;
-        setEffortsResult(`Updated ${totalUpdated}${data.remaining > 0 ? ` · ${data.remaining} left` : " · all done"}`);
+        setResult(`Updated ${totalUpdated}${data.remaining > 0 ? ` · ${data.remaining} left` : " · all done"}`);
         if ((data.updated ?? 0) === 0 || (data.remaining ?? 0) === 0) break;
       }
       loadRuns();
-    } catch { setEffortsResult("Sync failed"); }
-    finally { setEffortsLoading(false); }
+    } catch { setResult("Sync failed"); }
+    finally { setLoading(false); }
   }
+
+  const syncStravaEfforts = () => batchSync("/api/strava/sync-efforts", setEffortsLoading, setEffortsResult);
+  const syncStravaZones = () => batchSync("/api/strava/sync-hr-zones", setZonesLoading, setZonesResult);
+  const recomputeStravaZones = async () => {
+    setZonesLoading(true);
+    setZonesResult("Clearing…");
+    try {
+      const res = await fetch("/api/strava/sync-hr-zones?reset=1", { method: "POST" });
+      const data = await res.json();
+      if (data.error) { setZonesResult(`Error: ${data.error}`); setZonesLoading(false); return; }
+      setZonesResult(`Cleared ${data.cleared ?? 0}, resyncing…`);
+    } catch {
+      setZonesResult("Reset failed");
+      setZonesLoading(false);
+      return;
+    }
+    // Re-uses the normal batch loop to refill every cleared row.
+    await batchSync("/api/strava/sync-hr-zones", setZonesLoading, setZonesResult);
+  };
 
   useEffect(() => {
     loadRuns();
     checkStrava();
     loadSummary();
+    loadShoes();
   }, []);
 
   useEffect(() => {
@@ -249,6 +338,15 @@ export default function RunningHub() {
     e.preventDefault();
     const durationSec =
       parseInt(form.durationMin || "0") * 60 + parseInt(form.durationSec || "0");
+    // Default the shoe to the last-used non-retired one if the user didn't pick one.
+    let shoeIdToLog: number | null = form.shoeId ? Number(form.shoeId) : null;
+    if (!shoeIdToLog) {
+      const lastRunWithShoe = runs.find((r) => r.shoeId != null);
+      if (lastRunWithShoe?.shoeId != null) {
+        const stillActive = shoes.find((s) => s.id === lastRunWithShoe.shoeId && !s.retired);
+        if (stillActive) shoeIdToLog = stillActive.id;
+      }
+    }
     await fetch("/api/running", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -257,6 +355,7 @@ export default function RunningHub() {
         distance: parseFloat(form.distanceKm),
         duration: durationSec,
         notes: form.notes || null,
+        shoeId: shoeIdToLog,
       }),
     });
     setForm({
@@ -265,7 +364,9 @@ export default function RunningHub() {
       durationMin: "",
       durationSec: "",
       notes: "",
+      shoeId: form.shoeId, // keep last selection so back-to-back logs don't need re-picking
     });
+    loadShoes();
     setShowForm(false);
     loadRuns();
   }
@@ -494,8 +595,8 @@ export default function RunningHub() {
         <div className="flex gap-1 border-b" style={{ borderColor: "var(--border)" }}>
           {([
             ["overview", "Overview"],
-            ["log",      "Run Log"],
             ["training", "Training"],
+            ["log",      "Run Log"],
           ] as const).map(([tab, label]) => (
             <button
               key={tab}
@@ -609,6 +710,84 @@ export default function RunningHub() {
           </div>
         </div>
       )}
+
+      {/* My shoes — km per pair with warn / retire thresholds */}
+      <div
+        className="rounded-2xl p-4 mb-6"
+        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+      >
+        <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+          <h3 className="text-sm font-semibold" style={{ color: "var(--accent-purple)" }}>
+            👟 My shoes
+          </h3>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Warn at {SHOE_WARN_KM} km · retire at {SHOE_RETIRE_KM} km
+          </span>
+        </div>
+
+        {shoes.length === 0 ? (
+          <p className="text-sm mb-3" style={{ color: "var(--text-muted)" }}>
+            No shoes added yet — add your first pair below to start tracking mileage.
+          </p>
+        ) : (
+          <ul className="space-y-2 mb-3">
+            {shoes.map((s) => {
+              const pctOfRetire = Math.min(1, s.totalKm / SHOE_RETIRE_KM);
+              const warn = s.totalKm >= SHOE_WARN_KM;
+              const retire = s.totalKm >= SHOE_RETIRE_KM;
+              const barColor = retire ? "var(--accent-red)" : warn ? "var(--accent-orange)" : "var(--accent-green)";
+              return (
+                <li key={s.id} className="rounded-lg p-3" style={{ background: "var(--surface-2)", opacity: s.retired ? 0.55 : 1 }}>
+                  <div className="flex items-baseline gap-3 flex-wrap">
+                    <span className="font-semibold">{s.name}</span>
+                    <span className="text-xs tabular-nums" style={{ color: barColor }}>
+                      {s.totalKm.toFixed(1)} km · {s.runs} runs
+                    </span>
+                    {retire && <span className="text-xs" style={{ color: "var(--accent-red)" }}>→ retire</span>}
+                    {!retire && warn && <span className="text-xs" style={{ color: "var(--accent-orange)" }}>→ consider rotating</span>}
+                    {s.retired && <span className="text-xs" style={{ color: "var(--text-muted)" }}>retired</span>}
+                    <span className="ml-auto flex gap-2 text-xs">
+                      <button onClick={() => toggleShoeRetired(s)} style={{ color: "var(--text-muted)" }}>
+                        {s.retired ? "Un-retire" : "Retire"}
+                      </button>
+                      <button onClick={() => deleteShoe(s.id)} style={{ color: "var(--accent-red)" }}>✕</button>
+                    </span>
+                  </div>
+                  <div className="rounded-full mt-2 overflow-hidden" style={{ height: 6, background: "var(--surface)" }}>
+                    <div style={{ width: `${pctOfRetire * 100}%`, height: "100%", background: barColor }} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {/* Quick-add */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <input
+            type="text" placeholder="Add a pair — e.g. Nike Pegasus 41"
+            value={newShoeName} onChange={(e) => setNewShoeName(e.target.value)}
+            className="text-sm px-2 py-1.5 rounded-md flex-1 min-w-[160px]"
+            style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+          />
+          <input
+            type="date" value={newShoePurchase}
+            onChange={(e) => setNewShoePurchase(e.target.value)}
+            title="Purchase date (optional)"
+            className="text-sm px-2 py-1.5 rounded-md"
+            style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)", colorScheme: "dark" }}
+          />
+          <button
+            onClick={addShoe}
+            disabled={!newShoeName.trim()}
+            className="text-sm px-3 py-1.5 rounded-md"
+            style={{ background: "var(--accent-purple)22", color: "var(--accent-purple)", border: "1px solid var(--accent-purple)" }}
+          >Add shoe</button>
+        </div>
+        <p className="text-[11px] mt-2" style={{ color: "var(--text-muted)" }}>
+          Tip: Strava-synced runs auto-assign the last-used non-retired shoe. Re-assign per-run from the Run Log table if you swap pairs mid-week.
+        </p>
+      </div>
 
       {/* Personal Records */}
       {runs.length > 0 && (
@@ -791,6 +970,24 @@ export default function RunningHub() {
               </div>
             </div>
           </div>
+          <div>
+            <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>Shoe</label>
+            <select
+              value={form.shoeId}
+              onChange={(e) => setForm((f) => ({ ...f, shoeId: e.target.value }))}
+              className="w-full rounded-lg px-3 py-2 text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+            >
+              <option value="">— use last-used shoe —</option>
+              {shoes.filter((s) => !s.retired).map((s) => (
+                <option key={s.id} value={s.id}>{s.name} ({s.totalKm.toFixed(0)} km)</option>
+              ))}
+              <option disabled>──────</option>
+              {shoes.filter((s) => s.retired).map((s) => (
+                <option key={s.id} value={s.id}>{s.name} (retired · {s.totalKm.toFixed(0)} km)</option>
+              ))}
+            </select>
+          </div>
           <input
             placeholder="Notes (optional)" value={form.notes}
             onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
@@ -824,7 +1021,7 @@ export default function RunningHub() {
           <table className="w-full text-sm">
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Date", "Distance", "Duration", "Pace", "Notes", ""].map((h) => (
+                {["Date", "Distance", "Duration", "Pace", "Shoe", "Notes", ""].map((h) => (
                   <th
                     key={h}
                     className="px-4 py-3 text-left font-medium"
@@ -856,6 +1053,19 @@ export default function RunningHub() {
                   <td className="px-4 py-3">{formatDuration(run.duration)}</td>
                   <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
                     {pace(run.distance, run.duration)}
+                  </td>
+                  <td className="px-4 py-3 text-xs" onClick={(e) => e.stopPropagation()}>
+                    <select
+                      value={run.shoeId ?? ""}
+                      onChange={(e) => assignShoeToRun(run.id, e.target.value ? Number(e.target.value) : null)}
+                      className="text-xs px-1.5 py-1 rounded"
+                      style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
+                    >
+                      <option value="">—</option>
+                      {shoes.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}{s.retired ? " (retired)" : ""}</option>
+                      ))}
+                    </select>
                   </td>
                   <td
                     className="px-4 py-3 text-xs max-w-40 truncate"
@@ -1264,6 +1474,24 @@ export default function RunningHub() {
               {effortsLoading ? "Fetching…" : "Sync PRs"}
             </button>
             <button
+              onClick={syncStravaZones}
+              disabled={zonesLoading}
+              className="px-3 py-1.5 rounded-lg text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
+              title="Backfill HR zones (Z1..Z5 seconds) from each run's Strava HR stream. Skips runs recorded without a HR sensor. Batches 40."
+            >
+              {zonesLoading ? "Fetching…" : "Sync HR zones"}
+            </button>
+            <button
+              onClick={recomputeStravaZones}
+              disabled={zonesLoading}
+              className="px-3 py-1.5 rounded-lg text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
+              title="Clears every cached HR-zones value and re-fetches from Strava. Uses your athlete zones from strava.com (requires the profile:read_all scope — Disconnect + Connect Strava again if the zones still look off). Falls back to Strava's default % model if the zones can't be read."
+            >
+              {zonesLoading ? "Fetching…" : "Recompute HR zones"}
+            </button>
+            <button
               onClick={disconnectStrava}
               className="px-3 py-1.5 rounded-lg text-sm"
               style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--accent-red)" }}
@@ -1275,6 +1503,9 @@ export default function RunningHub() {
             )}
             {effortsResult && (
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>PRs: {effortsResult}</span>
+            )}
+{zonesResult && (
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>HR: {zonesResult}</span>
             )}
           </>
         ) : stravaHasCredentials ? (

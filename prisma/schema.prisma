@@ -36,7 +36,31 @@ model RunLog {
   // Populated on Strava sync (or via /api/strava/sync-efforts for backfill).
   // Null for manual runs or Strava runs older than the best-efforts sync.
   bestEffortsJson  String?
+  // Historic weather at the run's start, from open-meteo's archive endpoint.
+  // Shape: { tempC, feelsLikeC, windMs, rainMm, weatherCode, source: "archive"|"manual" }.
+  // Populated on Strava sync (uses activity's start_latlng) or via
+  // /api/strava/sync-weather for backfill; manual runs use Aarhus coords.
+  weatherJson      String?
+  // Strava HR zone breakdown as JSON: { z1..z5: seconds, maxHrEstimate, sampleCount }.
+  // Populated on Strava sync + via /api/strava/sync-hr-zones. Null when a run
+  // has no HR stream (no watch) or is manually logged.
+  hrZonesJson      String?
+  // Which shoe was used. Optional — a run can exist without a shoe assigned,
+  // e.g. legacy runs before shoes were introduced.
+  shoeId           Int?
   createdAt        DateTime @default(now())
+}
+
+// Running shoe — used to warn when a pair is due for rotation. Km per shoe is
+// derived from `RunLog.shoeId` on read (no denormalised total).
+model Shoe {
+  id           Int      @id @default(autoincrement())
+  name         String
+  purchaseDate DateTime?
+  retired      Boolean  @default(false)
+  sortOrder    Int      @default(0)
+  notes        String   @default("")
+  createdAt    DateTime @default(now())
 }
 
 model RunPlan {
@@ -102,6 +126,25 @@ model LolAccount {
   createdAt DateTime @default(now())
 
   @@unique([gameName, tagLine, region])
+}
+
+// Danish TV show tracked in the MediaHub. Manual entry only — no scrape.
+// `airDays` is a comma-separated list of JS day numbers (0=Sun … 6=Sat) so
+// SQLite doesn't need a JSON column. `airTime` is a local HH:MM string.
+model MediaShow {
+  id          Int      @id @default(autoincrement())
+  title       String
+  channel     String   @default("")   // e.g. DR1 / TV2 / Netflix / Kanal 5
+  airDays     String   @default("")   // "0,3,5" — empty = no scheduled days
+  airTime     String   @default("")   // "20:00" — empty when air time varies
+  active      Boolean  @default(true) // false = on hiatus, hidden from grid
+  episodesSeen Int     @default(0)    // ticks up in the hub for progress
+  maxEpisodes Int?                     // optional total episode count; once
+                                       // episodesSeen >= maxEpisodes the show
+                                       // auto-drops from Tonight / Next up
+  notes       String   @default("")
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
 }
 
 // Snapshot of a LoL account's ranked standing, written at most once per

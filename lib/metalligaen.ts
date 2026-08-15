@@ -119,8 +119,23 @@ export interface PlayoffSeriesShape {
   roundOrder: number;   // 1..N so the UI can render in order
   top: PlayoffSide;     // higher-seed team (home ice advantage)
   bottom: PlayoffSide;
-  complete: boolean;    // one team has 4 wins (best-of-7)
+  complete: boolean;    // one team has 4 wins (best-of-7) OR bronze is decided
   games: PlayoffGame[];
+  /**
+   * Bronze is played as a two-game aggregate — if scores are level after
+   * two matches the second game goes to OT and then a golden-goal shootout
+   * decides who takes bronze. The upstream JSON reports each game as a
+   * plain result, so the win-count logic that works for best-of-7
+   * quarter/semi/final rounds ends up showing "1-1" even when bronze has
+   * been decided. This flag lets the renderer apply the aggregate rule.
+   */
+  bronzeFormat?: boolean;
+  /**
+   * When bronze is decided, the shortcut of the winning team (matches
+   * `top.shortcut` or `bottom.shortcut`). Undefined for other rounds and
+   * for a bronze series still in progress.
+   */
+  bronzeWinner?: string;
 }
 
 export interface MetalLigaenPlayoffs {
@@ -260,14 +275,61 @@ function mlSeriesToPublic(s: RawPlayoffSeries, roundName: string, roundOrder: nu
   // Metal Ligaen best-of-7: seed with a lower `ranking` gets home ice.
   const [a, b] = s.teams;
   const [top, bottom] = (a?.ranking ?? 99) <= (b?.ranking ?? 99) ? [a, b] : [b, a];
+  const games = s.matches.map(mlPlayoffGame);
+  const topSide = teamToSide(top);
+  const bottomSide = teamToSide(bottom);
+  const isBronze = /bronze/i.test(roundName);
+
+  if (isBronze) {
+    // Two-game aggregate: if both games are finished, sum home+away goals
+    // per team across the pair. Ties break to the OT winner of the second
+    // game (which upstream reports as `extra_time` on the second match).
+    const finished = games.filter((g) => g.finished);
+    let winnerShortcut: string | undefined;
+    if (finished.length >= 2) {
+      const totals = new Map<string, number>();
+      for (const g of finished) {
+        totals.set(g.homeTeam, (totals.get(g.homeTeam) ?? 0) + (g.homeScore ?? 0));
+        totals.set(g.awayTeam, (totals.get(g.awayTeam) ?? 0) + (g.awayScore ?? 0));
+      }
+      const topTotal = totals.get(topSide.team) ?? 0;
+      const bottomTotal = totals.get(bottomSide.team) ?? 0;
+      if (topTotal > bottomTotal) winnerShortcut = topSide.shortcut;
+      else if (bottomTotal > topTotal) winnerShortcut = bottomSide.shortcut;
+      else {
+        // Tie on aggregate → golden goal in game 2's OT. Winner of that
+        // game is the winner of the pair.
+        const decider = finished[1];
+        if (decider.homeScore != null && decider.awayScore != null) {
+          if (decider.homeScore > decider.awayScore) winnerShortcut = decider.homeTeam === topSide.team ? topSide.shortcut : bottomSide.shortcut;
+          else if (decider.awayScore > decider.homeScore) winnerShortcut = decider.awayTeam === topSide.team ? topSide.shortcut : bottomSide.shortcut;
+        }
+      }
+      if (winnerShortcut) {
+        if (winnerShortcut === topSide.shortcut) topSide.isWinner = true;
+        else bottomSide.isWinner = true;
+      }
+    }
+    return {
+      round: roundName,
+      roundOrder,
+      top: topSide,
+      bottom: bottomSide,
+      complete: winnerShortcut !== undefined,
+      games,
+      bronzeFormat: true,
+      bronzeWinner: winnerShortcut,
+    };
+  }
+
   const complete = (a?.winner || b?.winner) === true || (a?.seriesScore ?? 0) >= 4 || (b?.seriesScore ?? 0) >= 4;
   return {
     round: roundName,
     roundOrder,
-    top: teamToSide(top),
-    bottom: teamToSide(bottom),
+    top: topSide,
+    bottom: bottomSide,
     complete,
-    games: s.matches.map(mlPlayoffGame),
+    games,
   };
 }
 

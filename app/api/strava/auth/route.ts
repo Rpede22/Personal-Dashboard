@@ -14,7 +14,9 @@ export async function GET(request: Request) {
   const host  = request.headers.get("host") ?? "localhost:3000";
   const proto = request.headers.get("x-forwarded-proto") ?? "http";
   const redirectUri = `${proto}://${host}/api/strava/callback`;
-  const scope = "read,activity:read_all";
+  // profile:read_all is needed for `/athlete/zones` so HR-zone buckets can
+  // match the exact ranges the athlete has configured on strava.com.
+  const scope = "read,activity:read_all,profile:read_all";
 
   // approval_prompt=force makes Strava always show the consent screen — required
   // when adding a new scope (activity:read_all) to a token that only has the old

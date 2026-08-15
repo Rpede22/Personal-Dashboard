@@ -19,11 +19,21 @@ import { configPath } from "@/lib/config-dir";
  */
 
 export type Payday = number | "last-weekday" | null;
+export type PayTermEnd = number; // day-of-month 1..31
+
+const DEFAULT_PAY_TERM_END: PayTermEnd = 23;
 
 interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 
 interface WorkConfig {
+  /** When you get paid (display / countdown). Default: last weekday of month. */
   payday: Payday;
+  /**
+   * Day-of-month the pay-term flips. Default 23, so a term runs 24th → 23rd.
+   * Independent of `payday` — Danish shape: work-period ends on the 23rd,
+   * kroner arrive on the last banking day of the same month.
+   */
+  payTermEnd: PayTermEnd;
   hoursByWeek: Record<string, number>;
   sessions: WorkSession[];
 }
@@ -35,21 +45,23 @@ function readConfig(): WorkConfig {
     const raw = fs.readFileSync(CONFIG_PATH, "utf8");
     const parsed = JSON.parse(raw) as Partial<WorkConfig>;
     const p = parsed.payday;
-    // Default payday is the 23rd (Cand pay cycle: term runs 24th → 23rd of the
-    // next month). If the config file doesn't yet have a payday explicitly set,
-    // this fallback surfaces the right window out of the box.
     const payday: Payday =
       p === "last-weekday" ? "last-weekday"
       : typeof p === "number" ? p
-      : 23;
+      : "last-weekday";
+    const pt = parsed.payTermEnd;
+    const payTermEnd: PayTermEnd =
+      typeof pt === "number" && Number.isFinite(pt) && pt >= 1 && pt <= 31
+        ? Math.floor(pt)
+        : DEFAULT_PAY_TERM_END;
     return {
       payday,
+      payTermEnd,
       hoursByWeek: parsed.hoursByWeek ?? {},
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
     };
   } catch {
-    // No config file yet — default to day-23 payday.
-    return { payday: 23, hoursByWeek: {}, sessions: [] };
+    return { payday: "last-weekday", payTermEnd: DEFAULT_PAY_TERM_END, hoursByWeek: {}, sessions: [] };
   }
 }
 
@@ -90,6 +102,14 @@ export async function POST(request: Request) {
       }
       cfg.payday = Math.floor(n);
     }
+  }
+
+  if ("payTermEnd" in body) {
+    const n = Number(body.payTermEnd);
+    if (!Number.isFinite(n) || n < 1 || n > 31) {
+      return NextResponse.json({ error: "payTermEnd must be 1..31" }, { status: 400 });
+    }
+    cfg.payTermEnd = Math.floor(n);
   }
 
   // Legacy weekly hours (kept for read-through so old data isn't lost).

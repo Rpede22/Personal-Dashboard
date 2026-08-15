@@ -53,6 +53,33 @@ export async function POST(request: Request) {
   // suffix so lookup finds the master event.
   const baseUid = uid.replace(/-\d{4}-\d{2}-\d{2}T[\d:.]+Z$/, "");
 
+  // Fast path — for events this app created, `putCalDAVEvent` stored them at
+  // `{calendarUrl}/{encodeURIComponent(uid)}.ics`. Try that URL first: one
+  // DELETE, no REPORT. iCloud returns HTTP 412 on some calendar-query REPORTs
+  // (the octet-collated text-match on UID doesn't always survive their
+  // preconditions), so this also side-steps that entire failure mode when
+  // the event is one we own.
+  const directUrl = match.url.replace(/\/$/, "") + `/${encodeURIComponent(baseUid)}.ics`;
+  try {
+    const res = await fetch(directUrl, {
+      method: "DELETE",
+      headers: { Authorization: auth, "User-Agent": "DashboardApp/1.0" },
+    });
+    if (res.ok) {
+      return NextResponse.json({ ok: true, deleted: 1, via: "direct" });
+    }
+    // 404 / 405 → fall through to REPORT. Anything else, keep the status so
+    // the client sees the real failure instead of a masked "not found".
+    if (res.status !== 404 && res.status !== 405 && res.status !== 410) {
+      const t = await res.text().catch(() => "");
+      // Non-fatal — try REPORT next; return the error only if REPORT also fails.
+      void t;
+    }
+  } catch { /* try REPORT next */ }
+
+  // Slow path — REPORT calendar-query filtered by UID. Used for events the
+  // app didn't create (iCloud's own UIDs don't map cleanly to the resource
+  // name) and as a fallback if the direct URL 404's.
   const reportBody = `<?xml version="1.0" encoding="UTF-8"?>
 <C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
   <D:prop><D:getetag/></D:prop>
@@ -60,7 +87,7 @@ export async function POST(request: Request) {
     <C:comp-filter name="VCALENDAR">
       <C:comp-filter name="VEVENT">
         <C:prop-filter name="UID">
-          <C:text-match collation="i;octet">${escapeXml(baseUid)}</C:text-match>
+          <C:text-match>${escapeXml(baseUid)}</C:text-match>
         </C:prop-filter>
       </C:comp-filter>
     </C:comp-filter>

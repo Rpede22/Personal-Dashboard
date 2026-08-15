@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useSelectedCity } from "@/lib/weather-city";
+import { seasonFor, scoreHourForRunning } from "@/components/weather/WeatherHub";
 
 interface CalEvent { uid: string; title: string; start: string; end: string; allDay: boolean }
 interface Assignment { id: number; estimatedHours: number | null }
@@ -28,6 +30,7 @@ interface DayCell {
   schoolBreakdown: SchoolBreakdownItem[];
   calBreakdown: CalBreakdownItem[];
   runPlan: RunPlan | null;
+  bestRunHour: number | null; // hour-of-day (06..21) that scored best for a 2h run window
 }
 
 function dateKey(d: Date): string {
@@ -41,15 +44,20 @@ function isSameLocalDay(a: Date, b: Date): boolean {
 export default function WeekAheadHeatmap() {
   const [days, setDays] = useState<DayCell[] | null>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const city = useSelectedCity();
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
-      const [schoolRes, calRes, runRes] = await Promise.allSettled([
+      const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
+        `&hourly=temperature_2m,apparent_temperature,precipitation_probability,wind_speed_10m,weather_code` +
+        `&forecast_days=7&wind_speed_unit=ms&timezone=Europe%2FCopenhagen`;
+      const [schoolRes, calRes, runRes, wxRes] = await Promise.allSettled([
         fetch("/api/school?status=pending,in_progress,overdue").then((r) => r.json()),
         fetch("/api/calendar").then((r) => r.json()),
         fetch("/api/running/summary").then((r) => r.json()),
+        fetch(weatherUrl).then((r) => r.json()),
       ]);
 
       // Build the 7-day skeleton starting today (local)
@@ -68,8 +76,40 @@ export default function WeekAheadHeatmap() {
           schoolBreakdown: [],
           calBreakdown: [],
           runPlan: null,
+          bestRunHour: null,
         };
       });
+
+      // Weather: score each hour 06..21 for run-friendliness (seasonal rules
+      // — see scoreHourForRunning) and pick the best 2h window per day.
+      // Silent on any failure.
+      if (wxRes.status === "fulfilled") {
+        const hourly = wxRes.value?.hourly;
+        const times: string[] = hourly?.time ?? [];
+        const feels: number[] = hourly?.apparent_temperature ?? hourly?.temperature_2m ?? [];
+        const rains: number[] = hourly?.precipitation_probability ?? [];
+        const winds: number[] = hourly?.wind_speed_10m ?? [];
+        const codes: number[] = hourly?.weather_code ?? [];
+        if (times.length > 0 && feels.length === times.length) {
+          const season = seasonFor(new Date());
+          for (const cell of cells) {
+            let bestScore = -Infinity;
+            let bestHour: number | null = null;
+            for (let h = 6; h <= 20; h++) {
+              const kA = `${cell.key}T${String(h).padStart(2, "0")}:00`;
+              const kB = `${cell.key}T${String(h + 1).padStart(2, "0")}:00`;
+              const iA = times.indexOf(kA);
+              const iB = times.indexOf(kB);
+              if (iA < 0 || iB < 0) continue;
+              const sA = scoreHourForRunning({ feelsLikeC: feels[iA], rainChance: rains[iA] ?? 0, windMs: winds[iA] ?? 0, weatherCode: codes[iA] ?? 0 }, season);
+              const sB = scoreHourForRunning({ feelsLikeC: feels[iB], rainChance: rains[iB] ?? 0, windMs: winds[iB] ?? 0, weatherCode: codes[iB] ?? 0 }, season);
+              const s = (sA + sB) / 2;
+              if (s > bestScore) { bestScore = s; bestHour = h; }
+            }
+            cell.bestRunHour = bestHour;
+          }
+        }
+      }
 
       // Running: attach the day's planned session (if any) — one per date.
       if (runRes.status === "fulfilled") {
@@ -136,7 +176,7 @@ export default function WeekAheadHeatmap() {
     load();
     const iv = setInterval(load, 10 * 60 * 1000);
     return () => { cancelled = true; clearInterval(iv); };
-  }, []);
+  }, [city.lat, city.lon]);
 
   if (days === null) return null;
   if (days.every((d) => d.schoolHours === 0 && d.calendarHours === 0 && !d.runPlan)) return null;
@@ -192,6 +232,14 @@ export default function WeekAheadHeatmap() {
                       style={{ color: PLAN_COLOR[d.runPlan.type] ?? "var(--text-muted)", fontSize: "10px" }}
                     >
                       {d.runPlan.type === "rest" ? "😴" : "🏃"}
+                    </span>
+                  )}
+                  {d.runPlan && d.runPlan.type !== "rest" && d.bestRunHour != null && (
+                    <span
+                      title={`Best 2 h weather window for running: starts around ${String(d.bestRunHour).padStart(2, "0")}:00`}
+                      style={{ color: "var(--accent-cyan)", fontSize: "10px" }}
+                    >
+                      {String(d.bestRunHour).padStart(2, "0")}:00
                     </span>
                   )}
                 </span>

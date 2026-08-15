@@ -17,6 +17,7 @@ import {
 interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 interface WorkConfig {
   payday: Payday;
+  payTermEnd: number;
   hoursByWeek: Record<string, number>;
   sessions: WorkSession[];
 }
@@ -43,13 +44,14 @@ export default function WorkhubWidget() {
   useEffect(() => {
     fetch("/api/work").then((r) => r.json()).then((d: WorkConfig) => {
       setConfig({ ...d, sessions: d.sessions ?? [] });
-    }).catch(() => setConfig({ payday: null, hoursByWeek: {}, sessions: [] }));
+    }).catch(() => setConfig({ payday: null, payTermEnd: 23, hoursByWeek: {}, sessions: [] }));
   }, []);
 
   const now = useMemo(() => new Date(), [config]);
   const payday = config?.payday ?? null;
-  const term = payday != null ? currentPayTerm(payday, now) : null;
-  const prevTerm = payday != null ? previousPayTerm(payday, now) : null;
+  const payTermEnd = config?.payTermEnd ?? 23;
+  const term = currentPayTerm(payTermEnd, now);
+  const prevTerm = previousPayTerm(payTermEnd, now);
   const daysLeft = payday != null ? daysUntilPayday(payday, now) : null;
   const sessions = config?.sessions ?? [];
   const termHours = term ? sumHoursInTerm(sessions, term) : 0;

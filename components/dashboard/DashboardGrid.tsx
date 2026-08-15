@@ -11,10 +11,12 @@ import RunningWidget from "@/components/dashboard/RunningWidget";
 import WorkhubWidget from "@/components/dashboard/WorkhubWidget";
 import CalendarWidget from "@/components/dashboard/CalendarWidget";
 import NewsWidget from "@/components/dashboard/NewsWidget";
+import MediaWidget from "@/components/dashboard/MediaWidget";
+import WeatherWidget from "@/components/dashboard/WeatherWidget";
 
-type Slug = "sports" | "school" | "games" | "running" | "calendar" | "workhub" | "news";
+type Slug = "sports" | "school" | "games" | "running" | "calendar" | "workhub" | "news" | "media" | "weather";
 
-const DEFAULT_ORDER: Slug[] = ["sports", "school", "games", "running", "calendar", "workhub", "news"];
+const DEFAULT_ORDER: Slug[] = ["sports", "school", "games", "running", "calendar", "workhub", "news", "media", "weather"];
 const ORDER_KEY = "dashboard.widgetOrder";
 const ENABLED_KEY = "dashboard.widgetEnabled";
 
@@ -36,6 +38,8 @@ const WIDGETS: Record<Slug, Entry> = {
   calendar: { label: "Calendar", href: "/calendar", node: <CalendarWidget />, size: "wide", defaultRefreshMin: 60 },
   workhub: { label: "Workhub", href: "/work", node: <WorkhubWidget />, defaultRefreshMin: 0 },
   news:    { label: "News",    href: "/news", node: <NewsWidget />,    defaultRefreshMin: 15 },
+  media:   { label: "Media",   href: "/media", node: <MediaWidget />,  defaultRefreshMin: 5 },
+  weather: { label: "Weather", href: "/weather", node: <WeatherWidget />, defaultRefreshMin: 30 },
 };
 
 function loadOrder(): Slug[] {
