@@ -177,19 +177,25 @@ export interface PlanOptions {
  * Generate a recommendation for next week's training. Called with the output of
  * computeWeeklyStats(runs, N) — the last entry is the current in-progress week.
  *
- * Baseline for the +10% / cutback logic is the average of the last
- * BASELINE_WEEKS *completed* weeks (not just last week), which is more stable
- * when training has been inconsistent. `lastWeekKm` is still returned for display.
+ * Baseline for the +10% / cutback logic averages BASELINE_WEEKS weeks with a
+ * rolling window that ends at the *current in-progress* week (not the last
+ * completed one). The in-progress week is included at its actual km so the
+ * baseline stays anchored to what you're doing right now — using only
+ * completed weeks meant a strong current week (like 26.5 km after two weeks
+ * of 13.6 + 24.4) had zero influence on next week's target, and the
+ * auto-suggestion stayed dragged down by old months. `lastWeekKm` still
+ * reports the last *completed* week for display.
  */
 export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = {}): TrainingPlan {
   const warnings: string[] = [];
-  const completed = recent.slice(0, -1); // drop the in-progress week
+  const completed = recent.slice(0, -1); // last-week-km display only
   const lastCompleted = completed[completed.length - 1];
   const lastWeekKm = lastCompleted?.totalKm ?? 0;
 
-  // Rolling average of the last BASELINE_WEEKS completed weeks (zero weeks count
-  // — a lazy week SHOULD drag the baseline down so the next target stays safe).
-  const window = completed.slice(-BASELINE_WEEKS);
+  // Rolling average across the last BASELINE_WEEKS entries INCLUDING the
+  // in-progress week. A lazy or empty week SHOULD drag the baseline down so
+  // the next target stays safe.
+  const window = recent.slice(-BASELINE_WEEKS);
   const baselineWeeks = window.length;
   const baselineKm = baselineWeeks > 0
     ? window.reduce((s, w) => s + w.totalKm, 0) / baselineWeeks
