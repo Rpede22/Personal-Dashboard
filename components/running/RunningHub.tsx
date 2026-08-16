@@ -1983,7 +1983,7 @@ export default function RunningHub() {
                 })}
               </div>
               <p className="text-[11px] mt-2" style={{ color: "var(--text-muted)" }}>
-                Distances are solved from the weekly target: long = 1.4·easy, tempo = easy, speed = fixed 7 km (3 km warm-up + 10 × 400 m). Empty days fill with rest.
+                Distances are solved from the weekly target: long = 1.4·easy, tempo = min(easy, 6 km), speed = fixed 7 km (3 km warm-up + 10 × 400 m). Tempo above 6 km stops being a tempo effort — the surplus rolls into the long run so the target is still hit. Empty days fill with rest.
               </p>
             </div>
 

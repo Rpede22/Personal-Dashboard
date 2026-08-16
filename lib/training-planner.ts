@@ -387,12 +387,33 @@ function buildSessions(
     return Math.max(3, round05(budget / (2.4 + easyCount)));
   }
 
+  /** Roll every km lost to rounding (E's 0.5 step) and to the tempo cap
+   *  into the long run so the weekly total matches `targetKm` exactly.
+   *  Templates always have exactly one long run, so this always resolves. */
+  const TEMPO_CAP_KM = 6;
+  function longWithResidual(
+    target: number,
+    easyKm: number,
+    easyCount: number,
+    tempoCount: number,
+    hasSpeed: boolean,
+  ): number {
+    const tempoKm = Math.min(TEMPO_CAP_KM, easyKm);
+    const longRaw = round05(easyKm * 1.4);
+    const baseTotal = (hasSpeed ? SPEED_KM : 0) + easyKm * easyCount + tempoKm * tempoCount + longRaw;
+    const residual = target - baseTotal;
+    return round05(easyKm * 1.4 + residual);
+  }
+
   // ── Cutback: one quality (tempo) session + easy + long, extra rest ──────────
   if (isCutback) {
     const cutbackEasy = Math.max(1, runDays - 2); // 1 tempo + 1 long + N easy
     const easyKm = easySize(targetKm, cutbackEasy, false);
-    const longKm = round05(easyKm * 1.4);
-    const tempoKm = Math.min(6, easyKm); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo and becomes a race effort.
+    const tempoKm = Math.min(TEMPO_CAP_KM, easyKm);
+    // Cutback templates render N easy days as Mon/Fri/Sat; the Sat one is
+    // conditional on cutbackEasy ≥ 3. Count them for residual math.
+    const cutbackEasyRendered = cutbackEasy >= 3 ? 3 : 2;
+    const longKm = longWithResidual(targetKm, easyKm, cutbackEasyRendered, 1, false);
 
     const sessions: PlannedSession[] = [
       easyOn("Mon", easyKm),
@@ -410,7 +431,7 @@ function buildSessions(
   if (runDays === 3) {
     // 3 easy runs: Tue, Thu, Sun (long) — beginner-friendly, no quality yet
     const easyKm = easySize(targetKm, 2, false);
-    const longKm = round05(easyKm * 1.4);
+    const longKm = longWithResidual(targetKm, easyKm, 2, 0, false);
     return [
       rest("Mon"),
       easyOn("Tue", easyKm, "Easy conversational pace. Building your aerobic base."),
@@ -424,8 +445,8 @@ function buildSessions(
   if (runDays === 4) {
     // 4 runs: one quality (tempo), 2 easy, 1 long — still no speed yet
     const easyKm = easySize(targetKm, 2, false);
-    const longKm = round05(easyKm * 1.4);
-    const tempoKm = Math.min(6, easyKm); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo and becomes a race effort.
+    const tempoKm = Math.min(TEMPO_CAP_KM, easyKm);
+    const longKm = longWithResidual(targetKm, easyKm, 2, 1, false);
     return [
       easyOn("Mon", easyKm),
       rest("Tue"),
@@ -440,8 +461,8 @@ function buildSessions(
   if (runDays === 5) {
     // 1 speed + 1 tempo + 2 easy + 1 long
     const easyKm = easySize(targetKm, 2, true);
-    const longKm = round05(easyKm * 1.4);
-    const tempoKm = Math.min(6, easyKm); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo and becomes a race effort.
+    const tempoKm = Math.min(TEMPO_CAP_KM, easyKm);
+    const longKm = longWithResidual(targetKm, easyKm, 2, 1, true);
     return [
       easyOn("Mon", easyKm),
       speedSession("Tue"),
@@ -456,8 +477,8 @@ function buildSessions(
   // runDays === 6 — 1 speed + 1 tempo + 3 easy + 1 long
   {
     const easyKm = easySize(targetKm, 3, true);
-    const longKm = round05(easyKm * 1.4);
-    const tempoKm = Math.min(6, easyKm); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo and becomes a race effort.
+    const tempoKm = Math.min(TEMPO_CAP_KM, easyKm);
+    const longKm = longWithResidual(targetKm, easyKm, 3, 1, true);
     return [
       easyOn("Mon", easyKm),
       speedSession("Tue"),
@@ -501,13 +522,24 @@ export function buildSessionsFromComposition(
   if (total === 0) return DAYS.map(rest);
 
   const SPEED_KM = 7;
+  const TEMPO_CAP_KM = 6;
   const speedTotal = c.speed * SPEED_KM;
   const unitDenom = c.long * 1.4 + c.tempo + c.easy;
   const budget = Math.max(0, targetKm - speedTotal);
   const E = unitDenom > 0 ? Math.max(3, round05(budget / unitDenom)) : 0;
-  const longKm  = round05(E * 1.4);
-  const tempoKm = Math.min(6, E); // Cap tempo at 6 km — see comment in buildSessions().
+  const tempoKm = Math.min(TEMPO_CAP_KM, E); // Cap tempo at 6 km — sustained "comfortably hard" beyond that stops being a tempo effort.
   const easyKm  = E;
+  // Add every km that fell out of E's 0.5-rounding + the tempo-cap
+  // shortfall into the long run so the weekly total hits the target
+  // exactly. Falls back to spreading across easy runs when the week has no
+  // long session.
+  const roundedBaseTotal = speedTotal + easyKm * c.easy + tempoKm * c.tempo + round05(easyKm * 1.4) * c.long;
+  const residualKm = targetKm - roundedBaseTotal;
+  const longKm = c.long > 0
+    ? round05(easyKm * 1.4 + residualKm / c.long)
+    : round05(easyKm * 1.4);
+  const easyBumpKm = c.long === 0 && c.easy > 0 ? round05(residualKm / c.easy) : 0;
+  const easyKmFinal = round05(easyKm + easyBumpKm);
 
   // Priority day slots per type. The order encodes "put quality where it has
   // the most rest around it" — long anchors the weekend, speed opens the week,
@@ -566,7 +598,7 @@ export function buildSessionsFromComposition(
       case "long":  return { type: "long",  distanceKm: longKm,   day, description: "Easy conversational pace. Your longest run of the week — where distance progress comes from." };
       case "speed": return { type: "speed", distanceKm: SPEED_KM, day, description: "3 km easy warm-up, then 10 × 400 m fast with 200 m jog recovery. Short cool-down (~7 km total)." };
       case "tempo": return { type: "tempo", distanceKm: tempoKm,  day, description: '20–30 min at "comfortably hard" pace. Same total distance as easy runs — same volume, harder effort.' };
-      case "easy":  return { type: "easy",  distanceKm: easyKm,   day, description: "Truly easy — nasal-breathing pace. This is where most of your fitness is actually built." };
+      case "easy":  return { type: "easy",  distanceKm: easyKmFinal, day, description: "Truly easy — nasal-breathing pace. This is where most of your fitness is actually built." };
       case "rest":  return rest(day);
     }
   });
