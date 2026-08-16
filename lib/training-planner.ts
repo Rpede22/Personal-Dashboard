@@ -235,11 +235,18 @@ export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = 
 
   const changePct = baselineKm > 0 ? ((targetKm - baselineKm) / baselineKm) * 100 : 0;
 
-  // Auto-choose runDaysPerWeek if not specified: starter → 3, then scale with volume.
+  // Auto-choose runDaysPerWeek if not specified. Bands lean toward fewer
+  // days so each session carries enough km for a proper long run (≥9 km
+  // once volume allows). Starter still uses 3 easy runs regardless.
+  //   ≤ 30 km → 3 runs (easy + tempo + long)
+  //   ≤ 40 km → 4 runs (adds a second easy)
+  //   ≤ 50 km → 5 runs (adds a speed session)
+  //   > 50 km → 6 runs (adds another easy)
   const runDays: RunDaysPerWeek = opts.runDaysPerWeek ?? (
     isStarter    ? 3 :
-    targetKm <= 24 ? 4 :
-    targetKm <= 40 ? 5 : 6
+    targetKm <= 30 ? 3 :
+    targetKm <= 40 ? 4 :
+    targetKm <= 50 ? 5 : 6
   );
 
   // 2. Warn if last week's structure looked off
@@ -435,14 +442,18 @@ function buildSessions(
 
   // ── Regular week — layout depends on runDays ────────────────────────────────
   if (runDays === 3) {
-    // 3 easy runs: Tue, Thu, Sun (long) — beginner-friendly, no quality yet
-    const easyKm = easySize(targetKm, 2, false);
-    const longKm = longWithResidual(targetKm, easyKm, 2, 0, false);
+    // 3 runs: 1 easy + 1 tempo + 1 long. At the new auto-pick bands, three
+    // runs cover the 20–30 km range — plenty of budget to include a
+    // quality effort AND leave the weekend long ≥ 10 km. The old "3 easy,
+    // no quality" split is now reserved for the starter branch above.
+    const easyKm = easySize(targetKm, 1, false);
+    const tempoKm = Math.min(TEMPO_CAP_KM, easyKm);
+    const longKm = longWithResidual(targetKm, easyKm, 1, 1, false);
     return [
       rest("Mon"),
-      easyOn("Tue", easyKm, "Easy conversational pace. Building your aerobic base."),
+      easyOn("Tue", easyKm),
       rest("Wed"),
-      easyOn("Thu", easyKm, "Easy conversational pace. Building your aerobic base."),
+      tempoSession(tempoKm, "Thu"),
       rest("Fri"),
       rest("Sat"),
       longSession(longKm, "Sun"),
