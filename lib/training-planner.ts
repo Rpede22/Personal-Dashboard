@@ -171,6 +171,14 @@ export interface PlanOptions {
    * ratios as the template weeks.
    */
   composition?: PlanComposition;
+  /**
+   * Total km already committed to this Monday's week via `RunPlan` entries.
+   * When provided, the in-progress week counts as `max(actual, planned)` in
+   * the baseline — so a fresh Monday with 0 km run but 28 km planned still
+   * pulls the rolling average up, instead of the plan being dragged down by
+   * a "0 km" week that hasn't happened yet.
+   */
+  currentWeekPlannedKm?: number;
 }
 
 /**
@@ -194,8 +202,20 @@ export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = 
 
   // Rolling average across the last BASELINE_WEEKS entries INCLUDING the
   // in-progress week. A lazy or empty week SHOULD drag the baseline down so
-  // the next target stays safe.
-  const window = recent.slice(-BASELINE_WEEKS);
+  // the next target stays safe. If the caller passed
+  // `currentWeekPlannedKm`, the in-progress week uses the greater of the
+  // actual km and the planned commitment — a Monday-morning tick with 0 km
+  // run but 28 km on the schedule already counts as 28 km toward baseline.
+  const rawWindow = recent.slice(-BASELINE_WEEKS);
+  const inProgressIdx = recent.length - 1;
+  const inProgressCommitted = Math.max(
+    recent[inProgressIdx]?.totalKm ?? 0,
+    opts.currentWeekPlannedKm ?? 0,
+  );
+  const window = rawWindow.map((w, i) => {
+    const isInProgress = (recent.length - rawWindow.length + i) === inProgressIdx;
+    return isInProgress ? { ...w, totalKm: inProgressCommitted } : w;
+  });
   const baselineWeeks = window.length;
   const baselineKm = baselineWeeks > 0
     ? window.reduce((s, w) => s + w.totalKm, 0) / baselineWeeks

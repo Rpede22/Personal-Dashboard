@@ -1548,10 +1548,24 @@ export default function RunningHub() {
           8
         );
         const parsedTarget = targetKmInput.trim() === "" ? undefined : parseFloat(targetKmInput);
+        // Sum planned km for this week's Mon–Sun so a fresh Monday counts
+        // its commitment in the baseline instead of showing as 0 km.
+        const currentWeekPlannedKm = (() => {
+          const today = new Date(); today.setHours(0, 0, 0, 0);
+          const dow = (today.getDay() + 6) % 7; // Mon = 0
+          const monday = new Date(today); monday.setDate(today.getDate() - dow);
+          const sundayEnd = new Date(monday); sundayEnd.setDate(monday.getDate() + 7);
+          return plans.reduce((sum, p) => {
+            const d = new Date(p.date);
+            if (d >= monday && d < sundayEnd) return sum + (p.distance ?? 0);
+            return sum;
+          }, 0);
+        })();
         const plan = generateNextWeekPlan(weeklyStats, {
           targetKmOverride: parsedTarget !== undefined && !isNaN(parsedTarget) ? parsedTarget : undefined,
           runDaysPerWeek: runDaysInput ?? undefined,
           composition: compositionInput ?? undefined,
+          currentWeekPlannedKm,
         });
         // Effective composition shown in the counters: user's override if set,
         // otherwise the template's own composition (so the counters read as
