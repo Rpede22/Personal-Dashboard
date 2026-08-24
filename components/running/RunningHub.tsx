@@ -2165,7 +2165,6 @@ function PRGrid({ runs }: { runs: RunLog[] }) {
     { label: "Marathon", effortLabel: "Marathon", km: 42.195 },
   ];
 
-  // Pre-parse best-effort JSON blobs once per run.
   interface RunEfforts { run: RunLog; efforts: Record<string, number> }
   const runsWithEfforts: RunEfforts[] = runs.map((r) => {
     const efforts: Record<string, number> = {};
@@ -2178,8 +2177,22 @@ function PRGrid({ runs }: { runs: RunLog[] }) {
     return { run: r, efforts };
   });
 
+  // Longest run ever — scans the entire run log, not just the last N months.
+  // Uses whole-run distance/duration, so it's a real per-effort PR even when
+  // no Strava best_effort split exists for that odd length.
+  const longestEver: { km: number; seconds: number; date: string } | null = (() => {
+    let best: { km: number; seconds: number; date: string } | null = null;
+    for (const r of runs) {
+      if (!(r.distance > 0)) continue;
+      if (!best || r.distance > best.km) {
+        best = { km: r.distance, seconds: r.duration, date: r.date };
+      }
+    }
+    return best;
+  })();
+
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
       {buckets.map((b) => {
         let best: { seconds: number; date: string } | null = null;
         for (const { run, efforts } of runsWithEfforts) {
@@ -2217,6 +2230,34 @@ function PRGrid({ runs }: { runs: RunLog[] }) {
           </div>
         );
       })}
+
+      {/* Longest run ever — different shape (distance is the PR, not time) so
+          it's rendered with distance up top and pace/date below. */}
+      <div
+        className="rounded-xl p-2 text-center"
+        style={{
+          background: "var(--surface-2)",
+          border: longestEver ? "1px solid var(--accent-blue)44" : "1px solid var(--border)",
+        }}
+        title="Longest single run across your entire log — no time window."
+      >
+        <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+          Longest ever
+        </div>
+        {longestEver ? (
+          <>
+            <div className="text-base font-bold tabular-nums" style={{ color: "var(--accent-blue)" }}>
+              {longestEver.km.toFixed(2)} km
+            </div>
+            <div className="text-[10px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+              {longestEver.seconds > 0 ? formatPacePerKm(longestEver.seconds / longestEver.km) + " · " : ""}
+              {new Date(longestEver.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}
+            </div>
+          </>
+        ) : (
+          <div className="text-sm mt-1" style={{ color: "var(--border)" }}>—</div>
+        )}
+      </div>
     </div>
   );
 }

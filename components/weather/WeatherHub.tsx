@@ -57,8 +57,12 @@ function dayLabel(dateStr: string): string {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const t = new Date(d); t.setHours(0, 0, 0, 0);
   const days = Math.round((t.getTime() - today.getTime()) / 86400000);
-  if (days === 0) return "Today";
-  if (days === 1) return "Tomorrow";
+  // Always append the calendar date so "Today"/"Tomorrow" can't be
+  // misread — the run planner spans multiple days and the extra date
+  // removes any ambiguity about which day a strip refers to.
+  const date = d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  if (days === 0) return `Today · ${date}`;
+  if (days === 1) return `Tomorrow · ${date}`;
   return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 }
 function fmtDaylight(mins: number): string {
@@ -376,10 +380,10 @@ export default function WeatherHub() {
 
           {/* ── Hourly today ── */}
           {todayHours.length > 0 && (
-            <HourlyStrip title="Today — hourly" hours={todayHours} />
+            <HourlyStrip title={`${dayLabel(todayKey)} — hourly`} hours={todayHours} />
           )}
           {tomorrowHours.length > 0 && (
-            <HourlyStrip title="Tomorrow — hourly" hours={tomorrowHours} />
+            <HourlyStrip title={`${dayLabel(tomorrowKey)} — hourly`} hours={tomorrowHours} />
           )}
 
           {/* ── 7-day forecast ── */}

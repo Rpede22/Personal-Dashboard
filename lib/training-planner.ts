@@ -126,14 +126,23 @@ export function computeWeeklyStats(runs: RunEntry[], weeksBack: number = 8): Wee
  * should reduce volume by ~25% to allow adaptation. Also flag cutback if the LAST
  * completed week was already unusually high vs. its predecessors.
  */
-function shouldCutBack(weeks: WeeklyStats[]): boolean {
+function shouldCutBack(weeks: WeeklyStats[], inProgressCommittedKm: number): boolean {
   // Look at the last 3 completed weeks (exclude current in-progress week)
   const completed = weeks.slice(0, -1);
   if (completed.length < 3) return false;
   const [w1, w2, w3] = completed.slice(-3);
   const up12 = w2.totalKm > w1.totalKm * 1.02;
   const up23 = w3.totalKm > w2.totalKm * 1.02;
-  return up12 && up23 && w3.totalKm > 0;
+  const threeUpWeeks = up12 && up23 && w3.totalKm > 0;
+  if (!threeUpWeeks) return false;
+
+  // Don't chain cutbacks. If the CURRENT in-progress week is already a step
+  // down from the last completed week (≥ 10% lower), the cutback is happening
+  // right now — next week should build (+10%), not cut back again. Without
+  // this guard the three prior up-weeks keep re-triggering a cutback every
+  // week you're inside the cutback, so the plan never resumes building.
+  const isAlreadyCuttingBack = w3.totalKm > 0 && inProgressCommittedKm < w3.totalKm * 0.9;
+  return !isAlreadyCuttingBack;
 }
 
 /**
@@ -234,7 +243,7 @@ export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = 
       ? "No recent running — starting with a conservative base to build from."
       : `Very light recent training (${baselineWeeks}-week avg: ${baselineKm.toFixed(1)} km). Starting with a conservative base to build from.`;
     isStarter = true;
-  } else if (shouldCutBack(recent)) {
+  } else if (shouldCutBack(recent, inProgressCommitted)) {
     targetKm = Math.round(baselineKm * 0.75 * 2) / 2;
     reason = `Cutback week — you've had 3 consecutive weeks of volume growth. Reduce by ~25% (from your ${baselineWeeks}-week avg of ${baselineKm.toFixed(1)} km) so your body absorbs the gains.`;
     isCutback = true;
