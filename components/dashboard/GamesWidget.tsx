@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import WoWWidget from "./WoWWidget";
 import LoLWidget from "./LoLWidget";
+import CS2Widget from "./CS2Widget";
+import TFTWidget from "./TFTWidget";
+import { useEnabledGames } from "@/lib/games-visibility";
 
-type GameKey = "wow" | "lol";
+type GameKey = "wow" | "lol" | "cs2" | "tft";
 
 const STORAGE_KEY = "dashboard.games.tab";
 
@@ -17,12 +20,13 @@ const STORAGE_KEY = "dashboard.games.tab";
  */
 export default function GamesWidget() {
   const [tab, setTab] = useState<GameKey>("wow");
+  const enabled = useEnabledGames();
 
   // Hydrate persisted tab
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw === "wow" || raw === "lol") setTab(raw);
+      if (raw === "wow" || raw === "lol" || raw === "cs2" || raw === "tft") setTab(raw);
     } catch { /* ignore */ }
   }, []);
 
@@ -31,10 +35,18 @@ export default function GamesWidget() {
     try { localStorage.setItem(STORAGE_KEY, next); } catch { /* ignore */ }
   }
 
-  const tabs: { key: GameKey; label: string; emoji: string; color: string; href: string }[] = [
+  const allTabs: { key: GameKey; label: string; emoji: string; color: string; href: string }[] = [
     { key: "wow", label: "WoW", emoji: "🧙",  color: "var(--accent-purple)", href: "/wow" },
     { key: "lol", label: "LoL", emoji: "⚔️", color: "var(--accent-blue)",   href: "/lol" },
+    { key: "cs2", label: "CS2", emoji: "🎯", color: "var(--accent-orange)", href: "/cs2" },
+    { key: "tft", label: "TFT", emoji: "🎲", color: "var(--accent-cyan)",   href: "/tft" },
   ];
+  const tabs = allTabs.filter((t) => enabled.has(t.key));
+
+  // If the active tab was hidden in settings, fall back to the first visible one.
+  useEffect(() => {
+    if (tabs.length > 0 && !tabs.some((t) => t.key === tab)) setTab(tabs[0].key);
+  }, [tabs, tab]);
 
   return (
     <div className="h-full flex flex-col">
@@ -74,8 +86,12 @@ export default function GamesWidget() {
           <Link href="/wow" className="block h-full">
             <WoWWidget />
           </Link>
-        ) : (
+        ) : tab === "lol" ? (
           <LoLWidget />
+        ) : tab === "cs2" ? (
+          <CS2Widget />
+        ) : (
+          <TFTWidget />
         )}
       </div>
     </div>

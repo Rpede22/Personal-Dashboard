@@ -174,11 +174,15 @@ fs.mkdirSync(buildResourcesDir, { recursive: true });
 
 const seedDbPath = path.join(buildResourcesDir, "seed.db");
 
-// Copy current dev.db as the seed (includes WoW default checklist templates)
+// Build the seed from dev.db but SCRUB personal data first (keeps only the
+// shareable WoW checklist templates) — otherwise a stranger's fresh install
+// would open with the owner's runs / characters / assignments / etc.
 const devDbPath = path.join(root, "dev.db");
 if (fs.existsSync(devDbPath)) {
-  fs.copyFileSync(devDbPath, seedDbPath);
-  console.log("[prepare-build] Seed database copied from dev.db");
+  const { makeSeed } = require("./make-seed");
+  const result = makeSeed(devDbPath, seedDbPath);
+  console.log("[prepare-build] Seed database built from dev.db (personal data scrubbed):", result.removed);
+  console.log(`[prepare-build] Kept ${result.templates} WoW checklist templates.`);
 } else {
   // No dev.db yet — run migration to create a fresh one
   console.log("[prepare-build] No dev.db found, creating fresh seed database...");

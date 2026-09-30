@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import {
   SPORTS_DB_BASE,
-  SPORTS_TEAMS,
   TeamConfig,
   LEAGUE_MAPPINGS,
   LeagueAutoConfig,
 } from "@/lib/sports-config";
+import { readFollowedTeams, getFollowedTeam, followedToTeamConfig } from "@/lib/followed-teams";
 import {
   afFetchStandings,
   afFetchLast5,
@@ -26,6 +26,7 @@ import {
   pickLast5,
   pickNext5,
 } from "@/lib/metalligaen";
+import { espnFetchStandings, espnFetchTeamGames, EspnStandingRow, EspnGame } from "@/lib/espn";
 
 // ── Cache ──────────────────────────────────────────────────────────────────────
 const cache = new Map<string, { data: unknown; ts: number }>();
@@ -52,10 +53,19 @@ export interface SportsStandingRow {
   goalsAgainst: number;
   goalDiff: number;
   points: number;
+  // ESPN (US sports) only — the conference/division context that replaces a
+  // league "position". `seed` = conference playoff seed.
+  group?: string;         // conference
+  groupRank?: number;     // rank within conference
+  seed?: number;
+  division?: string;      // division (e.g. "Pacific Division")
+  divisionRank?: number;  // rank within division
 }
 
 export interface SportsEvent {
   matchId?: string | null; // FotMob match ID — present when source is fotmob
+  espnEventId?: string;    // ESPN event id — present when source is espn (last-5 scoring dropdown)
+  periods?: { home: number; away: number }[]; // Metal Ligaen per-period scores (last-5 dropdown)
   date: string;
   time: string;
   homeTeam: string;
@@ -79,7 +89,12 @@ export interface SportsTeamData {
   next5: SportsEvent[];
   allStandings: SportsStandingRow[];
   subTables: SportsSubTable[];   // Populated when league has split tables (e.g. Danish 1st Div post-round 22)
-  source: "fotmob" | "api-football" | "thesportsdb" | "metalligaen";
+  source: "fotmob" | "api-football" | "thesportsdb" | "metalligaen" | "espn";
+  // ESPN (US sports) only: true when the new season hasn't started yet — every
+  // standings row is 0-0-0. The rank/seed is then meaningless (arbitrary order),
+  // so the UI shows a "Preseason" state instead of a fake "#12 · 0-0" + a broken
+  // playoff bracket. The schedule (next5) still carries the upcoming fixtures.
+  preseason?: boolean;
 }
 
 // ── TheSportsDB helpers ────────────────────────────────────────────────────────
@@ -262,6 +277,85 @@ function fmFixtureToEvent(f: FMFixture, leagueName: string): SportsEvent {
   };
 }
 
+// ── ESPN adapters (US leagues: NBA / NFL / NHL) ──────────────────────────────────
+// US sports are win-loss, not points tables. We keep the shared row shape:
+// `drawn` carries NFL ties (0 elsewhere), `otLosses` carries NHL OT losses,
+// goalsFor/Against carry points-for/against, and `points` is the real standings
+// points for the NHL / the win count for NBA & NFL (so the table sorts sanely).
+function espnStandingToRow(r: EspnStandingRow, rank: number): SportsStandingRow {
+  return {
+    rank,
+    team:         r.name,
+    teamId:       r.teamId,
+    played:       r.wins + r.losses + r.ties + (r.otLosses ?? 0),
+    won:          r.wins,
+    drawn:        r.ties,
+    lost:         r.losses,
+    otLosses:     r.otLosses,
+    goalsFor:     r.pointsFor,
+    goalsAgainst: r.pointsAgainst,
+    goalDiff:     r.pointDiff,
+    points:       r.points ?? r.wins,
+    group:        r.group,
+    groupRank:    r.groupRank,
+    seed:         r.seed || undefined,
+    division:     r.division,
+    divisionRank: r.divisionRank,
+  };
+}
+
+/**
+ * Group ESPN standings into sub-tables, EDM-style. Prefers **division** grouping
+ * (Pacific / Central / …) when ESPN supplied it (`?level=3`), matching the NHL
+ * hub's default view; falls back to conference grouping otherwise. The
+ * conference `seed`/`groupRank` still rides on each row for the playoff bracket.
+ */
+function espnSubTables(allStandings: SportsStandingRow[]): SportsSubTable[] {
+  const hasDivisions = allStandings.some((r) => r.division);
+  const key: (r: SportsStandingRow) => string | undefined = hasDivisions
+    ? (r) => r.division
+    : (r) => r.group;
+  const rankOf: (r: SportsStandingRow) => number = hasDivisions
+    ? (r) => r.divisionRank ?? 999
+    : (r) => r.groupRank ?? 999;
+  const byGroup = new Map<string, SportsStandingRow[]>();
+  for (const row of allStandings) {
+    const k = key(row);
+    if (!k) continue;
+    if (!byGroup.has(k)) byGroup.set(k, []);
+    byGroup.get(k)!.push(row);
+  }
+  const tables = [...byGroup.entries()].map(([name, rows]) => ({
+    name,
+    rows: rows.slice().sort((a, b) => rankOf(a) - rankOf(b)),
+  }));
+  // Keep divisions of the same conference together (AFC group, then NFC), so the
+  // standings read like the NHL hub rather than interleaving conferences.
+  if (hasDivisions) {
+    tables.sort((a, b) => {
+      const ca = a.rows[0]?.group ?? "";
+      const cb = b.rows[0]?.group ?? "";
+      return ca.localeCompare(cb) || a.name.localeCompare(b.name);
+    });
+  }
+  return tables;
+}
+
+function espnGameToEvent(g: EspnGame, leagueName: string): SportsEvent {
+  return {
+    matchId:   null,
+    espnEventId: g.id || undefined,
+    date:      g.date,
+    time:      g.time,
+    homeTeam:  g.homeTeam,
+    awayTeam:  g.awayTeam,
+    homeScore: g.homeScore,
+    awayScore: g.awayScore,
+    finished:  g.finished,
+    league:    leagueName,
+  };
+}
+
 // ── League auto-detection ──────────────────────────────────────────────────────
 
 async function detectLeague(team: TeamConfig): Promise<LeagueAutoConfig | null> {
@@ -312,15 +406,56 @@ async function fetchTeamData(team: TeamConfig, full: boolean): Promise<{
   next5: SportsEvent[];
   allStandings: SportsStandingRow[];
   subTables: SportsSubTable[];
-  source: "fotmob" | "api-football" | "thesportsdb" | "metalligaen";
+  source: "fotmob" | "api-football" | "thesportsdb" | "metalligaen" | "espn";
+  preseason?: boolean;
   resolvedConfig: ResolvedLeague;
 }> {
   const league = await resolveTeamLeague(team);
 
-  // ── Metal Ligaen (Esbjerg Energy) — use their own JSON via icestats.at ─────
+  // ── ESPN (US leagues: NBA / NFL / NHL) ─────────────────────────────────────
+  // Checked BEFORE the icehockey branch below because NHL is also "icehockey"
+  // but must use ESPN, not Metal Ligaen. Standings + team schedule from ESPN's
+  // free hidden API; the team is matched by name (matchKeyword) and games by
+  // team id.
+  if (team.espnSport && team.espnLeague) {
+    const path = { sport: team.espnSport, league: team.espnLeague };
+    // Standings first so we can resolve the ESPN team id by name when it wasn't
+    // captured at add-time (an add during an offseason gap bakes an entry with
+    // no espnTeamId → the schedule fetch below is skipped → "no next match").
+    const rows = await espnFetchStandings(path);
+    const resolvedTeamId = team.espnTeamId
+      || rows.find((r) => r.name.toLowerCase().includes(team.matchKeyword.toLowerCase()))?.teamId
+      || undefined;
+    const games = full && resolvedTeamId
+      ? await espnFetchTeamGames(path, resolvedTeamId)
+      : { last5: [], next5: [] };
+    if (rows.length > 0) {
+      const allStandings = rows.map((r, i) => espnStandingToRow(r, i + 1));
+      const standing = allStandings.find((s) => s.team.toLowerCase().includes(team.matchKeyword.toLowerCase())) ?? null;
+      // Preseason: the new season's table exists but nobody has played yet, so
+      // every rank/seed is arbitrary. Flag it so the UI shows a "Preseason"
+      // state rather than a misleading "#12 · 0-0" + a broken bracket.
+      const preseason = allStandings.every((s) => s.played === 0);
+      return {
+        standing,
+        last5: games.last5.map((g) => espnGameToEvent(g, league.leagueName)),
+        next5: games.next5.map((g) => espnGameToEvent(g, league.leagueName)),
+        allStandings,
+        subTables: espnSubTables(allStandings),
+        source: "espn",
+        preseason,
+        resolvedConfig: league,
+      };
+    }
+    // Fall through if ESPN returned nothing (offseason gap, etc.)
+  }
+
+  // ── Metal Ligaen (any followed Danish hockey team) — use their own JSON ────
   // Way more reliable than TheSportsDB for Danish hockey and gives us proper
-  // playoff data for a separate /api/sports/playoffs endpoint.
-  if (team.slug === "esbjerg-energy") {
+  // playoff data for a separate /api/sports/playoffs endpoint. Keyed on the
+  // sport (not a hardcoded slug) so any Metal Ligaen team the user follows
+  // routes here and is matched by keyword.
+  if (team.sport === "icehockey") {
     const [standings, allMatches] = await Promise.all([
       mlFetchStandings(),
       mlFetchMatches(),
@@ -416,14 +551,18 @@ export async function GET(request: Request) {
   const useAF = hasApiFootballKey();
   const ttl = useAF ? AF_TTL : TSDB_TTL;
 
-  if (!teamSlug || !SPORTS_TEAMS[teamSlug]) {
-    // Dashboard summary — standings + last5 only (no next5 to save API quota)
-    const summaryKey = `all-summary-${useAF ? "af" : "tsdb"}`;
+  const followed = readFollowedTeams();
+  const followedTeam = teamSlug ? getFollowedTeam(teamSlug) : undefined;
+
+  if (!teamSlug || !followedTeam) {
+    // Dashboard summary — standings + last5 only (no next5 to save API quota).
+    // Cache key includes the followed slugs so editing the list busts it.
+    const summaryKey = `all-summary-${useAF ? "af" : "tsdb"}-${followed.map((t) => t.slug).join(",")}`;
     const cached = cache.get(summaryKey);
     if (cached && Date.now() - cached.ts < ttl) return NextResponse.json(cached.data);
 
     const summaries = await Promise.all(
-      Object.values(SPORTS_TEAMS).map(async (team) => {
+      followed.map(followedToTeamConfig).map(async (team) => {
         const result = await fetchTeamData(team, true);
         // Top-3 opponent list is used by the dashboard's match-of-the-week
         // highlight so the widget can flag "you play a top-3 side next".
@@ -440,6 +579,7 @@ export async function GET(request: Request) {
           next5: result.next5.slice(0, 3),
           subTables: result.subTables,
           source: result.source,
+          preseason: result.preseason,
           topOpponents,
         };
       })
@@ -453,7 +593,7 @@ export async function GET(request: Request) {
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < ttl) return NextResponse.json(cached.data);
 
-  const team = SPORTS_TEAMS[teamSlug];
+  const team = followedToTeamConfig(followedTeam);
   const result = await fetchTeamData(team, true);
 
   const payload: SportsTeamData = {
@@ -464,6 +604,7 @@ export async function GET(request: Request) {
     allStandings: result.allStandings,
     subTables: result.subTables,
     source: result.source,
+    preseason: result.preseason,
   };
   cache.set(cacheKey, { data: payload, ts: Date.now() });
   return NextResponse.json(payload);

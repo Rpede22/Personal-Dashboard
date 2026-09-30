@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { discoverCalDAVCalendars, putCalDAVEvent, type QuickAddInput } from "@/lib/caldav";
+import { caldavAuth } from "@/lib/calendar-config";
 
 /**
  * POST /api/calendar/add
@@ -13,10 +14,9 @@ import { discoverCalDAVCalendars, putCalDAVEvent, type QuickAddInput } from "@/l
  * to +1h for timed events and same-day for all-day events.
  */
 export async function POST(request: Request) {
-  const user = process.env.ICLOUD_CALDAV_USER;
-  const pass = process.env.ICLOUD_CALDAV_PASS;
-  if (!user || !pass) {
-    return NextResponse.json({ error: "iCloud CalDAV not configured (ICLOUD_CALDAV_USER / ICLOUD_CALDAV_PASS)." }, { status: 503 });
+  const auth = caldavAuth();
+  if (!auth) {
+    return NextResponse.json({ error: "iCloud CalDAV not configured — set your Apple ID + app-specific password in Settings › Calendar." }, { status: 503 });
   }
 
   let body: {
@@ -47,8 +47,6 @@ export async function POST(request: Request) {
   if (!end) {
     end = new Date(start.getTime() + (allDay ? 24 * 3600 * 1000 : 60 * 60 * 1000));
   }
-
-  const auth = "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
 
   const calendars = await discoverCalDAVCalendars(auth);
   // The client sends the display name shown in the UI (e.g. "Rasmus_arbejde"),

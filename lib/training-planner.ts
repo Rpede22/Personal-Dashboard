@@ -194,14 +194,10 @@ export interface PlanOptions {
  * Generate a recommendation for next week's training. Called with the output of
  * computeWeeklyStats(runs, N) — the last entry is the current in-progress week.
  *
- * Baseline for the +10% / cutback logic averages BASELINE_WEEKS weeks with a
- * rolling window that ends at the *current in-progress* week (not the last
- * completed one). The in-progress week is included at its actual km so the
- * baseline stays anchored to what you're doing right now — using only
- * completed weeks meant a strong current week (like 26.5 km after two weeks
- * of 13.6 + 24.4) had zero influence on next week's target, and the
- * auto-suggestion stayed dragged down by old months. `lastWeekKm` still
- * reports the last *completed* week for display.
+ * Baseline for the +10% / cutback logic averages the last BASELINE_WEEKS
+ * **completed** weeks — the current in-progress week is excluded entirely so a
+ * partial (or not-yet-started) week can't skew the target. `lastWeekKm` reports
+ * the last completed week for display.
  */
 export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = {}): TrainingPlan {
   const warnings: string[] = [];
@@ -209,22 +205,18 @@ export function generateNextWeekPlan(recent: WeeklyStats[], opts: PlanOptions = 
   const lastCompleted = completed[completed.length - 1];
   const lastWeekKm = lastCompleted?.totalKm ?? 0;
 
-  // Rolling average across the last BASELINE_WEEKS entries INCLUDING the
-  // in-progress week. A lazy or empty week SHOULD drag the baseline down so
-  // the next target stays safe. If the caller passed
-  // `currentWeekPlannedKm`, the in-progress week uses the greater of the
-  // actual km and the planned commitment — a Monday-morning tick with 0 km
-  // run but 28 km on the schedule already counts as 28 km toward baseline.
-  const rawWindow = recent.slice(-BASELINE_WEEKS);
-  const inProgressIdx = recent.length - 1;
+  // Rolling average across the last BASELINE_WEEKS **completed** weeks — the
+  // current in-progress week is deliberately excluded so a half-finished (or
+  // not-yet-started) week never skews next week's target. A lazy completed
+  // week still legitimately lowers the baseline. `inProgressCommitted` is kept
+  // only for the cutback anti-chaining guard (pattern detection, not the target
+  // number) so a fresh Monday tick with a full week planned isn't misread as a
+  // step down.
   const inProgressCommitted = Math.max(
-    recent[inProgressIdx]?.totalKm ?? 0,
+    recent[recent.length - 1]?.totalKm ?? 0,
     opts.currentWeekPlannedKm ?? 0,
   );
-  const window = rawWindow.map((w, i) => {
-    const isInProgress = (recent.length - rawWindow.length + i) === inProgressIdx;
-    return isInProgress ? { ...w, totalKm: inProgressCommitted } : w;
-  });
+  const window = completed.slice(-BASELINE_WEEKS);
   const baselineWeeks = window.length;
   const baselineKm = baselineWeeks > 0
     ? window.reduce((s, w) => s + w.totalKm, 0) / baselineWeeks

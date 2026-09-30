@@ -63,6 +63,7 @@ export default function NewsHub() {
   // Live pinned at the top, so the hub reads at a glance instead of as one
   // long homogeneous stream.
   const [view, setView] = useState<View>("grouped");
+  const [sourceLabel, setSourceLabel] = useState<string>("");
 
   async function load() {
     setRefreshing(true);
@@ -70,6 +71,7 @@ export default function NewsHub() {
       const res = await fetch("/api/news?limit=50");
       const j = await res.json();
       setArticles(j.articles ?? []);
+      if (typeof j.sourceLabel === "string") setSourceLabel(j.sourceLabel);
     } finally {
       setRefreshing(false);
     }
@@ -222,9 +224,7 @@ export default function NewsHub() {
         </div>
       )}
       <p className="text-xs mt-3 text-center" style={{ color: "var(--text-muted)" }}>
-        Headlines scraped from{" "}
-        <a href="https://nyheder.tv2.dk/" target="_blank" rel="noopener noreferrer" className="underline">nyheder.tv2.dk</a>{" "}+ {" "}
-        <a href="https://sport.tv2.dk/" target="_blank" rel="noopener noreferrer" className="underline">sport.tv2.dk</a>{" "}· Refreshes every 15 min.
+        Headlines from <strong style={{ color: "var(--text)" }}>{sourceLabel || "…"}</strong> · change the source in ⚙️ Settings › News · refreshes every 15 min.
       </p>
     </HubShell>
   );

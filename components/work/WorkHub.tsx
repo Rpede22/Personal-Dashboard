@@ -15,9 +15,14 @@ import {
   sumEarningsInTerm,
   sumHoursInTerm,
 } from "@/lib/payday";
+import { useCurrency } from "@/lib/dashboard-settings";
 
 interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 interface WorkConfig {
+  enabled: boolean;
+  monthlyHoursFallback: number;
+  registerUrl: string;
+  payslipUrl: string;
   payday: Payday;
   payTermEnd: number;
   hoursByWeek: Record<string, number>;
@@ -45,6 +50,7 @@ function formatHoursMinutes(decimalHours: number): string {
 }
 
 export default function WorkHub() {
+  const currency = useCurrency(); // re-render money on currency change
   const [config, setConfig] = useState<WorkConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<Tab>("overview");
@@ -68,7 +74,7 @@ export default function WorkHub() {
       setConfig({ ...d, sessions: d.sessions ?? [] });
       setPaydayDraft(d.payday == null ? "" : d.payday === "last-weekday" ? "last-weekday" : String(d.payday));
       setPayTermDraft(String(d.payTermEnd ?? 23));
-    }).catch(() => setConfig({ payday: null, payTermEnd: 23, hoursByWeek: {}, sessions: [] }));
+    }).catch(() => setConfig({ enabled: true, monthlyHoursFallback: 160, registerUrl: "", payslipUrl: "", payday: null, payTermEnd: 23, hoursByWeek: {}, sessions: [] }));
   }, []);
 
   const now = useMemo(() => new Date(), [config]);
@@ -161,6 +167,10 @@ export default function WorkHub() {
     setEditingPayTerm(false);
   }
 
+  async function setEnabled(enabled: boolean) {
+    await post({ enabled });
+  }
+
   // Sessions in the current pay-term (indexed pointers back to `sessions` so
   // delete-by-index still works after sorting).
   const currentTermSessionsWithIdx = useMemo(() => {
@@ -205,7 +215,24 @@ export default function WorkHub() {
         </div>
       }
     >
-      {tab === "overview" && (
+      {tab === "overview" && config?.enabled === false && (
+        <div className="rounded-2xl p-6 text-center space-y-3" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div className="text-3xl">💤</div>
+          <div className="font-semibold">Hour tracking is off</div>
+          <p className="text-sm max-w-md mx-auto" style={{ color: "var(--text-muted)" }}>
+            Other views assume a flat <strong style={{ color: "var(--text)" }}>{config.monthlyHoursFallback} h/month</strong> instead of logged sessions.
+            Turn it back on if you want to log individual work sessions again.
+          </p>
+          <button
+            onClick={() => setEnabled(true)}
+            disabled={saving}
+            className="text-sm font-semibold px-4 py-2 rounded-lg"
+            style={{ background: "var(--accent-cyan)22", color: "var(--accent-cyan)", border: "1px solid var(--accent-cyan)" }}
+          >Enable hour tracking</button>
+        </div>
+      )}
+
+      {tab === "overview" && config?.enabled !== false && (
         <div className="space-y-6">
           {/* Pay-term summary */}
           <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
@@ -354,9 +381,9 @@ export default function WorkHub() {
                   value={addRate} onChange={(e) => setAddRate(e.target.value)}
                   className="text-sm w-20 px-2 py-1.5 rounded-md"
                   style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
-                  title="Hourly rate in kr — defaults to last-used"
+                  title={`Hourly rate in ${currency} — defaults to last-used`}
                 />
-                <span className="text-xs" style={{ color: "var(--text-muted)" }}>kr/h</span>
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>{currency}/h</span>
               </div>
               <input
                 type="text" placeholder="note (optional)"
@@ -387,7 +414,7 @@ export default function WorkHub() {
                     <span className="tabular-nums font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(session.hours)}</span>
                     {typeof session.hourlyRate === "number" && (
                       <span className="tabular-nums text-xs" style={{ color: "var(--text-muted)" }}>
-                        @ {session.hourlyRate} kr/h · {formatDkk(session.hours * session.hourlyRate)}
+                        @ {session.hourlyRate} {currency}/h · {formatDkk(session.hours * session.hourlyRate)}
                       </span>
                     )}
                     {session.note && <span className="truncate" style={{ color: "var(--text-muted)" }}>· {session.note}</span>}
@@ -398,18 +425,24 @@ export default function WorkHub() {
             )}
           </div>
 
-          <div className="flex gap-3 flex-wrap">
-            <a href="https://profil.cand.dk/work/register" target="_blank" rel="noopener noreferrer"
-               className="text-sm font-semibold px-3 py-1.5 rounded-lg"
-               style={{ background: "var(--accent-cyan)22", color: "var(--accent-cyan)", border: "1px solid var(--accent-cyan)" }}>
-              Register hours →
-            </a>
-            <a href="https://intect.app/selfservice/payslip" target="_blank" rel="noopener noreferrer"
-               className="text-sm font-semibold px-3 py-1.5 rounded-lg"
-               style={{ background: "var(--accent-cyan)22", color: "var(--accent-cyan)", border: "1px solid var(--accent-cyan)" }}>
-              View payslips →
-            </a>
-          </div>
+          {(config?.registerUrl || config?.payslipUrl) && (
+            <div className="flex gap-3 flex-wrap">
+              {config?.registerUrl && (
+                <a href={config.registerUrl} target="_blank" rel="noopener noreferrer"
+                   className="text-sm font-semibold px-3 py-1.5 rounded-lg"
+                   style={{ background: "var(--accent-cyan)22", color: "var(--accent-cyan)", border: "1px solid var(--accent-cyan)" }}>
+                  Register hours →
+                </a>
+              )}
+              {config?.payslipUrl && (
+                <a href={config.payslipUrl} target="_blank" rel="noopener noreferrer"
+                   className="text-sm font-semibold px-3 py-1.5 rounded-lg"
+                   style={{ background: "var(--accent-cyan)22", color: "var(--accent-cyan)", border: "1px solid var(--accent-cyan)" }}>
+                  View payslips →
+                </a>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -442,7 +475,7 @@ export default function WorkHub() {
                     <td className="py-1.5">{formatShortDate(session.date)}</td>
                     <td className="py-1.5 text-right tabular-nums font-semibold" style={{ color: "var(--accent-cyan)" }}>{formatHoursMinutes(session.hours)}</td>
                     <td className="py-1.5 pl-3 text-right tabular-nums" style={{ color: "var(--text-muted)" }}>
-                      {typeof session.hourlyRate === "number" ? `${session.hourlyRate} kr/h` : "—"}
+                      {typeof session.hourlyRate === "number" ? `${session.hourlyRate} ${currency}/h` : "—"}
                     </td>
                     <td className="py-1.5 pl-3 text-right tabular-nums" style={{ color: "var(--text)" }}>
                       {typeof session.hourlyRate === "number" ? formatDkk(session.hours * session.hourlyRate) : "—"}

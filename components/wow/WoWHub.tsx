@@ -17,11 +17,95 @@ interface ChecklistItem {
   done: boolean;
 }
 
+interface TierSet { collected: number; total: number; name: string | null }
 interface CharacterStats {
   ilvl: number | null;
   rioScore: number | null;
   raidProgress: string | null;
+  tierSet?: TierSet | null;              // #70 tier-set pieces collected
+  weeklyHighestKey?: number | null;      // #69 highest M+ key this reset
+  mplusVault?: (number | null)[] | null; // #68 Great Vault M+ slots
+  weeklyRaidKills?: number | null;       // #68 Great Vault raid — bosses this reset
   errors: string[];
+}
+
+/** Compact "this week" strip: highest key pill, M+/raid Great Vault slots, tier-set count. */
+function WeeklyStrip({ s }: { s: { weeklyHighestKey?: number | null; mplusVault?: (number | null)[] | null; weeklyRaidKills?: number | null; tierSet?: TierSet | null } }) {
+  const vault = s.mplusVault ?? null;
+  const hasVault = Array.isArray(vault) && vault.some((v) => v !== null);
+  const raid = s.weeklyRaidKills;
+  const hasRaid = raid != null;
+  const tier = s.tierSet;
+  if (s.weeklyHighestKey == null && !hasVault && !hasRaid && !tier) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+      {s.weeklyHighestKey != null && (
+        <span className="px-2 py-0.5 rounded-full font-semibold" style={{ background: "var(--accent-purple)22", color: "var(--accent-purple)", border: "1px solid var(--accent-purple)" }}>
+          +{s.weeklyHighestKey} this week
+        </span>
+      )}
+      {Array.isArray(vault) && (
+        <span className="inline-flex items-center gap-1" title="Great Vault (M+) — slots at 1 / 4 / 8 runs">
+          <span style={{ color: "var(--text-muted)" }}>M+</span>
+          {vault.map((lvl, i) => (
+            <span key={i} className="w-6 h-5 rounded grid place-items-center text-[10px] font-bold tabular-nums"
+              style={{ background: lvl != null ? "var(--accent-purple)33" : "var(--surface-2)", color: lvl != null ? "var(--accent-purple)" : "var(--text-muted)", border: `1px solid ${lvl != null ? "var(--accent-purple)" : "var(--border)"}` }}>
+              {lvl != null ? `+${lvl}` : "–"}
+            </span>
+          ))}
+        </span>
+      )}
+      {hasRaid && (
+        <span className="inline-flex items-center gap-1" title={`Great Vault (raid) — slots at 2 / 4 / 6 bosses this week (${raid} killed)`}>
+          <span style={{ color: "var(--text-muted)" }}>Raid</span>
+          {[2, 4, 6].map((n, i) => {
+            const filled = (raid ?? 0) >= n;
+            return (
+              <span key={i} className="w-4 h-5 rounded grid place-items-center text-[9px] font-bold"
+                style={{ background: filled ? "var(--accent-orange)33" : "var(--surface-2)", color: filled ? "var(--accent-orange)" : "var(--text-muted)", border: `1px solid ${filled ? "var(--accent-orange)" : "var(--border)"}` }}>
+                {filled ? "✓" : "–"}
+              </span>
+            );
+          })}
+        </span>
+      )}
+      {tier && tier.total > 0 && (
+        <span className="px-2 py-0.5 rounded-full" title={`${tier.name ?? "Tier set"} — the 4-set bonus is enough`}
+          style={{ background: tier.collected >= tier.total - 1 ? "var(--accent-green)22" : "var(--surface-2)", color: tier.collected >= tier.total - 1 ? "var(--accent-green)" : "var(--text-muted)", border: `1px solid ${tier.collected >= tier.total - 1 ? "var(--accent-green)" : "var(--border)"}` }}>
+          Tier {tier.collected}/{tier.total}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** External profile links for a character. Every site uses the same shape:
+ *  `{base}/{region}/{realm-slug}/{name}`. Realm slug = lowercase with spaces
+ *  and apostrophes normalised to hyphens (e.g. "Tarren Mill" → "tarren-mill",
+ *  "Kil'jaeden" → "kil-jaeden"). Raider.IO + Warcraft Logs take the bare
+ *  region (`eu`); the Blizzard armory wants a locale, so we map region → a
+ *  sensible default locale. */
+function realmSlug(realm: string): string {
+  return realm.trim().toLowerCase().replace(/['\s]+/g, "-").replace(/-+/g, "-");
+}
+
+const ARMORY_LOCALE: Record<string, string> = {
+  eu: "en-gb",
+  us: "en-us",
+  kr: "ko-kr",
+  tw: "zh-tw",
+};
+
+function profileLinks(name: string, realm: string, region: string): Array<{ label: string; url: string; color: string }> {
+  const r = region.toLowerCase();
+  const slug = realmSlug(realm);
+  const char = encodeURIComponent(name.trim());
+  const locale = ARMORY_LOCALE[r] ?? "en-gb";
+  return [
+    { label: "Raider.IO",     url: `https://raider.io/characters/${r}/${slug}/${char}`, color: "var(--accent-orange)" },
+    { label: "Armory",        url: `https://worldofwarcraft.blizzard.com/${locale}/character/${r}/${slug}/${char}`, color: "var(--accent-blue)" },
+    { label: "Warcraft Logs", url: `https://www.warcraftlogs.com/character/${r}/${slug}/${char}`, color: "var(--accent-purple)" },
+  ];
 }
 
 interface GearWishlistItem {
@@ -311,6 +395,26 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
     setCharacters((prev) =>
       prev.map((c) => (c.id === selectedChar.id ? { ...c, notes: notesEdit } : c))
     );
+  }
+
+  // Guarded clears — both confirm first so they can't fire by accident.
+  async function clearNotes() {
+    if (!selectedChar) return;
+    if (!window.confirm(`Clear all notes for ${selectedChar.name}? This can't be undone.`)) return;
+    setNotesEdit("");
+    await fetch("/api/wow/character", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: selectedChar.id, notes: "" }),
+    });
+    setCharacters((prev) => prev.map((c) => (c.id === selectedChar.id ? { ...c, notes: "" } : c)));
+  }
+
+  async function clearGearWishlist() {
+    if (!selectedChar) return;
+    if (!window.confirm(`Clear the entire gear wishlist for ${selectedChar.name}? This can't be undone.`)) return;
+    await fetch(`/api/wow/gear-wishlist?characterId=${selectedChar.id}`, { method: "DELETE" });
+    await loadGearWishlist(selectedChar); // re-fetch → 16 empty placeholder slots
   }
 
   // Lightweight checklist-only refresh — used after sync so we don't wipe ilvl/stats
@@ -664,6 +768,16 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
                               {Math.round(s.rioScore)} rio
                             </span>
                           )}
+                          {s.weeklyHighestKey != null && (
+                            <span className="text-xs" style={{ color: "var(--accent-purple)" }} title="Highest M+ key this week">
+                              +{s.weeklyHighestKey}
+                            </span>
+                          )}
+                          {s.tierSet && s.tierSet.total > 0 && (
+                            <span className="text-xs" style={{ color: s.tierSet.collected >= s.tierSet.total - 1 ? "var(--accent-green)" : "var(--text-muted)" }} title={`Tier set: ${s.tierSet.name ?? ""} (4-set bonus is enough)`}>
+                              tier {s.tierSet.collected}/{s.tierSet.total}
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
@@ -934,6 +1048,24 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
                       </div>
                     )}
                   </div>
+                  {/* #68/#69/#70 — this week's key, Great Vault (M+) slots, tier-set count */}
+                  <WeeklyStrip s={stats} />
+                  {/* External profile links — armory / Raider.IO / Warcraft Logs */}
+                  <div className="flex gap-2">
+                    {profileLinks(selectedChar.name, selectedChar.realm, selectedChar.region).map((l) => (
+                      <a
+                        key={l.label}
+                        href={l.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 text-center rounded-lg px-2 py-1.5 text-xs font-medium hover:brightness-125 transition"
+                        style={{ background: "var(--surface-2)", color: l.color, border: `1px solid ${l.color}44` }}
+                        title={`Open ${selectedChar.name} on ${l.label}`}
+                      >
+                        {l.label} ↗
+                      </a>
+                    ))}
+                  </div>
                   {stats.errors.length > 0 && (
                     <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                       {stats.errors.join(" · ")}
@@ -1051,9 +1183,17 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
             <h2 className="font-semibold capitalize">
               {selectedChar.name} — Items to Get
             </h2>
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              {gearWishlist.filter((i) => i.obtained).length}/{gearWishlist.length} obtained
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {gearWishlist.filter((i) => i.obtained).length}/{gearWishlist.length} obtained
+              </span>
+              <button
+                onClick={clearGearWishlist}
+                className="text-xs px-2 py-1 rounded-md"
+                style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--border)" }}
+                title="Clear the whole gear wishlist"
+              >Clear all</button>
+            </div>
           </div>
 
           <div className="flex gap-6">
@@ -1137,7 +1277,17 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
 
           {/* Notes */}
           <div className="mt-5">
-            <p className="text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>Notes</p>
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Notes</p>
+              {notesEdit.trim() && (
+                <button
+                  onClick={clearNotes}
+                  className="text-xs px-2 py-0.5 rounded-md"
+                  style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--border)" }}
+                  title="Clear all notes for this character"
+                >Clear</button>
+              )}
+            </div>
             <textarea
               value={notesEdit}
               onChange={(e) => setNotesEdit(e.target.value)}

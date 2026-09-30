@@ -8,7 +8,7 @@ export interface TeamConfig {
   matchKeyword: string; // keyword to find this team in event strings + standings
   leagueId: string;
   leagueName: string;
-  sport: "football" | "icehockey";
+  sport: "football" | "icehockey" | "basketball" | "americanfootball";
   accentColor: string;
   emoji: string;
   season: string;
@@ -29,6 +29,10 @@ export interface TeamConfig {
   // Team IDs: Barcelona = 8634, Esbjerg fB = 8285.
   fotmobLeagueId?: number;
   fotmobTeamId?: number;
+  // ESPN path pair + team id (US leagues: NBA / NFL / NHL via lib/espn.ts).
+  espnSport?: string;
+  espnLeague?: string;
+  espnTeamId?: string;
 }
 
 // Possible leagues for teams that can be promoted/relegated.

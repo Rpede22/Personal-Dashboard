@@ -112,6 +112,10 @@ export default function SchoolHub() {
   // hoursPerDay: soft cap — preferred study hours per day
   const [hoursPerDay, setHoursPerDay] = useState<number>(3);
   const [hoursPerDayInput, setHoursPerDayInput] = useState<string>("3");
+  // scheduleUrl: link to the university's timetable site (editable; "" = hidden)
+  const [scheduleUrl, setScheduleUrl] = useState<string>("");
+  const [editingSchedule, setEditingSchedule] = useState<boolean>(false);
+  const [scheduleDraft, setScheduleDraft] = useState<string>("");
 
   async function load(silent = false) {
     if (!silent) setLoading(true);
@@ -140,6 +144,10 @@ export default function SchoolHub() {
         if (typeof d.hoursPerDay === "number") {
           setHoursPerDay(d.hoursPerDay);
           setHoursPerDayInput(String(d.hoursPerDay));
+        }
+        if (typeof d.scheduleUrl === "string") {
+          setScheduleUrl(d.scheduleUrl);
+          setScheduleDraft(d.scheduleUrl);
         }
       })
       .catch(() => {});
@@ -216,6 +224,22 @@ export default function SchoolHub() {
       body: JSON.stringify({ hoursPerDay: rounded }),
     });
     load(true);
+  }
+
+  async function saveScheduleUrl(raw: string) {
+    const u = raw.trim();
+    // Persist (server clears it if not a valid http(s) URL).
+    const res = await fetch("/api/school/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scheduleUrl: u }),
+    });
+    const d = await res.json().catch(() => null);
+    if (d && typeof d.scheduleUrl === "string") {
+      setScheduleUrl(d.scheduleUrl);
+      setScheduleDraft(d.scheduleUrl);
+    }
+    setEditingSchedule(false);
   }
 
   async function toggleWorkDay(day: number) {
@@ -482,6 +506,51 @@ export default function SchoolHub() {
               }}
               title="Preferred study hours per day"
             />
+
+            {/* Schedule link — opens the university timetable site; ✎ to edit the URL */}
+            <span className="mx-1" style={{ color: "var(--border)" }}>·</span>
+            {editingSchedule ? (
+              <span className="flex items-center gap-1">
+                <input
+                  type="url"
+                  placeholder="https://…"
+                  value={scheduleDraft}
+                  onChange={(e) => setScheduleDraft(e.target.value)}
+                  className="w-56 rounded-lg px-2 py-1 text-xs"
+                  style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--accent-indigo)" }}
+                  autoFocus
+                />
+                <button
+                  onClick={() => saveScheduleUrl(scheduleDraft)}
+                  className="text-xs px-2 py-1 rounded-lg"
+                  style={{ background: "var(--accent-indigo)22", color: "var(--accent-indigo)", border: "1px solid var(--accent-indigo)" }}
+                >Save</button>
+                <button onClick={() => { setEditingSchedule(false); setScheduleDraft(scheduleUrl); }} className="text-xs" style={{ color: "var(--text-muted)" }}>✕</button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1">
+                {scheduleUrl ? (
+                  <a
+                    href={scheduleUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs px-2 py-1 rounded-lg font-medium hover:brightness-125"
+                    style={{ background: "var(--surface-2)", color: "var(--accent-indigo)", border: "1px solid var(--accent-indigo)44" }}
+                    title={scheduleUrl}
+                  >
+                    📅 Schedule ↗
+                  </a>
+                ) : (
+                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>No schedule link</span>
+                )}
+                <button
+                  onClick={() => { setScheduleDraft(scheduleUrl); setEditingSchedule(true); }}
+                  className="text-xs px-1 opacity-60 hover:opacity-100"
+                  style={{ color: "var(--text-muted)" }}
+                  title="Edit schedule link"
+                >✎</button>
+              </span>
+            )}
           </div>
         );
       })()}

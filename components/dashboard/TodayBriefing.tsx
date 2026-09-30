@@ -3,15 +3,18 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import WeatherLine from "@/components/dashboard/WeatherLine";
+import { loadBriefingRows, useSettingsTick, type BriefingRow } from "@/lib/dashboard-settings";
+import { loadSelectedCity } from "@/lib/weather-city";
+import { sortActive, type Task } from "@/lib/tasks";
 
 /** Kind of a briefing row — used as the persistence key for reordering.
  *  `cal` covers both single-event and collapsed-multi rows since only one
  *  cal row ever renders at a time. Sport rows are grouped by slug so
  *  each followed team can be reordered independently. */
-type ItemKind = "cal" | "sport" | "run" | "school" | "media";
+type ItemKind = "cal" | "sport" | "run" | "school" | "media" | "news" | "weather" | "transit" | "tasks";
 
 const ORDER_KEY = "dashboard.today.order";
-const DEFAULT_ORDER: ItemKind[] = ["cal", "sport", "run", "school", "media"];
+const DEFAULT_ORDER: ItemKind[] = ["cal", "sport", "run", "school", "media", "news", "weather", "transit", "tasks"];
 
 function loadOrder(): ItemKind[] {
   if (typeof window === "undefined") return DEFAULT_ORDER;
@@ -31,7 +34,25 @@ function itemKind(key: string): ItemKind {
   if (key.startsWith("sport")) return "sport";
   if (key === "run") return "run";
   if (key === "media") return "media";
+  if (key === "news") return "news";
+  if (key === "weather") return "weather";
+  if (key === "transit") return "transit";
+  if (key === "tasks") return "tasks";
   return "school";
+}
+
+// Minimal WMO weather-code → emoji/label for the opt-in weather row.
+function wmo(code: number): { icon: string; label: string } {
+  if (code === 0) return { icon: "☀️", label: "Clear" };
+  if (code <= 2) return { icon: "🌤️", label: "Partly cloudy" };
+  if (code === 3) return { icon: "☁️", label: "Overcast" };
+  if (code <= 48) return { icon: "🌫️", label: "Fog" };
+  if (code <= 57) return { icon: "🌦️", label: "Drizzle" };
+  if (code <= 67) return { icon: "🌧️", label: "Rain" };
+  if (code <= 77) return { icon: "🌨️", label: "Snow" };
+  if (code <= 82) return { icon: "🌦️", label: "Showers" };
+  if (code <= 86) return { icon: "🌨️", label: "Snow showers" };
+  return { icon: "⛈️", label: "Thunderstorm" };
 }
 
 interface CalEvent { uid: string; title: string; start: string; end: string; allDay: boolean; calendar: string }
@@ -44,12 +65,11 @@ interface SportsSummary {
 interface Assignment { id: number; title: string; dueDate: string; dueTime: string | null; status: string; subject: string | null }
 interface RunPlan { date: string; type: string; distance: number | null; notes: string | null }
 
-const SPORT_HREF: Record<string, string> = {
-  edmonton: "/nhl",
-  "esbjerg-fb": "/sports/esbjerg-fb",
-  barcelona: "/sports/barcelona",
-  "esbjerg-energy": "/sports/esbjerg-energy",
-};
+// NHL (Edmonton) is its own hub; every followed sports team routes to the
+// dynamic `/sports/<slug>` page.
+function sportHref(slug: string): string {
+  return slug === "edmonton" ? "/nhl" : `/sports/${slug}`;
+}
 
 function isSameLocalDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -71,6 +91,18 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
 }
 
+/** "just now" / "12m ago" / "3h ago" / "2d ago" — for the news row timestamp. */
+function relativeAgo(d: Date): string {
+  const ms = Date.now() - d.getTime();
+  if (!isFinite(ms) || ms < 0) return "";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 interface Item {
   key: string;
   emoji: string;
@@ -86,7 +118,10 @@ export default function TodayBriefing() {
   const [order, setOrder] = useState<ItemKind[]>(DEFAULT_ORDER);
   const [dragKind, setDragKind] = useState<ItemKind | null>(null);
   const [hoverKind, setHoverKind] = useState<ItemKind | null>(null);
+  const settingsTick = useSettingsTick();
+  const [enabledRows, setEnabledRows] = useState<Set<BriefingRow>>(() => new Set(["cal", "sport", "run", "school", "media"]));
 
+  useEffect(() => { setEnabledRows(loadBriefingRows()); }, [settingsTick]);
   useEffect(() => { setOrder(loadOrder()); }, []);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -111,13 +146,29 @@ export default function TodayBriefing() {
     async function load() {
       const now = new Date();
 
-      const [calRes, sportsRes, nhlRes, runRes, schoolRes, mediaRes] = await Promise.allSettled([
+      // Opt-in "today" rows (#7) — only fetch the ones actually enabled so a
+      // disabled row costs nothing.
+      const rows = loadBriefingRows();
+      const wantNews = rows.has("news");
+      const wantWeather = rows.has("weather");
+      const wantTransit = rows.has("transit");
+      const wantTasks = rows.has("tasks");
+      const city = wantWeather ? loadSelectedCity() : null;
+      const weatherUrl = city
+        ? `/api/weather?latitude=${city.lat}&longitude=${city.lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=1`
+        : "";
+
+      const [calRes, sportsRes, nhlRes, runRes, schoolRes, mediaRes, newsRes, weatherRes, transitRes, tasksRes] = await Promise.allSettled([
         fetch("/api/calendar").then((r) => r.json()),
         fetch("/api/sports").then((r) => r.json()),
         fetch("/api/nhl/schedule").then((r) => r.json()),
         fetch("/api/running/summary").then((r) => r.json()),
         fetch("/api/school?status=pending,in_progress,overdue").then((r) => r.json()),
         fetch("/api/media").then((r) => r.json()),
+        wantNews ? fetch("/api/news?limit=1").then((r) => r.json()) : Promise.resolve(null),
+        weatherUrl ? fetch(weatherUrl).then((r) => r.json()) : Promise.resolve(null),
+        wantTransit ? fetch("/api/transit/departures?max=3").then((r) => r.json()) : Promise.resolve(null),
+        wantTasks ? fetch("/api/tasks").then((r) => r.json()) : Promise.resolve(null),
       ]);
 
       const out: Item[] = [];
@@ -220,7 +271,7 @@ export default function TodayBriefing() {
               label: s.config.shortName ?? s.config.name ?? s.slug,
               detail: `${us ?? "-"}–${them ?? "-"} vs ${opp}`,
               meta: outcome === "W" ? "won today" : outcome === "L" ? "lost today" : "drew today",
-              href: SPORT_HREF[s.slug] ?? "/",
+              href: sportHref(s.slug),
               color,
             });
             continue;
@@ -242,7 +293,7 @@ export default function TodayBriefing() {
               meta: startsIn >= 0
                 ? `${formatTime(t.toISOString())} · in ${formatCountdown(startsIn)}`
                 : `${formatTime(t.toISOString())} · started`,
-              href: SPORT_HREF[s.slug] ?? "/",
+              href: sportHref(s.slug),
               color: "var(--accent-orange)",
             });
           }
@@ -353,6 +404,86 @@ export default function TodayBriefing() {
         }
       }
 
+      // 6. News (opt-in) — the single latest headline.
+      if (wantNews && newsRes.status === "fulfilled" && newsRes.value) {
+        const art = (newsRes.value.articles ?? [])[0] as { headline?: string; section?: string; url?: string; publishedAt?: string } | undefined;
+        if (art?.headline) {
+          const ago = art.publishedAt ? relativeAgo(new Date(art.publishedAt)) : "";
+          out.push({
+            key: "news",
+            emoji: "📰",
+            label: art.section ? String(art.section) : "Top news",
+            detail: art.headline,
+            meta: [newsRes.value.sourceLabel, ago].filter(Boolean).join(" · "),
+            href: "/news",
+            color: "var(--accent-blue)",
+          });
+        }
+      }
+
+      // 7. Weather (opt-in) — today's condition + hi/lo + rain chance.
+      if (wantWeather && weatherRes.status === "fulfilled" && weatherRes.value?.daily) {
+        const d = weatherRes.value.daily as { weather_code?: number[]; temperature_2m_max?: number[]; temperature_2m_min?: number[]; precipitation_probability_max?: number[] };
+        const code = d.weather_code?.[0] ?? 0;
+        const hi = d.temperature_2m_max?.[0];
+        const lo = d.temperature_2m_min?.[0];
+        const rain = d.precipitation_probability_max?.[0];
+        const w = wmo(code);
+        if (hi != null) {
+          out.push({
+            key: "weather",
+            emoji: w.icon,
+            label: city?.name ? `Weather · ${city.name}` : "Weather",
+            detail: `${w.label} · ${Math.round(hi)}° / ${Math.round(lo ?? hi)}°`,
+            meta: rain != null && rain >= 20 ? `💧 ${rain}% rain` : "dry day",
+            href: "/weather",
+            color: "var(--accent-cyan)",
+          });
+        }
+      }
+
+      // 8. Transit (opt-in) — the next departures from the saved home stop.
+      if (wantTransit && transitRes.status === "fulfilled" && transitRes.value) {
+        const board = transitRes.value as { stopName?: string; departures?: Array<{ line: string; direction: string; plannedISO: string; realISO?: string; delayMin?: number }> };
+        const deps = board.departures ?? [];
+        if (deps.length > 0) {
+          const first = deps[0];
+          const t = new Date(first.realISO || first.plannedISO);
+          const mins = Math.round((t.getTime() - now.getTime()) / 60000);
+          const when = mins <= 0 ? "now" : `in ${formatCountdown(t.getTime() - now.getTime())}`;
+          const rest = deps.slice(1, 3).map((dp) => `${dp.line} ${formatTime(dp.realISO || dp.plannedISO)}`).join(" · ");
+          out.push({
+            key: "transit",
+            emoji: "🚉",
+            label: board.stopName ? board.stopName : "Next departure",
+            detail: `${first.line} → ${first.direction}`,
+            meta: rest ? `${when} — then ${rest}` : when,
+            href: "/transit",
+            color: "var(--accent-green)",
+          });
+        }
+      }
+
+      // 9. Tasks (opt-in) — the highest-priority open task + open count.
+      if (wantTasks && tasksRes.status === "fulfilled" && tasksRes.value) {
+        const allTasks: Task[] = tasksRes.value.tasks ?? [];
+        const open = sortActive(allTasks);
+        if (open.length > 0) {
+          const top = open[0];
+          const counts = tasksRes.value.counts as { high?: number } | undefined;
+          const openCount = tasksRes.value.openCount ?? open.length;
+          out.push({
+            key: "tasks",
+            emoji: "✅",
+            label: "Tasks",
+            detail: top.title,
+            meta: `${openCount} open${counts?.high ? ` · ${counts.high} high` : ""}`,
+            href: "/tasks",
+            color: "var(--accent-indigo)",
+          });
+        }
+      }
+
       if (!cancelled) setItems(out);
     }
 
@@ -360,7 +491,7 @@ export default function TodayBriefing() {
     // Re-run every 5 min so countdowns and next events stay fresh.
     const iv = setInterval(load, 5 * 60 * 1000);
     return () => { cancelled = true; clearInterval(iv); };
-  }, []);
+  }, [settingsTick]);
 
   if (items === null) return null; // silent while loading
 
@@ -392,7 +523,9 @@ export default function TodayBriefing() {
   // Sort items by the persisted kind order; items of the same kind keep their
   // original relative order (stable sort).
   const kindRank = new Map<ItemKind, number>(order.map((k, i) => [k, i]));
-  const sortedItems = [...items].sort((a, b) => (kindRank.get(itemKind(a.key)) ?? 99) - (kindRank.get(itemKind(b.key)) ?? 99));
+  const sortedItems = [...items]
+    .filter((it) => enabledRows.has(itemKind(it.key) as BriefingRow))
+    .sort((a, b) => (kindRank.get(itemKind(a.key)) ?? 99) - (kindRank.get(itemKind(b.key)) ?? 99));
 
   return (
     <div

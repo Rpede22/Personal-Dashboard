@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import HubShell from "@/components/HubShell";
 import { ddragonChampionIcon } from "@/lib/riot";
 import { computeEarnings, dateKey, formatDkk } from "@/lib/payday";
+import { useCurrency, loadReviewSections, loadReviewEnabled, loadReviewAccount, loadReviewWowChars, useSettingsTick, type ReviewSection } from "@/lib/dashboard-settings";
+import { CURRENT_TIER_BOSS_COUNT } from "@/lib/wow-tier";
 
 interface Run { date: string; distance: number; duration: number }
 interface Assignment { id: number; title: string; subject: string | null; status: string; dueDate: string }
@@ -60,6 +62,14 @@ function isSameLocalDay(a: Date, b: Date): boolean {
 }
 
 export default function WeeklyReview() {
+  const currency = useCurrency(); // re-render money on currency change
+  const settingsTick = useSettingsTick();
+  const [enabled, setEnabled] = useState<Set<ReviewSection>>(() => new Set(["running", "lol", "school", "work", "calendar", "teams"]));
+  const [reviewEnabled, setReviewEnabledState] = useState(true);
+  useEffect(() => {
+    setEnabled(loadReviewSections());
+    setReviewEnabledState(loadReviewEnabled());
+  }, [settingsTick]);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<{
     weekStart: Date;
@@ -86,6 +96,8 @@ export default function WeeklyReview() {
     workNet: number;
     prevWorkNet: number;
     workSessionCount: number;
+    faceit: { nickname: string; games: number; wins: number; losses: number; kd: number | null } | null;
+    wowChars: Array<{ name: string; realm: string; highestKey: number | null; raidKills: number | null; raidTotal: number | null }>;
   } | null>(null);
 
   useEffect(() => {
@@ -132,13 +144,13 @@ export default function WeeklyReview() {
         prevCalendarHours += Math.max(0, Math.min(en, weekStart.getTime()) - Math.max(s, prevStart.getTime())) / 3600000;
       }
 
-      // LoL: only the main account (Swimmingfizz) counts for the weekly review —
-      // pooling smurfs conflates play sessions that shouldn't be summarised
-      // together. Falls back to nothing if the account isn't present.
+      // LoL: summarise ONE account (pooling smurfs conflates sessions). Which
+      // account is user-configurable in Settings › General; defaults to the
+      // first saved account when nothing is chosen.
       const allAccounts: LolAccount[] = accountsRes.status === "fulfilled" ? (accountsRes.value?.accounts ?? []) : [];
-      const accounts = allAccounts.filter(
-        (a) => a.gameName.toLowerCase() === "swimmingfizz"
-      );
+      const lolSel = loadReviewAccount("lol");
+      const chosenLol = (lolSel && allAccounts.find((a) => String(a.id) === lolSel)) || allAccounts[0];
+      const accounts = chosenLol ? [chosenLol] : [];
       // Widened to 100 matches so both current and previous windows have data.
       const lolResults = await Promise.allSettled(
         accounts.map((a) => fetch(`/api/lol/summary?accountId=${a.id}&count=100`).then((r) => r.json() as Promise<LolSummary>))
@@ -233,6 +245,56 @@ export default function WeeklyReview() {
       const workNet = computeEarnings(workGross).net;
       const prevWorkNet = computeEarnings(prevWorkGross).net;
 
+      // Which sections are on right now — only fetch the (slower / keyed) game
+      // sources when the user actually shows them.
+      const enabledNow = loadReviewSections();
+
+      // FACEIT (CS2) — one account's record over the 7-day window.
+      let faceit: { nickname: string; games: number; wins: number; losses: number; kd: number | null } | null = null;
+      if (enabledNow.has("faceit")) {
+        try {
+          const fa = await fetch("/api/faceit/accounts").then((r) => r.json());
+          const faccounts: Array<{ id: string; nickname: string }> = fa?.accounts ?? [];
+          const fsel = loadReviewAccount("faceit");
+          const chosen = (fsel && faccounts.find((a) => a.id === fsel)) || faccounts[0];
+          if (chosen) {
+            const mr = await fetch(`/api/faceit/matches?id=${encodeURIComponent(chosen.id)}&limit=50`).then((r) => r.json());
+            const rows: Array<{ win: boolean; kd: number | null; createdAt: string }> = mr?.matches ?? [];
+            const wk = rows.filter((m) => m.createdAt && inThisWeek(m.createdAt, weekStart, weekEnd));
+            const wins = wk.filter((m) => m.win).length;
+            const kds = wk.map((m) => m.kd).filter((v): v is number => typeof v === "number");
+            faceit = { nickname: chosen.nickname, games: wk.length, wins, losses: wk.length - wins, kd: kds.length ? kds.reduce((s, v) => s + v, 0) / kds.length : null };
+          }
+        } catch { /* keyless/off — leave null */ }
+      }
+
+      // WoW — one or more characters' weekly (reset) progress. Which characters
+      // is user-configurable (multi-select); empty = the first saved character.
+      const wowChars: Array<{ name: string; realm: string; highestKey: number | null; raidKills: number | null; raidTotal: number | null }> = [];
+      if (enabledNow.has("wow")) {
+        try {
+          const wc = await fetch("/api/wow/character").then((r) => r.json());
+          const chars: Array<{ id: number; name: string; realm: string; region: string }> = wc?.characters ?? [];
+          const selIds = loadReviewWowChars();
+          const chosen = selIds.length > 0
+            ? chars.filter((c) => selIds.includes(String(c.id)))
+            : (chars[0] ? [chars[0]] : []);
+          const looks = await Promise.all(chosen.map((c) =>
+            fetch(`/api/wow/character?name=${encodeURIComponent(c.name)}&realm=${encodeURIComponent(c.realm)}&region=${encodeURIComponent(c.region)}`)
+              .then((r) => r.json()).catch(() => null),
+          ));
+          chosen.forEach((c, i) => {
+            const look = looks[i];
+            wowChars.push({
+              name: c.name, realm: c.realm,
+              highestKey: typeof look?.weeklyHighestKey === "number" ? look.weeklyHighestKey : null,
+              raidKills: typeof look?.weeklyRaidKills === "number" ? look.weeklyRaidKills : null,
+              raidTotal: CURRENT_TIER_BOSS_COUNT,
+            });
+          });
+        } catch { /* DB-backed — may be unavailable */ }
+      }
+
       if (!cancelled) {
         setData({
           weekStart, weekEnd,
@@ -245,6 +307,7 @@ export default function WeeklyReview() {
           dragonVersion,
           kmStreak, lolStreak,
           workHours, prevWorkHours, workNet, prevWorkNet, workSessionCount: workSessions.filter((s) => s.date >= wStartKey && s.date <= wEndKey).length,
+          faceit, wowChars,
         });
         setLoading(false);
       }
@@ -254,6 +317,16 @@ export default function WeeklyReview() {
 
   const title = "Last 7 days review";
 
+  if (!reviewEnabled) {
+    return (
+      <HubShell title={title} emoji="🗓️" color="var(--accent-cyan)">
+        <div className="rounded-2xl p-8 text-center text-sm max-w-md mx-auto" style={{ background: "var(--surface)", border: "1px dashed var(--border)", color: "var(--text-muted)" }}>
+          The weekly review is turned off. Re-enable it (and pick which sections show) in <span className="font-semibold" style={{ color: "var(--text)" }}>⚙️ Settings › General</span>.
+        </div>
+      </HubShell>
+    );
+  }
+
   if (loading || !data) {
     return (
       <HubShell title={title} emoji="🗓️" color="var(--accent-cyan)">
@@ -262,7 +335,7 @@ export default function WeeklyReview() {
     );
   }
 
-  const { weekStart, weekEnd, runs, prevRuns, schoolDone, prevSchoolDone, calendarHours, prevCalendarHours, lolMatches, prevLolMatches, topChamp, sports, nhlGames, dragonVersion, kmStreak, lolStreak, workHours, prevWorkHours, workNet, prevWorkNet, workSessionCount } = data;
+  const { weekStart, weekEnd, runs, prevRuns, schoolDone, prevSchoolDone, calendarHours, prevCalendarHours, lolMatches, prevLolMatches, topChamp, sports, nhlGames, dragonVersion, kmStreak, lolStreak, workHours, prevWorkHours, workNet, prevWorkNet, workSessionCount, faceit, wowChars } = data;
   const kmThisWeek = runs.reduce((s, r) => s + r.distance, 0);
   const kmPrev = prevRuns.reduce((s, r) => s + r.distance, 0);
   const runsSecs = runs.reduce((s, r) => s + r.duration, 0);
@@ -288,7 +361,7 @@ export default function WeeklyReview() {
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
 
         {/* Running */}
-        <Section title="🏃 Running" href="/running">
+        <Section slug="running" enabled={enabled} title="🏃 Running" href="/running">
           <StatRow
             label="Distance"
             value={`${kmThisWeek.toFixed(1)} km`}
@@ -308,7 +381,7 @@ export default function WeeklyReview() {
         </Section>
 
         {/* LoL */}
-        <Section title="⚔️ League of Legends" href="/lol">
+        <Section slug="lol" enabled={enabled} title="⚔️ League of Legends" href="/lol">
           {totalLolGames === 0 && lolRemakes === 0 ? (
             <div className="text-sm" style={{ color: "var(--text-muted)" }}>No matches played this week.</div>
           ) : (
@@ -348,8 +421,54 @@ export default function WeeklyReview() {
           )}
         </Section>
 
+        {/* CS2 (FACEIT) */}
+        <Section slug="faceit" enabled={enabled} title="🔫 CS2 (FACEIT)" href="/cs2">
+          {!faceit || faceit.games === 0 ? (
+            <div className="text-sm" style={{ color: "var(--text-muted)" }}>No matches played this week.</div>
+          ) : (
+            <>
+              <StatRow
+                label="Record"
+                value={`${faceit.wins}W ${faceit.losses}L`}
+                sub={`${faceit.games} game${faceit.games === 1 ? "" : "s"}`}
+                valueColor={faceit.wins > faceit.losses ? "var(--accent-green)" : faceit.losses > faceit.wins ? "var(--accent-red)" : undefined}
+              />
+              {faceit.kd !== null && (
+                <StatRow label="Avg K/D" value={faceit.kd.toFixed(2)} valueColor={faceit.kd >= 1 ? "var(--accent-green)" : "var(--accent-red)"} />
+              )}
+              <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>{faceit.nickname}</div>
+            </>
+          )}
+        </Section>
+
+        {/* WoW — one card per selected character */}
+        <Section slug="wow" enabled={enabled} title="🐉 World of Warcraft" href="/wow">
+          {wowChars.length === 0 ? (
+            <div className="text-sm" style={{ color: "var(--text-muted)" }}>No character data available.</div>
+          ) : (
+            <div className="space-y-3">
+              {wowChars.map((w) => (
+                <div key={`${w.name}-${w.realm}`} className={wowChars.length > 1 ? "rounded-lg p-2" : ""} style={wowChars.length > 1 ? { background: "var(--surface-2)" } : undefined}>
+                  <StatRow
+                    label="Highest key"
+                    value={w.highestKey ? `+${w.highestKey}` : "—"}
+                    sub="this reset"
+                    valueColor={w.highestKey ? "var(--accent-purple)" : undefined}
+                  />
+                  <StatRow
+                    label="Raid bosses"
+                    value={w.raidKills !== null ? `${w.raidKills}${w.raidTotal ? `/${w.raidTotal}` : ""}` : "—"}
+                    sub="killed this reset"
+                  />
+                  <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>{w.name}-{w.realm}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+
         {/* School */}
-        <Section title="📚 School" href="/school">
+        <Section slug="school" enabled={enabled} title="📚 School" href="/school">
           <StatRow
             label="Completed"
             value={String(schoolDone.length)}
@@ -371,7 +490,7 @@ export default function WeeklyReview() {
         </Section>
 
         {/* Work */}
-        <Section title="💼 Work" href="/work">
+        <Section slug="work" enabled={enabled} title="💼 Work" href="/work">
           {workHours === 0 ? (
             <div className="text-sm" style={{ color: "var(--text-muted)" }}>No hours logged this week.</div>
           ) : (
@@ -388,7 +507,7 @@ export default function WeeklyReview() {
                   value={formatDkk(workNet)}
                   sub="after AM-bidrag + A-skat"
                   valueColor="var(--accent-green)"
-                  delta={prevWorkNet > 0 ? { current: workNet, previous: prevWorkNet, unit: " kr", decimals: 0 } : undefined}
+                  delta={prevWorkNet > 0 ? { current: workNet, previous: prevWorkNet, unit: ` ${currency}`, decimals: 0 } : undefined}
                 />
               )}
             </>
@@ -396,7 +515,7 @@ export default function WeeklyReview() {
         </Section>
 
         {/* Calendar */}
-        <Section title="📅 Calendar" href="/calendar">
+        <Section slug="calendar" enabled={enabled} title="📅 Calendar" href="/calendar">
           <StatRow
             label="Booked"
             value={`${calendarHours.toFixed(1)}h`}
@@ -406,7 +525,7 @@ export default function WeeklyReview() {
         </Section>
 
         {/* Sports */}
-        <Section title="🏆 Followed teams" href="/">
+        <Section slug="teams" enabled={enabled} title="🏆 Followed teams" href="/">
           <ul className="space-y-2 text-sm">
             {/* EDM (NHL) — W-L record across this week's games (matches the
                 aggregate style used for the football/hockey teams below). */}
@@ -476,7 +595,8 @@ export default function WeeklyReview() {
   );
 }
 
-function Section({ title, href, children }: { title: string; href?: string; children: React.ReactNode }) {
+function Section({ title, href, children, slug, enabled }: { title: string; href?: string; children: React.ReactNode; slug?: ReviewSection; enabled?: Set<ReviewSection> }) {
+  if (slug && enabled && !enabled.has(slug)) return null;
   const inner = (
     <div
       className="rounded-2xl p-4 h-full"

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import ical from "node-ical";
+import { readCalendarConfig, caldavAuth } from "@/lib/calendar-config";
 
 const cache = new Map<string, { data: unknown; ts: number }>();
 // Shorter TTL so the auto-refresh in the UI actually pulls fresh data every hour
@@ -20,12 +21,9 @@ export interface CalEvent {
 }
 
 // ── ICS feed sources ───────────────────────────────────────────────────────────
-
-const ICS_FEEDS = [
-  { name: "Rasmus_skole",   envKey: "CALENDAR_SDU_URL" },
-  { name: "Cand",           envKey: "CALENDAR_CAND_URL" },
-  { name: "Rasmus_arbejde", envKey: "CALENDAR_ARBEJDE_URL" },
-];
+// Feeds + CalDAV credentials + include-list now come from `calendar-feeds.json`
+// (via lib/calendar-config.ts), which falls back to the old env vars until the
+// user edits them in Settings › Calendar.
 
 async function fetchICSFeed(rawUrl: string, calName: string, from: Date, to: Date): Promise<CalEvent[]> {
   const url = rawUrl.replace(/^webcal:\/\//i, "https://");
@@ -179,37 +177,17 @@ function extractCalendarData(xml: string): string[] {
   return blocks;
 }
 
-// CalDAV calendars to include (match by iCloud display name prefix). Add a
-// prefix here for every iCloud calendar you want surfaced (and writeable via
-// the quick-add picker). `Cand` intentionally dropped — the ICS
-// `CALENDAR_CAND_URL` feed covers it. `Rasmus` catches any iCloud calendar
-// starting with that name (e.g. `Rasmus_skole`, `Rasmus_arbejde`) alongside
-// the ICS feeds of the same name — the ICS entries stay read-only, but a
-// matching iCloud calendar becomes writeable.
 /**
  * iCloud calendars to surface in the app. `match` is a prefix compared
  * against the raw iCloud display name; the first entry whose prefix
  * matches wins, so more-specific names must be listed BEFORE shorter
  * prefixes they overlap with (e.g. `Kalender Rasmus` before `Kalender`).
- * `display` renames the calendar to the label shown in the app.
+ * `display` renames the calendar to the label shown in the app. The list
+ * comes from `calendar-feeds.json` (lib/calendar-config.ts).
  */
 interface CalDAVMapping { match: string; display?: string }
-const CALDAV_INCLUDE: CalDAVMapping[] = [
-  // Rasmus's own personal calendar — new, writeable, distinct from
-  // Jennifer's shared `Kalender`.
-  { match: "Kalender Rasmus" },
-  // Jennifer's shared personal calendar — renamed in the app so it's
-  // obvious which one is hers vs Rasmus's.
-  { match: "Kalender", display: "Kalender Jennifer" },
-  // Jennifer's shared work calendar.
-  { match: "Arbejde", display: "Jennifer_arbejde" },
-  // Rasmus's own work calendar. Remapped to `Rasmus_arbejde` so it
-  // collides with the ICS feed of the same name (feed is dropped in favor
-  // of the writeable CalDAV copy).
-  { match: "Rasmus", display: "Rasmus_arbejde" },
-];
 
-async function fetchCalDAVCalendars(auth: string): Promise<{ url: string; name: string }[]> {
+async function fetchCalDAVCalendars(auth: string, includes: CalDAVMapping[]): Promise<{ url: string; name: string }[]> {
   // Discover principal
   const propfindPrincipal = `<?xml version="1.0" encoding="UTF-8"?>
 <D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>`;
@@ -252,7 +230,7 @@ async function fetchCalDAVCalendars(auth: string): Promise<{ url: string; name: 
     // First matching entry wins — the array is ordered longest-prefix-first
     // so `Kalender Rasmus` grabs its own row before `Kalender` (Jennifer's)
     // catches it.
-    const matched = CALDAV_INCLUDE.find((e) => name.startsWith(e.match));
+    const matched = includes.find((e) => name.startsWith(e.match));
     if (!matched) continue;
     const displayName = matched.display ?? name;
     calendars.push({ url: resolveHref(href, cFinal), name: displayName });
@@ -300,8 +278,11 @@ async function fetchCalDAVEvents(
 // ── Route ──────────────────────────────────────────────────────────────────────
 
 export async function GET(request: Request) {
-  const hasICS     = ICS_FEEDS.some((f) => !!process.env[f.envKey]);
-  const hasCalDAV  = !!(process.env.ICLOUD_CALDAV_USER && process.env.ICLOUD_CALDAV_PASS);
+  const config     = readCalendarConfig();
+  const icsFeeds   = config.icsFeeds.filter((f) => !!f.url);
+  const auth       = caldavAuth(config);
+  const hasICS     = icsFeeds.length > 0;
+  const hasCalDAV  = !!auth;
   if (!hasICS && !hasCalDAV) return NextResponse.json({ configured: false, events: [] });
 
   const bust = new URL(request.url).searchParams.get("bust") === "1";
@@ -326,10 +307,9 @@ export async function GET(request: Request) {
   //    below. (If a matching iCloud calendar exists, it usually mirrors the ICS
   //    events anyway, so we're not losing data — just avoiding duplicates and
   //    keeping write capability.)
-  if (hasCalDAV) {
+  if (hasCalDAV && auth) {
     try {
-      const auth = "Basic " + Buffer.from(`${process.env.ICLOUD_CALDAV_USER}:${process.env.ICLOUD_CALDAV_PASS}`).toString("base64");
-      const calendars = await fetchCalDAVCalendars(auth);
+      const calendars = await fetchCalDAVCalendars(auth, config.caldav.includes);
       for (const { name } of calendars) {
         allCalendarNames.add(name);
         writableCalendarNames.add(name);
@@ -356,9 +336,8 @@ export async function GET(request: Request) {
   //    An ICS feed whose name already came from CalDAV is dropped entirely
   //    (both the chip and its events) — otherwise events double-count.
   await Promise.all(
-    ICS_FEEDS.map(async ({ name, envKey }) => {
-      const url = process.env[envKey];
-      console.log(`[Calendar] ICS ${name} (${envKey}): url=${url ? url.slice(0, 40) + "..." : "UNSET"}`);
+    icsFeeds.map(async ({ name, url }) => {
+      console.log(`[Calendar] ICS ${name}: url=${url ? url.slice(0, 40) + "..." : "UNSET"}`);
       if (!url) return;
       if (allCalendarNames.has(name)) {
         console.log(`[Calendar] ICS ${name}: skipped (already provided by CalDAV)`);

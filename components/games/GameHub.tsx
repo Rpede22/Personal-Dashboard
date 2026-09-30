@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import HubShell from "@/components/HubShell";
 import WoWHub from "@/components/wow/WoWHub";
 import LoLHub from "@/components/lol/LoLHub";
+import CS2Hub from "@/components/cs2/CS2Hub";
+import TFTHub from "@/components/tft/TFTHub";
+import { useEnabledGames } from "@/lib/games-visibility";
 
-export type GameKey = "wow" | "lol";
+export type GameKey = "wow" | "lol" | "cs2" | "tft";
 
 /**
  * Unified games hub — one sticky header (via HubShell), a WoW/LoL tab switcher,
@@ -15,14 +18,24 @@ export type GameKey = "wow" | "lol";
  */
 export default function GameHub({ defaultGame = "wow" }: { defaultGame?: GameKey }) {
   const [game, setGame] = useState<GameKey>(defaultGame);
+  const enabled = useEnabledGames();
 
-  const tabs: Array<{
+  const allTabs: Array<{
     key: GameKey; label: string; emoji: string; color: string;
   }> = [
     { key: "wow", label: "World of Warcraft", emoji: "🧙",  color: "var(--accent-purple)" },
     { key: "lol", label: "League of Legends", emoji: "⚔️", color: "var(--accent-blue)"   },
+    { key: "cs2", label: "Counter-Strike 2",  emoji: "🎯", color: "var(--accent-orange)" },
+    { key: "tft", label: "Teamfight Tactics", emoji: "🎲", color: "var(--accent-cyan)"   },
   ];
-  const activeMeta = tabs.find((t) => t.key === game)!;
+  const tabs = allTabs.filter((t) => enabled.has(t.key));
+
+  // If the active game was hidden, fall back to the first visible one.
+  useEffect(() => {
+    if (tabs.length > 0 && !tabs.some((t) => t.key === game)) setGame(tabs[0].key);
+  }, [tabs, game]);
+
+  const activeMeta = tabs.find((t) => t.key === game) ?? allTabs.find((t) => t.key === game)!;
 
   const switcher = (
     <div
@@ -56,7 +69,7 @@ export default function GameHub({ defaultGame = "wow" }: { defaultGame?: GameKey
       color={activeMeta.color}
       tabs={switcher}
     >
-      {game === "wow" ? <WoWHub hideHeader /> : <LoLHub hideHeader />}
+      {game === "wow" ? <WoWHub hideHeader /> : game === "lol" ? <LoLHub hideHeader /> : game === "cs2" ? <CS2Hub hideHeader /> : <TFTHub hideHeader />}
     </HubShell>
   );
 }

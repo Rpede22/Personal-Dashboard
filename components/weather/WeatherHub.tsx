@@ -32,6 +32,7 @@ interface Forecast {
     high: number;
     low: number;
     rainChance: number;
+    precipSum: number; // mm total for the day
     weatherCode: number;
     sunrise: string;   // HH:MM
     sunset: string;    // HH:MM
@@ -42,10 +43,16 @@ interface Forecast {
     isoTime: string;   // local iso
     tempC: number;
     feelsLikeC: number;
-    rainChance: number;
+    rainChance: number;  // probability % (kept for the run-window scoring)
+    precipMm: number;    // precipitation amount (mm) — what the UI shows, like dmi.dk
     windMs: number;
     weatherCode: number;
   }>;
+}
+
+/** Rain amount label in mm (like dmi.dk): "0.4 mm", or "0 mm" when dry. */
+function fmtMm(mm: number): string {
+  return `${(mm > 0 ? mm : 0).toFixed(1)} mm`;
 }
 
 function toHourKey(iso: string): string { return iso.slice(0, 13); }
@@ -137,7 +144,9 @@ function bestRunWindow(hourly: Forecast["hourly"], todayKey: string): { startIso
 
 export default function WeatherHub() {
   const [data, setData] = useState<Forecast | null>(null);
+  const [source, setSource] = useState<string>("open-meteo");
   const [refreshing, setRefreshing] = useState(false);
+  const [popupDay, setPopupDay] = useState<string | null>(null); // date key of the open day-detail popup
   const selected = useSelectedCity();
   const [cities, setCities] = useState<City[]>(DEFAULT_CITIES);
   const [addName, setAddName] = useState("");
@@ -184,15 +193,16 @@ export default function WeatherHub() {
   async function load() {
     setRefreshing(true);
     try {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${selected.lat}&longitude=${selected.lon}` +
+      const url = `/api/weather?latitude=${selected.lat}&longitude=${selected.lon}` +
         `&current=temperature_2m,apparent_temperature,wind_speed_10m,weather_code,uv_index` +
-        `&hourly=temperature_2m,apparent_temperature,precipitation_probability,wind_speed_10m,weather_code` +
-        `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code,sunrise,sunset,daylight_duration,uv_index_max` +
+        `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,wind_speed_10m,weather_code` +
+        `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,weather_code,sunrise,sunset,daylight_duration,uv_index_max` +
         `&wind_speed_unit=ms` +
         `&timezone=Europe%2FCopenhagen`;
       const res = await fetch(url);
       if (!res.ok) return;
       const j = await res.json();
+      setSource(typeof j.source === "string" ? j.source : "open-meteo");
 
       const daily: Forecast["daily"] = (j.daily?.time ?? []).map((_: string, i: number) => {
         const sunrise = new Date(j.daily.sunrise[i]);
@@ -202,6 +212,7 @@ export default function WeatherHub() {
           high: Math.round(j.daily.temperature_2m_max[i]),
           low: Math.round(j.daily.temperature_2m_min[i]),
           rainChance: Math.round(j.daily.precipitation_probability_max[i] ?? 0),
+          precipSum: Math.round((j.daily.precipitation_sum?.[i] ?? 0) * 10) / 10,
           weatherCode: j.daily.weather_code[i],
           sunrise: sunrise.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
           sunset: sunset.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
@@ -215,6 +226,7 @@ export default function WeatherHub() {
         tempC: Math.round(j.hourly.temperature_2m[i]),
         feelsLikeC: Math.round(j.hourly.apparent_temperature[i] ?? j.hourly.temperature_2m[i]),
         rainChance: Math.round(j.hourly.precipitation_probability[i] ?? 0),
+        precipMm: Math.round((j.hourly.precipitation?.[i] ?? 0) * 10) / 10,
         windMs: j.hourly.wind_speed_10m[i] ?? 0,
         weatherCode: j.hourly.weather_code[i] ?? 0,
       }));
@@ -344,7 +356,12 @@ export default function WeatherHub() {
           {/* ── Now + best run window ── */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="rounded-2xl p-5" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-              <div className="text-xs uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>Now · {selected.name}</div>
+              <div className="text-xs uppercase tracking-wide mb-1 flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
+                <span>Now · {selected.name}</span>
+                <span className="px-1.5 py-0.5 rounded normal-case tracking-normal text-[10px]" title={source === "dmi" ? "Near-term forecast from DMI (Danish Met Institute); 7-day outlook + UV from open-meteo" : "Forecast from open-meteo"} style={{ background: source === "dmi" ? "var(--accent-red)22" : "var(--surface-2)", color: source === "dmi" ? "var(--accent-red)" : "var(--text-muted)", border: "1px solid var(--border)" }}>
+                  {source === "dmi" ? "🇩🇰 DMI" : "open-meteo"}
+                </span>
+              </div>
               <div className="flex items-center gap-4">
                 <div className="text-5xl">{currentDecode?.icon}</div>
                 <div>
@@ -386,21 +403,23 @@ export default function WeatherHub() {
             <HourlyStrip title={`${dayLabel(tomorrowKey)} — hourly`} hours={tomorrowHours} />
           )}
 
-          {/* ── 7-day forecast ── */}
+          {/* ── 7-day forecast (click a day → hour-by-hour popup) ── */}
           <div>
-            <h3 className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>Next 7 days</h3>
+            <h3 className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>Next 7 days <span className="normal-case tracking-normal" style={{ opacity: 0.7 }}>· tap a day for the hourly breakdown</span></h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2">
               {data.daily.slice(0, 7).map((d) => {
                 const dec = decode(d.weatherCode);
                 const isToday = d.date === todayKey;
                 return (
-                  <div
+                  <button
                     key={d.date}
-                    className="rounded-xl p-3 text-center"
+                    onClick={() => setPopupDay(d.date)}
+                    className="rounded-xl p-3 text-center transition-all hover:brightness-110 cursor-pointer"
                     style={{
                       background: "var(--surface)",
                       border: `1px solid ${isToday ? "var(--accent-cyan)" : "var(--border)"}`,
                     }}
+                    title={`See ${dayLabel(d.date)} hour by hour`}
                   >
                     <div className="text-xs font-semibold" style={{ color: isToday ? "var(--accent-cyan)" : "var(--text-muted)" }}>
                       {dayLabel(d.date)}
@@ -411,9 +430,9 @@ export default function WeatherHub() {
                       <span style={{ color: "var(--text-muted)" }}> / {d.low}°</span>
                     </div>
                     <div className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
-                      💧 {d.rainChance}% · UV {d.uvMax}
+                      💧 {fmtMm(d.precipSum)} · UV {d.uvMax}
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -443,11 +462,130 @@ export default function WeatherHub() {
           )}
 
           <p className="text-[11px] text-center" style={{ color: "var(--text-muted)" }}>
-            Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer" className="underline">open-meteo</a> (no API key). Coords: {selected.name} ({selected.lat.toFixed(3)}, {selected.lon.toFixed(3)}) · Refreshes every hour. Cities picker + geocoding via open-meteo.
+            Data: {source === "dmi" ? <>near-term from <a href="https://opendatadocs.dmi.govcloud.dk/" target="_blank" rel="noopener noreferrer" className="underline">DMI</a> (Danish Met Institute) + 7-day/UV from <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer" className="underline">open-meteo</a></> : <><a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer" className="underline">open-meteo</a></>} — no API keys. Coords: {selected.name} ({selected.lat.toFixed(3)}, {selected.lon.toFixed(3)}) · Refreshes every hour. Cities picker + geocoding via open-meteo.
           </p>
+
+          {/* ── Day detail popup (hour by hour) ── */}
+          {popupDay && (
+            <DayHourlyModal
+              cityName={selected.name}
+              source={source}
+              daily={data.daily.find((d) => d.date === popupDay) ?? null}
+              hours={data.hourly.filter((h) => h.isoTime.startsWith(popupDay))}
+              onClose={() => setPopupDay(null)}
+            />
+          )}
         </div>
       )}
     </HubShell>
+  );
+}
+
+/**
+ * Full-day hour-by-hour popup (#Weather) — the "weather app" day view opened by
+ * tapping a day in the 7-day forecast. Danish cities already get DMI values on
+ * the near-term days (the `/api/weather` overlay is applied to the same `hourly`
+ * array), so no extra fetch is needed; days beyond DMI's ~2.5-day window fall
+ * back to open-meteo. Shows the day summary + a scrollable hour list (time ·
+ * icon · temp/feels · rain-probability bar · wind).
+ */
+function DayHourlyModal({
+  cityName, source, daily, hours, onClose,
+}: {
+  cityName: string;
+  source: string;
+  daily: Forecast["daily"][number] | null;
+  hours: Forecast["hourly"];
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = prev; document.removeEventListener("keydown", onKey); };
+  }, [onClose]);
+
+  const dec = daily ? decode(daily.weatherCode) : null;
+  // Is this day covered by DMI's near-term window? DMI publishes ~2.5 days, so
+  // only today/tomorrow/day-after carry DMI values even when source is "dmi".
+  const dmiCovered = source === "dmi" && !!daily && (() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const d = new Date(daily.date + "T12:00:00"); d.setHours(0, 0, 0, 0);
+    const diff = Math.round((d.getTime() - today.getTime()) / 86400000);
+    return diff >= 0 && diff <= 2;
+  })();
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.55)" }} onClick={onClose}>
+      <div
+        className="rounded-2xl overflow-hidden flex flex-col w-full max-w-md shadow-2xl"
+        style={{ background: "var(--surface)", border: "1px solid var(--border)", maxHeight: "min(82vh, 680px)", marginTop: 28 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header — day summary */}
+        <div className="flex-shrink-0 px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>{cityName}</div>
+              <div className="text-lg font-bold">{daily ? dayLabel(daily.date) : "Day"}</div>
+            </div>
+            <button onClick={onClose} className="text-lg opacity-60 hover:opacity-100" title="Close (Esc)">✕</button>
+          </div>
+          {daily && (
+            <div className="flex items-center gap-3 mt-2">
+              <div className="text-4xl">{dec?.icon}</div>
+              <div className="flex-1">
+                <div className="text-sm">
+                  <span className="font-bold text-lg">{daily.high}°</span>
+                  <span style={{ color: "var(--text-muted)" }}> / {daily.low}°</span>
+                  <span className="ml-2" style={{ color: "var(--text-muted)" }}>{dec?.label}</span>
+                </div>
+                <div className="text-xs mt-0.5 flex flex-wrap gap-x-3" style={{ color: "var(--text-muted)" }}>
+                  <span>💧 {fmtMm(daily.precipSum)}</span>
+                  <span>☀ UV {daily.uvMax}</span>
+                  <span>🌅 {daily.sunrise}</span>
+                  <span>🌇 {daily.sunset}</span>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="mt-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px]" title={dmiCovered ? "Near-term forecast from DMI (Danish Met Institute)" : "Forecast from open-meteo"} style={{ background: dmiCovered ? "var(--accent-red)22" : "var(--surface-2)", color: dmiCovered ? "var(--accent-red)" : "var(--text-muted)", border: "1px solid var(--border)" }}>
+              {dmiCovered ? "🇩🇰 DMI" : "open-meteo"}
+            </span>
+          </div>
+        </div>
+
+        {/* Hour-by-hour list */}
+        <div className="flex-1 overflow-y-auto p-3">
+          {hours.length === 0 ? (
+            <p className="text-sm text-center py-6" style={{ color: "var(--text-muted)" }}>No hourly data for this day.</p>
+          ) : (
+            <div className="space-y-1">
+              {hours.map((h) => {
+                const hd = decode(h.weatherCode);
+                return (
+                  <div key={toHourKey(h.isoTime)} className="flex items-center gap-3 px-2 py-1.5 rounded-lg" style={{ background: "var(--surface-2)" }}>
+                    <div className="text-xs font-medium tabular-nums w-12 shrink-0" style={{ color: "var(--text-muted)" }}>{hourLabel(h.isoTime)}</div>
+                    <div className="text-lg w-7 text-center shrink-0" title={hd.label}>{hd.icon}</div>
+                    <div className="text-sm font-semibold w-14 shrink-0 tabular-nums">{h.tempC}° <span className="text-[10px] font-normal" style={{ color: "var(--text-muted)" }}>({h.feelsLikeC}°)</span></div>
+                    {/* Rain amount (mm) — bar scaled against ~4 mm/h heavy rain */}
+                    <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--surface)" }}>
+                        <div className="h-full rounded-full" style={{ width: `${Math.min(100, (h.precipMm / 4) * 100)}%`, background: h.precipMm > 0 ? "var(--accent-blue)" : "var(--text-muted)" }} />
+                      </div>
+                      <span className="text-[10px] tabular-nums w-12 text-right shrink-0" style={{ color: h.precipMm > 0 ? "var(--accent-blue)" : "var(--text-muted)" }}>{fmtMm(h.precipMm)}</span>
+                    </div>
+                    <div className="text-[10px] tabular-nums w-14 text-right shrink-0" style={{ color: "var(--text-muted)" }}>💨 {h.windMs.toFixed(1)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -471,8 +609,8 @@ function HourlyStrip({ title, hours }: { title: string; hours: Forecast["hourly"
                 <div className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>{hourLabel(h.isoTime)}</div>
                 <div className="text-lg">{dec.icon}</div>
                 <div className="text-sm font-semibold">{h.tempC}°</div>
-                <div className="text-[10px]" style={{ color: h.rainChance >= 40 ? "var(--accent-blue)" : "var(--text-muted)" }}>
-                  {h.rainChance}%
+                <div className="text-[10px]" style={{ color: h.precipMm > 0 ? "var(--accent-blue)" : "var(--text-muted)" }}>
+                  {fmtMm(h.precipMm)}
                 </div>
               </div>
             );

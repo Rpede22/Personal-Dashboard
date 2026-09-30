@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import { configPath } from "@/lib/config-dir";
+import { computeEarnings } from "@/lib/payday";
 
 /**
  * Simple JSON-file config for the Work widget. No Cand API exists, so this
@@ -25,7 +26,31 @@ const DEFAULT_PAY_TERM_END: PayTermEnd = 23;
 
 interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 
+/**
+ * A fixed/recurring monthly income beyond the hourly job — e.g. Danish SU (a
+ * fixed monthly student grant). `taxed:false` means the amount is already net
+ * (SU is paid net) so it flows straight to the net total; `taxed:true` means
+ * it's a gross amount run through the same AM-bidrag/A-skat model as job pay.
+ */
+interface FixedIncome { id: string; label: string; amountPerMonth: number; taxed: boolean }
+
+const DEFAULT_MONTHLY_HOURS = 160;
+const DEFAULT_REGISTER_URL = "https://profil.cand.dk/work/register";
+const DEFAULT_PAYSLIP_URL = "https://intect.app/selfservice/payslip";
+
 interface WorkConfig {
+  /**
+   * Whether hour-tracking is on. When false, the Work hub/widget collapse to a
+   * disabled state and any consumer that needs a monthly-hours figure uses
+   * `monthlyHoursFallback` instead of summing logged sessions. For people on a
+   * fixed salary who don't log hours.
+   */
+  enabled: boolean;
+  /** Flat monthly hours assumed when `enabled` is false (default 160). */
+  monthlyHoursFallback: number;
+  /** External links (editable; empty string hides the button). */
+  registerUrl: string;
+  payslipUrl: string;
   /** When you get paid (display / countdown). Default: last weekday of month. */
   payday: Payday;
   /**
@@ -34,8 +59,31 @@ interface WorkConfig {
    * kroner arrive on the last banking day of the same month.
    */
   payTermEnd: PayTermEnd;
+  /** "Do you have more than one income?" — when false, `incomes` is ignored and
+   *  the monthly figures come from the hourly job alone (single-job default). */
+  multipleIncomes: boolean;
+  /** Fixed monthly incomes (SU, a stipend, etc.) added on top of job earnings. */
+  incomes: FixedIncome[];
   hoursByWeek: Record<string, number>;
   sessions: WorkSession[];
+}
+
+function sanitizeIncomes(raw: unknown): FixedIncome[] {
+  if (!Array.isArray(raw)) return [];
+  const out: FixedIncome[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    const amount = Number(o.amountPerMonth);
+    if (!Number.isFinite(amount) || amount < 0 || amount > 10_000_000) continue;
+    out.push({
+      id: typeof o.id === "string" && o.id ? o.id : Math.random().toString(36).slice(2, 10),
+      label: String(o.label ?? "").slice(0, 60) || "Income",
+      amountPerMonth: amount,
+      taxed: Boolean(o.taxed),
+    });
+  }
+  return out;
 }
 
 const CONFIG_PATH = configPath(".work-config.json");
@@ -54,14 +102,32 @@ function readConfig(): WorkConfig {
       typeof pt === "number" && Number.isFinite(pt) && pt >= 1 && pt <= 31
         ? Math.floor(pt)
         : DEFAULT_PAY_TERM_END;
+    const mh = parsed.monthlyHoursFallback;
     return {
+      enabled: parsed.enabled === undefined ? true : Boolean(parsed.enabled),
+      monthlyHoursFallback: typeof mh === "number" && mh >= 0 && mh <= 744 ? mh : DEFAULT_MONTHLY_HOURS,
+      registerUrl: typeof parsed.registerUrl === "string" ? parsed.registerUrl : DEFAULT_REGISTER_URL,
+      payslipUrl: typeof parsed.payslipUrl === "string" ? parsed.payslipUrl : DEFAULT_PAYSLIP_URL,
       payday,
       payTermEnd,
+      multipleIncomes: Boolean(parsed.multipleIncomes),
+      incomes: sanitizeIncomes(parsed.incomes),
       hoursByWeek: parsed.hoursByWeek ?? {},
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
     };
   } catch {
-    return { payday: "last-weekday", payTermEnd: DEFAULT_PAY_TERM_END, hoursByWeek: {}, sessions: [] };
+    return {
+      enabled: true,
+      monthlyHoursFallback: DEFAULT_MONTHLY_HOURS,
+      registerUrl: DEFAULT_REGISTER_URL,
+      payslipUrl: DEFAULT_PAYSLIP_URL,
+      payday: "last-weekday",
+      payTermEnd: DEFAULT_PAY_TERM_END,
+      multipleIncomes: false,
+      incomes: [],
+      hoursByWeek: {},
+      sessions: [],
+    };
   }
 }
 
@@ -84,7 +150,38 @@ function parseRate(v: unknown): number | undefined | "invalid" {
 }
 
 export async function GET() {
-  return NextResponse.json(readConfig());
+  const cfg = readConfig();
+  // Current calendar month's income, for the Budget hub's "use Work income"
+  // integration. Gross = this month's rated sessions (hours × rate); net via
+  // the same AM-bidrag/A-skat model the Work hub uses.
+  const now = new Date();
+  const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const jobGross = cfg.sessions.reduce((sum, s) => {
+    if (typeof s.hourlyRate === "number" && s.date.startsWith(prefix)) return sum + s.hours * s.hourlyRate;
+    return sum;
+  }, 0);
+
+  // Fold in fixed incomes (SU, etc.) only when the user has opted into
+  // multiple income sources. `computeEarnings` is linear in this fixed-percent
+  // model, so taxed job + taxed fixed incomes can be taxed together in one call;
+  // untaxed incomes (already net, like SU) add straight to net.
+  const useIncomes = cfg.multipleIncomes && cfg.incomes.length > 0;
+  const taxedExtra = useIncomes ? cfg.incomes.filter((i) => i.taxed).reduce((s, i) => s + i.amountPerMonth, 0) : 0;
+  const untaxedExtra = useIncomes ? cfg.incomes.filter((i) => !i.taxed).reduce((s, i) => s + i.amountPerMonth, 0) : 0;
+
+  const taxed = computeEarnings(jobGross + taxedExtra);
+  const monthlyGrossIncome = taxed.gross + untaxedExtra; // untaxed has no "gross" — count it at face value
+  const monthlyNetIncome = taxed.net + untaxedExtra;
+
+  // Breakdown so the UI can show "Job Xkr + SU Ykr = Zkr net".
+  const incomeBreakdown = {
+    jobNet: computeEarnings(jobGross).net,
+    fixed: useIncomes
+      ? cfg.incomes.map((i) => ({ label: i.label, taxed: i.taxed, net: i.taxed ? computeEarnings(i.amountPerMonth).net : i.amountPerMonth }))
+      : [],
+  };
+
+  return NextResponse.json({ ...cfg, monthlyGrossIncome, monthlyNetIncome, incomeBreakdown });
 }
 
 export async function POST(request: Request) {
@@ -110,6 +207,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "payTermEnd must be 1..31" }, { status: 400 });
     }
     cfg.payTermEnd = Math.floor(n);
+  }
+
+  if ("enabled" in body) cfg.enabled = Boolean(body.enabled);
+
+  // Multiple income sources (job + SU, etc.).
+  if ("multipleIncomes" in body) cfg.multipleIncomes = Boolean(body.multipleIncomes);
+  if ("incomes" in body) cfg.incomes = sanitizeIncomes(body.incomes);
+
+  if ("monthlyHoursFallback" in body) {
+    const n = Number(body.monthlyHoursFallback);
+    if (!Number.isFinite(n) || n < 0 || n > 744) {
+      return NextResponse.json({ error: "monthlyHoursFallback must be 0..744" }, { status: 400 });
+    }
+    cfg.monthlyHoursFallback = n;
+  }
+
+  // Links: accept http(s) or empty string (empty = hide the button).
+  for (const key of ["registerUrl", "payslipUrl"] as const) {
+    if (key in body) {
+      const u = String(body[key] ?? "").trim();
+      if (u !== "" && !/^https?:\/\//i.test(u)) {
+        return NextResponse.json({ error: `${key} must be http(s) or empty` }, { status: 400 });
+      }
+      cfg[key] = u;
+    }
   }
 
   // Legacy weekly hours (kept for read-through so old data isn't lost).

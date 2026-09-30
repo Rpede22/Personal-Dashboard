@@ -13,9 +13,12 @@ import {
   sumEarningsInTerm,
   sumHoursInTerm,
 } from "@/lib/payday";
+import { useCurrency } from "@/lib/dashboard-settings";
 
 interface WorkSession { date: string; hours: number; hourlyRate?: number; note?: string }
 interface WorkConfig {
+  enabled?: boolean;
+  monthlyHoursFallback?: number;
   payday: Payday;
   payTermEnd: number;
   hoursByWeek: Record<string, number>;
@@ -39,6 +42,7 @@ function formatHoursMinutes(decimalHours: number): string {
 }
 
 export default function WorkhubWidget() {
+  useCurrency(); // re-render money on currency change
   const [config, setConfig] = useState<WorkConfig | null>(null);
 
   useEffect(() => {
@@ -70,6 +74,21 @@ export default function WorkhubWidget() {
   const termLabel = term
     ? `${formatShortDate(dateKey(term.start))} – ${formatShortDate(dateKey(term.end))}`
     : "no payday set";
+
+  if (config && config.enabled === false) {
+    return (
+      <Card accentColor="var(--accent-cyan)">
+        <CardHeader icon="💼" title="Work Hours" subtitle="tracking off" accentColor="var(--accent-cyan)" />
+        <div className="flex flex-col items-center justify-center text-center py-6 gap-2">
+          <span className="text-2xl">💤</span>
+          <div className="text-sm" style={{ color: "var(--text-muted)" }}>
+            Hour tracking is off — assuming{" "}
+            <strong style={{ color: "var(--text)" }}>{config.monthlyHoursFallback ?? 160} h/month</strong>.
+          </div>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card accentColor="var(--accent-cyan)">

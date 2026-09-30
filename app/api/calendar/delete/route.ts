@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { discoverCalDAVCalendars, dav, resolveHref, extractAllHrefs } from "@/lib/caldav";
+import { caldavAuth } from "@/lib/calendar-config";
 
 /**
  * POST /api/calendar/delete
@@ -16,10 +17,9 @@ import { discoverCalDAVCalendars, dav, resolveHref, extractAllHrefs } from "@/li
  * DELETE that href.
  */
 export async function POST(request: Request) {
-  const user = process.env.ICLOUD_CALDAV_USER;
-  const pass = process.env.ICLOUD_CALDAV_PASS;
-  if (!user || !pass) {
-    return NextResponse.json({ error: "iCloud CalDAV not configured (ICLOUD_CALDAV_USER / ICLOUD_CALDAV_PASS)." }, { status: 503 });
+  const auth = caldavAuth();
+  if (!auth) {
+    return NextResponse.json({ error: "iCloud CalDAV not configured — set your Apple ID + app-specific password in Settings › Calendar." }, { status: 503 });
   }
 
   let body: { calendar?: string; uid?: string };
@@ -30,8 +30,6 @@ export async function POST(request: Request) {
   if (!calendar || !uid) {
     return NextResponse.json({ error: "calendar and uid required" }, { status: 400 });
   }
-
-  const auth = "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
 
   const calendars = await discoverCalDAVCalendars(auth);
   const norm = (s: string) => s.toLowerCase().replace(/[\s_\-.]+/g, "");

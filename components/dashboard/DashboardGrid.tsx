@@ -1,124 +1,102 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import WidgetErrorBoundary from "@/components/WidgetErrorBoundary";
 import { REFRESH_OPTIONS_MIN, loadRefreshOverrides, saveRefreshOverride } from "@/lib/refresh";
+import {
+  type WidgetSlug as Slug,
+  type CategoryFilter,
+  WIDGET_META_BY_SLUG, DEFAULT_WIDGET_ORDER,
+  loadWidgetOrder, saveWidgetOrder, loadWidgetEnabled,
+  loadCategoryFilter, saveCategoryFilter, CATEGORY_META,
+  useSettingsTick,
+} from "@/lib/dashboard-settings";
 import SportsWidget from "@/components/dashboard/SportsWidget";
 import SchoolWidget from "@/components/dashboard/SchoolWidget";
+import TasksWidget from "@/components/dashboard/TasksWidget";
 import GamesWidget from "@/components/dashboard/GamesWidget";
 import RunningWidget from "@/components/dashboard/RunningWidget";
+import MealWidget from "@/components/dashboard/MealWidget";
+import SteamWidget from "@/components/dashboard/SteamWidget";
 import WorkhubWidget from "@/components/dashboard/WorkhubWidget";
 import CalendarWidget from "@/components/dashboard/CalendarWidget";
 import NewsWidget from "@/components/dashboard/NewsWidget";
 import MediaWidget from "@/components/dashboard/MediaWidget";
 import WeatherWidget from "@/components/dashboard/WeatherWidget";
+import TransitWidget from "@/components/dashboard/TransitWidget";
+import SubscriptionsWidget from "@/components/dashboard/SubscriptionsWidget";
+import BudgetWidget from "@/components/dashboard/BudgetWidget";
+import WatchlistWidget from "@/components/dashboard/WatchlistWidget";
 
-type Slug = "sports" | "school" | "games" | "running" | "calendar" | "workhub" | "news" | "media" | "weather";
-
-const DEFAULT_ORDER: Slug[] = ["sports", "school", "games", "running", "calendar", "workhub", "news", "media", "weather"];
-const ORDER_KEY = "dashboard.widgetOrder";
-const ENABLED_KEY = "dashboard.widgetEnabled";
+const DEFAULT_ORDER = DEFAULT_WIDGET_ORDER;
 
 interface Entry {
   label: string;
   href?: string;
   node: ReactNode;
-  /** Preferred size class. `wide` spans both grid columns. Default is 1×1. */
   size?: "square" | "wide";
-  /** Default auto-refresh interval in minutes. 0 = never. Shown in the ⚡ menu. */
   defaultRefreshMin?: number;
 }
 
-const WIDGETS: Record<Slug, Entry> = {
-  sports: { label: "Sports", node: <SportsWidget />, defaultRefreshMin: 5 },
-  school: { label: "School", href: "/school", node: <SchoolWidget />, defaultRefreshMin: 0 },
-  games: { label: "Games", node: <GamesWidget />, defaultRefreshMin: 2 },
-  running: { label: "Running", href: "/running", node: <RunningWidget />, defaultRefreshMin: 0 },
-  calendar: { label: "Calendar", href: "/calendar", node: <CalendarWidget />, size: "wide", defaultRefreshMin: 60 },
-  workhub: { label: "Workhub", href: "/work", node: <WorkhubWidget />, defaultRefreshMin: 0 },
-  news:    { label: "News",    href: "/news", node: <NewsWidget />,    defaultRefreshMin: 15 },
-  media:   { label: "Media",   href: "/media", node: <MediaWidget />,  defaultRefreshMin: 5 },
-  weather: { label: "Weather", href: "/weather", node: <WeatherWidget />, defaultRefreshMin: 30 },
+// The React nodes live here; all metadata (label/href/size/refresh/order) comes
+// from the shared catalogue in lib/dashboard-settings so the settings modal and
+// the grid can't drift.
+const NODES: Record<Slug, ReactNode> = {
+  sports: <SportsWidget />,
+  school: <SchoolWidget />,
+  tasks: <TasksWidget />,
+  games: <GamesWidget />,
+  running: <RunningWidget />,
+  meals: <MealWidget />,
+  steam: <SteamWidget />,
+  calendar: <CalendarWidget />,
+  workhub: <WorkhubWidget />,
+  news: <NewsWidget />,
+  media: <MediaWidget />,
+  weather: <WeatherWidget />,
+  transit: <TransitWidget />,
+  subscriptions: <SubscriptionsWidget />,
+  budget: <BudgetWidget />,
+  watchlist: <WatchlistWidget />,
 };
 
-function loadOrder(): Slug[] {
-  if (typeof window === "undefined") return DEFAULT_ORDER;
-  try {
-    const raw = localStorage.getItem(ORDER_KEY);
-    if (!raw) return DEFAULT_ORDER;
-    const parsed = JSON.parse(raw) as Slug[];
-    const known = new Set(DEFAULT_ORDER);
-    const kept = parsed.filter((s) => known.has(s));
-    for (const s of DEFAULT_ORDER) if (!kept.includes(s)) kept.push(s);
-    return kept;
-  } catch {
-    return DEFAULT_ORDER;
-  }
-}
-
-function loadEnabled(): Set<Slug> {
-  if (typeof window === "undefined") return new Set(DEFAULT_ORDER);
-  try {
-    const raw = localStorage.getItem(ENABLED_KEY);
-    if (!raw) return new Set(DEFAULT_ORDER);
-    const parsed = JSON.parse(raw) as Slug[];
-    const known = new Set(DEFAULT_ORDER);
-    // Newly-added widgets that don't appear in the stored list should be
-    // enabled by default — otherwise `loadEnabled()` silently hides any
-    // widget added after the first time this dashboard was opened.
-    const storedKnown = parsed.filter((s) => known.has(s));
-    const seen = new Set(storedKnown);
-    for (const s of DEFAULT_ORDER) if (!seen.has(s)) storedKnown.push(s);
-    return new Set(storedKnown);
-  } catch {
-    return new Set(DEFAULT_ORDER);
-  }
-}
+const WIDGETS: Record<Slug, Entry> = Object.fromEntries(
+  DEFAULT_ORDER.map((slug) => {
+    const m = WIDGET_META_BY_SLUG[slug];
+    return [slug, { label: m.label, href: m.href, node: NODES[slug], size: m.size, defaultRefreshMin: m.defaultRefreshMin }];
+  })
+) as Record<Slug, Entry>;
 
 export default function DashboardGrid() {
+  const tick = useSettingsTick();
   const [order, setOrder] = useState<Slug[]>(DEFAULT_ORDER);
   const [enabled, setEnabled] = useState<Set<Slug>>(new Set(DEFAULT_ORDER));
   const [dragSlug, setDragSlug] = useState<Slug | null>(null);
   const [hoverSlug, setHoverSlug] = useState<Slug | null>(null);
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const libraryRef = useRef<HTMLDivElement | null>(null);
   const [refreshOverrides, setRefreshOverrides] = useState<Record<string, number>>({});
   const [refreshMenuFor, setRefreshMenuFor] = useState<Slug | null>(null);
+  const [category, setCategoryState] = useState<CategoryFilter>("all");
 
+  // Read from the shared store on mount + whenever settings change (the modal
+  // toggles enabled/refresh and broadcasts, bumping `tick`).
   useEffect(() => {
-    setOrder(loadOrder());
-    setEnabled(loadEnabled());
+    setOrder(loadWidgetOrder());
+    setEnabled(loadWidgetEnabled());
     setRefreshOverrides(loadRefreshOverrides());
-  }, []);
+    setCategoryState(loadCategoryFilter());
+  }, [tick]);
+
+  function setCategory(cat: CategoryFilter) {
+    setCategoryState(cat);
+    saveCategoryFilter(cat);
+  }
 
   function setRefresh(slug: Slug, minutes: number | null) {
     saveRefreshOverride(slug, minutes);
     setRefreshOverrides(loadRefreshOverrides());
     setRefreshMenuFor(null);
   }
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch { /* ignore */ }
-  }, [order]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try { localStorage.setItem(ENABLED_KEY, JSON.stringify([...enabled])); } catch { /* ignore */ }
-  }, [enabled]);
-
-  // Close library popover when clicking outside.
-  useEffect(() => {
-    if (!libraryOpen) return;
-    function onDoc(e: MouseEvent) {
-      if (libraryRef.current && !libraryRef.current.contains(e.target as Node)) {
-        setLibraryOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [libraryOpen]);
 
   // Close refresh menu on any outside click. Inside-menu clicks stop
   // propagation themselves so this doesn't fire on option clicks.
@@ -131,99 +109,65 @@ export default function DashboardGrid() {
 
   function swap(from: Slug, to: Slug) {
     if (from === to) return;
-    setOrder((prev) => {
-      const next = [...prev];
-      const iF = next.indexOf(from);
-      const iT = next.indexOf(to);
-      if (iF < 0 || iT < 0) return prev;
-      [next[iF], next[iT]] = [next[iT], next[iF]];
-      return next;
-    });
+    const next = [...order];
+    const iF = next.indexOf(from);
+    const iT = next.indexOf(to);
+    if (iF < 0 || iT < 0) return;
+    [next[iF], next[iT]] = [next[iT], next[iF]];
+    setOrder(next);
+    saveWidgetOrder(next); // persist + broadcast
   }
 
   function resetOrder() {
     setOrder(DEFAULT_ORDER);
-  }
-
-  function toggleWidget(slug: Slug) {
-    setEnabled((prev) => {
-      const next = new Set(prev);
-      if (next.has(slug)) next.delete(slug);
-      else next.add(slug);
-      return next;
-    });
+    saveWidgetOrder(DEFAULT_ORDER);
   }
 
   const isCustomOrder = order.some((s, i) => s !== DEFAULT_ORDER[i]);
-  const visible = order.filter((s) => enabled.has(s));
-  const isCustomEnabled = enabled.size !== DEFAULT_ORDER.length;
+  const enabledSlugs = order.filter((s) => enabled.has(s));
+
+  // Which categories actually have an enabled widget — the bar only offers
+  // those (+ "All"). If the active category no longer has any, fall back to All.
+  const presentCategories = new Set(enabledSlugs.map((s) => WIDGET_META_BY_SLUG[s].category));
+  const availableCategories = CATEGORY_META.filter((c) => presentCategories.has(c.key));
+  const effectiveCategory: CategoryFilter =
+    category === "all" || presentCategories.has(category) ? category : "all";
+  const visible = enabledSlugs.filter(
+    (s) => effectiveCategory === "all" || WIDGET_META_BY_SLUG[s].category === effectiveCategory
+  );
+  // A category bar only earns its place when widgets span ≥2 categories.
+  const showCategoryBar = availableCategories.length >= 2;
 
   return (
     <>
-      <div className="flex justify-end items-center gap-2 mb-3">
-        <div className="relative" ref={libraryRef}>
-          <button
-            type="button"
-            onClick={() => setLibraryOpen((v) => !v)}
-            className="text-xs px-3 py-1.5 rounded-md inline-flex items-center gap-2 hover:brightness-110"
-            style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
-          >
-            <span>⚙️</span>
-            <span>Widgets</span>
-            <span className="tabular-nums">{enabled.size}/{DEFAULT_ORDER.length}</span>
-          </button>
-          {libraryOpen && (
-            <div
-              className="absolute right-0 mt-2 rounded-xl p-3 shadow-lg z-30"
-              style={{
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                width: 240,
-              }}
-            >
-              <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
-                Show widgets
-              </div>
-              <div className="space-y-1">
-                {DEFAULT_ORDER.map((slug) => {
-                  const on = enabled.has(slug);
-                  return (
-                    <label
-                      key={slug}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:brightness-110"
-                      style={{ background: on ? "var(--surface-2)" : "transparent" }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        onChange={() => toggleWidget(slug)}
-                      />
-                      <span className="text-sm">{WIDGETS[slug].label}</span>
-                    </label>
-                  );
-                })}
-              </div>
-              {isCustomEnabled && (
-                <button
-                  type="button"
-                  onClick={() => setEnabled(new Set(DEFAULT_ORDER))}
-                  className="mt-3 w-full text-[11px] px-2 py-1 rounded-md"
-                  style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
-                >
-                  Reset to all on
-                </button>
-              )}
-            </div>
-          )}
+      {showCategoryBar && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {([{ key: "all", label: "All", emoji: "▦" }, ...availableCategories] as const).map((c) => {
+            const on = effectiveCategory === c.key;
+            return (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => setCategory(c.key as CategoryFilter)}
+                className="text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+                style={{
+                  background: on ? "var(--accent-cyan)22" : "var(--surface)",
+                  color: on ? "var(--accent-cyan)" : "var(--text-muted)",
+                  border: `1px solid ${on ? "var(--accent-cyan)" : "var(--border)"}`,
+                }}
+              >
+                <span>{c.emoji}</span><span>{c.label}</span>
+              </button>
+            );
+          })}
         </div>
-      </div>
-
+      )}
       {visible.length === 0 ? (
         <div
           className="rounded-2xl p-6 text-center text-sm"
           style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-muted)" }}
         >
-          No widgets enabled. Open <span className="font-semibold" style={{ color: "var(--text)" }}>⚙️ Widgets</span> above to add one back.
+          No widgets enabled. Open <span className="font-semibold" style={{ color: "var(--text)" }}>⚙️ Settings</span> in the header to add one back.
         </div>
       ) : (
         <div

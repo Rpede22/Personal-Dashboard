@@ -1,0 +1,6 @@
+{
+  "raidTier": "tier-mn-2",
+  "label": "Midnight Season 2",
+  "instances": ["Venomous Abyss", "Tidebound Grotto", "The Unbinding of Kith'ix"],
+  "bossCount": 10
+}

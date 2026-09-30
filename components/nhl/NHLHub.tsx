@@ -9,7 +9,7 @@ type NhlTab = "standings" | "schedule" | "top-points" | "playoffs" | "predicted"
 const NHL_TAB_LABELS: Record<NhlTab, string> = {
   standings:    "Standings",
   schedule:     "Schedule",
-  "top-points": "Top Points",
+  "top-points": "Top scorers",
   playoffs:     "Playoffs",
   predicted:    "Predicted",
 };

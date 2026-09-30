@@ -50,6 +50,7 @@ function bucketFor(distance: number): string | null {
 const PLAN_COLOR: Record<string, string> = {
   easy: "var(--accent-green)",
   tempo: "var(--accent-orange)",
+  speed: "var(--accent-red)",
   long: "var(--accent-blue)",
   rest: "var(--text-muted)",
 };

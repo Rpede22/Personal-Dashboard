@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { mlFetchPlayoffs } from "@/lib/metalligaen";
+import { getFollowedTeam } from "@/lib/followed-teams";
 
 /**
  * GET /api/sports/playoffs?team=<slug>
@@ -12,7 +13,11 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const slug = searchParams.get("team");
 
-  if (slug !== "esbjerg-energy") {
+  // Metal Ligaen publishes a league-wide bracket, so any followed Danish
+  // hockey team can show it (not just Esbjerg Energy). Everything else 404s —
+  // the "Projected" sub-tab in SportsTeamHub handles the fallback UI.
+  const followed = slug ? getFollowedTeam(slug) : undefined;
+  if (!followed || followed.provider !== "metalligaen") {
     return NextResponse.json({ error: "No playoff data source for this team" }, { status: 404 });
   }
 

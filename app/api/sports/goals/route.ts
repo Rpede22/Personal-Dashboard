@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { SPORTS_TEAMS } from "@/lib/sports-config";
+import { getFollowedTeam, followedToTeamConfig } from "@/lib/followed-teams";
 
 const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36";
@@ -69,10 +69,16 @@ async function fetchFromESPN(espnLeague: string, date: string, keyword: string):
     const type: GoalEvent["type"] =
       typeCode.includes("own") ? "OWN_GOAL" : typeCode.includes("penalty") ? "PENALTY" : "REGULAR";
     const scorer = ev.participants?.[0]?.athlete?.displayName ?? "Unknown";
-    const isHome = ev.team?.id === homeTeamId;
-    if (type !== "OWN_GOAL") { if (isHome) homeGoals++; else awayGoals++; }
-    else { if (isHome) awayGoals++; else homeGoals++; }
-    return { minute, extraMinute, scorer, assist: null, type, isHome, homeScore: homeGoals, awayScore: awayGoals };
+    // ESPN reports `ev.team` as the team **credited** with the goal for every
+    // scoring play — including own goals (e.g. an OG by a Rayo player lists
+    // team = Barcelona, the beneficiary). So credit `ev.team` directly and do
+    // NOT flip for own goals. `isHome` on the event is the SCORER's side (the
+    // player who put it in), which is the opposite of the credited side on an
+    // OG — the client's OG display logic relies on that.
+    const creditsHome = ev.team?.id === homeTeamId;
+    if (creditsHome) homeGoals++; else awayGoals++;
+    const scorerIsHome = type === "OWN_GOAL" ? !creditsHome : creditsHome;
+    return { minute, extraMinute, scorer, assist: null, type, isHome: scorerIsHome, homeScore: homeGoals, awayScore: awayGoals };
   });
 }
 
@@ -196,8 +202,9 @@ async function fetchFromSportAPI7(slug: string, date: string): Promise<GoalEvent
   const key = process.env.RAPIDAPI_KEY;
   if (!key) return null;
 
-  const team = SPORTS_TEAMS[slug];
-  if (!team) return null;
+  const followed = getFollowedTeam(slug);
+  if (!followed) return null;
+  const team = followedToTeamConfig(followed);
 
   const headers = {
     "Content-Type": "application/json",

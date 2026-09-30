@@ -30,7 +30,7 @@ interface Weather {
   label: string;
   high: number;
   low: number;
-  rainChance: number;
+  precipMm: number;       // today's precipitation total (mm) — like dmi.dk
   feelsLike: number;      // current apparent temp (°C)
   windSpeedMs: number;    // current wind speed (m/s)
 }
@@ -44,7 +44,7 @@ function outfitChip(w: Weather): { icon: string; label: string } | null {
   else if (w.feelsLike < 8)  { icon = "🧥"; label = "Jacket weather"; }
   else if (w.feelsLike < 16) { icon = "👕"; label = "Light layer"; }
   else                       { icon = "👕"; label = "T-shirt weather"; }
-  if (w.rainChance >= 40) label += " · ☔ umbrella";
+  if (w.precipMm >= 1) label += " · ☔ umbrella";
   if (w.windSpeedMs >= 8) label += " · 💨 windproof";
   return { icon, label };
 }
@@ -58,9 +58,9 @@ export default function WeatherLine() {
 
     async function load() {
       try {
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
+        const url = `/api/weather?latitude=${city.lat}&longitude=${city.lon}` +
           `&current=weather_code,apparent_temperature,wind_speed_10m` +
-          `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code` +
+          `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code` +
           `&wind_speed_unit=ms` +
           `&timezone=Europe%2FCopenhagen`;
         const res = await fetch(url);
@@ -69,11 +69,11 @@ export default function WeatherLine() {
         const code = (j?.daily?.weather_code?.[0] ?? j?.current?.weather_code ?? 0) as number;
         const high = Math.round(j?.daily?.temperature_2m_max?.[0] ?? 0);
         const low = Math.round(j?.daily?.temperature_2m_min?.[0] ?? 0);
-        const rain = Math.round(j?.daily?.precipitation_probability_max?.[0] ?? 0);
+        const precipMm = Math.round((j?.daily?.precipitation_sum?.[0] ?? 0) * 10) / 10;
         const feels = Math.round(j?.current?.apparent_temperature ?? j?.daily?.temperature_2m_max?.[0] ?? 0);
         const wind = j?.current?.wind_speed_10m ?? 0;
         const dec = decode(code);
-        if (!cancelled) setW({ icon: dec.icon, label: dec.label, high, low, rainChance: rain, feelsLike: feels, windSpeedMs: wind });
+        if (!cancelled) setW({ icon: dec.icon, label: dec.label, high, low, precipMm, feelsLike: feels, windSpeedMs: wind });
       } catch {
         /* silent */
       }
@@ -112,7 +112,7 @@ export default function WeatherLine() {
     >
       <div className="flex items-center gap-2">
         <span className="text-base">{w.icon}</span>
-        <span>{w.label} · {w.low}°/{w.high}° · rain {w.rainChance}%</span>
+        <span>{w.label} · {w.low}°/{w.high}° · rain {w.precipMm.toFixed(1)} mm</span>
         <span style={{ color: "var(--accent-cyan)" }}>→</span>
       </div>
       {outfit && (

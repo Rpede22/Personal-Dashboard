@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Skeleton } from "@/components/Skeleton";
 import { useRefreshMs } from "@/lib/useRefreshMs";
+import { useSettingsTick } from "@/lib/dashboard-settings";
+import { loadShowEdm } from "@/lib/sports-prefs";
 
 // ── EDM (NHL) types ────────────────────────────────────────────────────────
 interface TeamStanding {
@@ -51,53 +53,87 @@ interface SportsStanding {
   lost: number;
   otLosses?: number; // hockey only — Metal Ligaen source populates this
   points: number;
+  group?: string;    // ESPN (US sports) — conference/division name
+  groupRank?: number;
+  seed?: number;     // conference playoff seed
+}
+/** Sport-aware short name for an ESPN conference/division:
+ *  NFL "National Football Conference" → "NFC", NHL/NBA "Eastern Conference" →
+ *  "East", "Pacific Division" → "Pacific". */
+function shortGroup(name: string): string {
+  const n = name.trim();
+  if (/american football conference/i.test(n)) return "AFC";
+  if (/national football conference/i.test(n)) return "NFC";
+  if (/eastern conference/i.test(n)) return "East";
+  if (/western conference/i.test(n)) return "West";
+  return n.replace(/\s+Conference$/i, "").replace(/\s+Division$/i, "");
 }
 interface SportsSubTable {
   name: string;
   localName?: string;
   rows: SportsStanding[];
 }
+type SportKind = "football" | "icehockey" | "basketball" | "americanfootball";
 interface SportsSummary {
   slug: string;
-  config: { name: string; shortName: string; matchKeyword: string; accentColor: string; emoji: string; leagueName: string };
+  config: { name: string; shortName: string; matchKeyword: string; accentColor: string; emoji: string; leagueName: string; sport?: SportKind };
   standing: SportsStanding | null;
   last5: SportsEvent[];
   next5: SportsEvent[];
   subTables: SportsSubTable[];
   topOpponents?: string[];
+  source?: string;
+  preseason?: boolean;   // ESPN — new season hasn't started (all rows 0-0-0)
 }
 
-// Team-specific colours: real club colours used for gradient borders.
-// tint = subtle background tint (rgba), borderGradient = the stripe, textAccent = CSS var for text.
-const SPORT_TEAM_CONFIGS = [
-  {
-    slug: "esbjerg-fb",
-    href: "/sports/esbjerg-fb",
-    short: "EFB",
-    emoji: "⚽",
-    textAccent: "var(--accent-blue)",
-    // Esbjerg fB: blue & white
-    borderGradient: "linear-gradient(135deg, #005B9A 0%, #ffffff 100%)",
-  },
-  {
-    slug: "barcelona",
-    href: "/sports/barcelona",
-    short: "FCB",
-    emoji: "⚽",
-    textAccent: "var(--accent-red)",
-    // FC Barcelona: blaugrana
-    borderGradient: "linear-gradient(135deg, #A50044 0%, #004D98 100%)",
-  },
-  {
-    slug: "esbjerg-energy",
-    href: "/sports/esbjerg-energy",
-    short: "EEN",
-    emoji: "🏒",
-    textAccent: "var(--accent-orange)",
-    // Esbjerg Energy: yellow & dark blue
-    borderGradient: "linear-gradient(135deg, #FFC400 0%, #003087 100%)",
-  },
-];
+// A followed US team's current playoff series (from /api/sports/live-bracket).
+interface MySeries { roundName: string; myAbbr: string; myWins: number; oppWins: number; opp: string; bestOf: number; complete: boolean; winner?: string }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function findMySeries(b: any): MySeries | null {
+  if (!b?.available || !b.myAbbr || !Array.isArray(b.rounds)) return null;
+  // Only surface a series line while the postseason is actually LIVE (some series
+  // still unfinished). A fully-complete bracket = the offseason fallback, so we
+  // show nothing rather than a stale "lost series" all summer.
+  const ongoing = b.rounds.some((r: any) => (r.series ?? []).some((s: any) => !s.complete));
+  if (!ongoing) return null;
+  const abbr: string = b.myAbbr;
+  const mine: MySeries[] = [];
+  for (const round of b.rounds) {
+    for (const s of round.series ?? []) {
+      const isTop = s.top?.abbr === abbr, isBottom = s.bottom?.abbr === abbr;
+      if (!isTop && !isBottom) continue;
+      const me = isTop ? s.top : s.bottom, other = isTop ? s.bottom : s.top;
+      mine.push({ roundName: round.name, myAbbr: abbr, myWins: me.wins ?? 0, oppWins: other.wins ?? 0, opp: other.abbr, bestOf: s.bestOf ?? 7, complete: !!s.complete, winner: s.winner });
+    }
+  }
+  if (mine.length === 0) return null;
+  // Prefer the active (incomplete) series; else the latest one played.
+  return mine.find((s) => !s.complete) ?? mine[mine.length - 1];
+}
+
+function roundAbbrev(name: string): string {
+  if (/wild ?card/i.test(name)) return "WC";
+  if (/1st|first/i.test(name)) return "R1";
+  if (/2nd|second|semis?/i.test(name)) return "R2";
+  if (/conference (final|champ)/i.test(name)) return "CF";
+  if (/divisional/i.test(name)) return "DIV";
+  if (/final|super bowl|cup/i.test(name)) return "F";
+  return name.split(" ")[0];
+}
+
+// Hand-picked real club-colour gradients for the seed teams. Any other
+// followed team falls back to a gradient derived from its accent colour, so
+// the widget renders whatever's in the followed list without a per-team edit.
+const KNOWN_TEAM_GRADIENTS: Record<string, string> = {
+  "esbjerg-fb":     "linear-gradient(135deg, #005B9A 0%, #ffffff 100%)",   // blue & white
+  "barcelona":      "linear-gradient(135deg, #A50044 0%, #004D98 100%)",   // blaugrana
+  "esbjerg-energy": "linear-gradient(135deg, #FFC400 0%, #003087 100%)",   // yellow & dark blue
+};
+
+function teamGradient(slug: string, accent: string): string {
+  return KNOWN_TEAM_GRADIENTS[slug] ?? `linear-gradient(135deg, ${accent} 0%, ${accent}44 100%)`;
+}
 
 // EDM: Oilers — navy, white, orange
 const EDM_BORDER  = "linear-gradient(135deg, #003087 0%, #ffffff 50%, #FC4C02 100%)";
@@ -178,6 +214,47 @@ function shortName(fullName: string): string {
   return fullName.split(" ").slice(0, 2).join(" ");
 }
 
+/** A single coloured record segment (e.g. "12W") for the stats line. */
+type RecordPart = { value: number; kind: "W" | "D" | "L" | "OTL" | "T" };
+
+/** Colour per record kind so the numbers are scannable at a glance. */
+const RECORD_COLOR: Record<RecordPart["kind"], string> = {
+  W: "var(--accent-green)",
+  D: "var(--accent-orange)",
+  T: "var(--accent-orange)",
+  L: "var(--accent-red)",
+  OTL: "var(--accent-blue)",
+};
+
+/** Renders a record ("12W 3D 5L") with each segment coloured by outcome. */
+function RecordLine({ parts }: { parts: RecordPart[] }) {
+  return (
+    <span className="flex gap-1.5 tabular-nums">
+      {parts.map((p) => (
+        <span key={p.kind} style={{ color: RECORD_COLOR[p.kind], fontWeight: 600 }}>
+          {p.value}{p.kind}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Stats line per sport. US sports (basketball/americanfootball) show a plain
+ *  W-L(-T) record with no "pts"; football shows pts + W-D-L; hockey shows pts +
+ *  W-L-OTL. Returns the bold headline (points or record, null for the pure
+ *  record sports) + the coloured record parts for the secondary text. */
+function statLine(s: SportsStanding, sport?: SportKind): { headline: string | null; parts: RecordPart[] } {
+  if (sport === "basketball") return { headline: null, parts: [{ value: s.won, kind: "W" }, { value: s.lost, kind: "L" }] };
+  if (sport === "americanfootball") {
+    const parts: RecordPart[] = [{ value: s.won, kind: "W" }, { value: s.lost, kind: "L" }];
+    if (s.drawn > 0) parts.push({ value: s.drawn, kind: "T" });
+    return { headline: null, parts };
+  }
+  if (sport === "icehockey" || s.otLosses !== undefined)
+    return { headline: `${s.points}pts`, parts: [{ value: s.won, kind: "W" }, { value: s.lost, kind: "L" }, { value: s.otLosses ?? 0, kind: "OTL" }] };
+  return { headline: `${s.points}pts`, parts: [{ value: s.won, kind: "W" }, { value: s.drawn, kind: "D" }, { value: s.lost, kind: "L" }] };
+}
+
 function ResultDot({ result }: { result: "W" | "D" | "L" | "OTL" }) {
   const bg =
     result === "W" ? "var(--accent-green)" :
@@ -211,6 +288,7 @@ export default function SportsWidget() {
   const [edmGames, setEdmGames] = useState<NHLGame[]>([]);
   const [edmNext, setEdmNext] = useState<NHLGame | null>(null);
   const [edmSeries, setEdmSeries] = useState<BracketSeries | null>(null);
+  const [usSeries, setUsSeries] = useState<Record<string, MySeries | null>>({});
   const [nhlStandings, setNhlStandings] = useState<TeamStanding[]>([]);
   const [sportsSummaries, setSportsSummaries] = useState<SportsSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -236,14 +314,35 @@ export default function SportsWidget() {
       setEdmNext(schedule.next ?? null);
       setSportsSummaries(sports.summaries ?? []);
 
+      // Only surface EDM's playoff series while the postseason is actually LIVE
+      // (some series still unfinished). A fully-complete bracket = last season's
+      // finished playoffs (the offseason/preseason fallback from /api/nhl/bracket),
+      // which would otherwise show a stale "R1 · EDM 2-4 ANA" all summer — the
+      // round-4 bug. When not ongoing, fall back to current-season standings.
       const series: BracketSeries[] = bracketData.series ?? [];
-      const edmS = series.find((s) => s.topSeed.abbrev === "EDM" || s.bottomSeed.abbrev === "EDM") ?? null;
+      const anyOngoing = series.some((s) => !s.complete);
+      const edmS = anyOngoing ? (series.find((s) => s.topSeed.abbrev === "EDM" || s.bottomSeed.abbrev === "EDM") ?? null) : null;
       setEdmSeries(edmS);
+
+      // Followed US teams (ESPN): pull each one's current playoff series so the
+      // box can show a series line during the postseason (offseason → null).
+      const espnTeams: SportsSummary[] = (sports.summaries ?? []).filter((s: SportsSummary) => s.source === "espn");
+      if (espnTeams.length > 0) {
+        const entries = await Promise.all(espnTeams.map(async (s) => {
+          try {
+            const b = await fetch(`/api/sports/live-bracket?slug=${s.slug}`).then((r) => r.json());
+            return [s.slug, findMySeries(b)] as const;
+          } catch { return [s.slug, null] as const; }
+        }));
+        setUsSeries(Object.fromEntries(entries));
+      }
     } catch {}
     setLoading(false);
   }
 
   const refreshMs = useRefreshMs("sports", 5);
+  useSettingsTick(); // re-read the show-EDM pref live when toggled in Settings
+  const showEdm = loadShowEdm();
   useEffect(() => {
     loadData();
     if (refreshMs === 0) return;
@@ -457,7 +556,8 @@ export default function SportsWidget() {
         <>
         <div className="grid grid-cols-2 gap-3">
 
-          {/* EDM box */}
+          {/* EDM box (hideable via Settings › Teams) */}
+          {showEdm && (
           <Link href="/nhl" className="block transition-all hover:brightness-110">
             <GradientBorder gradient={EDM_BORDER} className="p-3 h-full">
               <div className="flex items-center justify-between mb-2">
@@ -496,9 +596,9 @@ export default function SportsWidget() {
                   </div>
                 );
               })() : edm && (
-                <div className="flex gap-2 text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+                <div className="flex gap-2 text-xs mb-2 items-baseline" style={{ color: "var(--text-muted)" }}>
                   <span className="font-bold" style={{ color: EDM_ACCENT }}>{edm.points}pts</span>
-                  <span>{edm.wins}W {edm.losses}L {edm.otLosses}OTL</span>
+                  <RecordLine parts={[{ value: edm.wins, kind: "W" }, { value: edm.losses, kind: "L" }, { value: edm.otLosses, kind: "OTL" }]} />
                 </div>
               )}
               {(() => {
@@ -528,46 +628,77 @@ export default function SportsWidget() {
               })()}
             </GradientBorder>
           </Link>
+          )}
 
-          {/* Other 3 teams */}
-          {SPORT_TEAM_CONFIGS.map((teamCfg) => {
-            const summary = sportsSummaries.find((s) => s.slug === teamCfg.slug);
-            const last5 = summary?.last5 ?? [];
-            const next = summary?.next5?.[0] ?? null;
-            const keyword = summary?.config.matchKeyword ?? teamCfg.short;
+          {/* Followed teams (dynamic — from followed-teams.json via /api/sports) */}
+          {sportsSummaries.map((summary) => {
+            const cfg = summary.config;
+            const short = cfg.shortName || shortName(cfg.name);
+            const accent = cfg.accentColor || "var(--accent-blue)";
+            const emoji = cfg.emoji || "⚽";
+            const href = `/sports/${summary.slug}`;
+            const last5 = summary.last5 ?? [];
+            const next = summary.next5?.[0] ?? null;
+            const keyword = cfg.matchKeyword ?? short;
 
-            const promoRank = summary ? oprykningsspilRank(summary) : null;
-            const standing = summary?.standing ?? null;
+            const promoRank = oprykningsspilRank(summary);
+            const standing = summary.standing ?? null;
+            const mySeries = usSeries[summary.slug] ?? null;
+            const preseason = summary.preseason === true; // ESPN — ranks meaningless (0-0-0)
             const displayRank = promoRank ?? standing?.rank ?? null;
-            const rankLabel = promoRank ? `#${promoRank} Opryk.` : displayRank ? `#${displayRank}` : null;
+            // ESPN (US sports) teams show conference position — the NA
+            // equivalent of a league place — like the EDM box's "#3 Pacific".
+            const espnCtx = (standing?.groupRank && standing.group) ? `#${standing.groupRank} ${shortGroup(standing.group)}`
+              : (standing?.seed ? `#${standing.seed} seed` : null);
+            const rankLabel = promoRank ? `#${promoRank} Opryk.` : espnCtx ?? (displayRank ? `#${displayRank}` : null);
 
             return (
-              <Link key={teamCfg.slug} href={teamCfg.href} className="block transition-all hover:brightness-110">
-                <GradientBorder gradient={teamCfg.borderGradient} className="p-3 h-full">
+              <Link key={summary.slug} href={href} className="block transition-all hover:brightness-110">
+                <GradientBorder gradient={teamGradient(summary.slug, accent)} className="p-3 h-full">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold" style={{ color: teamCfg.textAccent }}>
-                      {teamCfg.emoji} {teamCfg.short}
+                    <span className="text-xs font-bold" style={{ color: accent }}>
+                      {emoji} {short}
                     </span>
-                    {rankLabel && (() => {
-                      const d = rankDelta(teamCfg.slug, displayRank);
+                    {mySeries ? (
+                      <span className="text-xs font-bold" style={{ color: accent }}>🏆 {roundAbbrev(mySeries.roundName)}</span>
+                    ) : preseason ? (
+                      <span className="text-xs font-bold" style={{ color: accent }}>🏁 Preseason</span>
+                    ) : rankLabel && (() => {
+                      const d = rankDelta(summary.slug, displayRank);
                       return (
-                        <span className="text-xs font-bold flex items-center gap-1.5" style={{ color: teamCfg.textAccent }}>
+                        <span className="text-xs font-bold flex items-center gap-1.5" style={{ color: accent }}>
                           {rankLabel}
                           {d != null && <RankDeltaChip delta={d} />}
                         </span>
                       );
                     })()}
                   </div>
-                  {standing ? (
-                    <div className="flex gap-2 text-xs mb-2" style={{ color: "var(--text-muted)" }}>
-                      <span className="font-bold" style={{ color: teamCfg.textAccent }}>{standing.points}pts</span>
-                      {standing.otLosses !== undefined ? (
-                        <span>{standing.won}W {standing.lost}L {standing.otLosses}OTL</span>
-                      ) : (
-                        <span>{standing.won}W {standing.drawn}D {standing.lost}L</span>
-                      )}
+                  {mySeries ? (
+                    <div className="mb-2">
+                      <div className="flex gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
+                        <span className="font-bold" style={{ color: accent }}>{mySeries.myAbbr} {mySeries.myWins}</span>
+                        <span>–</span>
+                        <span className="font-bold">{mySeries.oppWins} {mySeries.opp}</span>
+                      </div>
+                      <div className="text-xs mt-0.5 truncate" style={{ color: mySeries.complete ? (mySeries.winner === mySeries.myAbbr ? "var(--accent-green)" : "var(--accent-red)") : "var(--text-muted)" }}>
+                        {mySeries.complete
+                          ? (mySeries.winner === mySeries.myAbbr ? (mySeries.bestOf > 1 ? "won series" : "won") : (mySeries.bestOf > 1 ? "lost series" : "lost"))
+                          : mySeries.bestOf > 1
+                            ? (mySeries.myWins > mySeries.oppWins ? `lead ${mySeries.myWins}–${mySeries.oppWins}` : mySeries.myWins < mySeries.oppWins ? `trail ${mySeries.myWins}–${mySeries.oppWins}` : `tied ${mySeries.myWins}–${mySeries.oppWins}`)
+                            : `vs ${mySeries.opp}`}
+                      </div>
                     </div>
-                  ) : (
+                  ) : preseason ? (
+                    <div className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>Season starts soon</div>
+                  ) : standing ? (() => {
+                    const line = statLine(standing, cfg.sport);
+                    return (
+                      <div className="flex gap-2 text-xs mb-2 items-baseline" style={{ color: "var(--text-muted)" }}>
+                        {line.headline && <span className="font-bold" style={{ color: accent }}>{line.headline}</span>}
+                        <RecordLine parts={line.parts} />
+                      </div>
+                    );
+                  })() : (
                     <div className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>No data yet</div>
                   )}
                   {(() => {
@@ -648,28 +779,28 @@ export default function SportsWidget() {
             }
           }
 
-          for (const teamCfg of SPORT_TEAM_CONFIGS) {
-            const summary = sportsSummaries.find((s) => s.slug === teamCfg.slug);
-            if (!summary?.topOpponents?.length) continue;
+          for (const summary of sportsSummaries) {
+            if (!summary.topOpponents?.length) continue;
+            const cfg = summary.config;
             for (const evt of summary.next5 ?? []) {
               const start = new Date(`${evt.date}T${evt.time ?? "12:00"}:00Z`).getTime();
               if (!isFinite(start) || start < now || start > weekOut) continue;
-              const isHome = evt.homeTeam.toLowerCase().includes(summary.config.matchKeyword.toLowerCase());
+              const isHome = evt.homeTeam.toLowerCase().includes(cfg.matchKeyword.toLowerCase());
               const opp = isHome ? evt.awayTeam : evt.homeTeam;
               const oppLower = opp.toLowerCase();
               const rankIdx = summary.topOpponents.findIndex((t) => oppLower.includes(t.toLowerCase()) || t.toLowerCase().includes(oppLower));
               if (rankIdx === -1) continue;
               found.push({
-                key: `${teamCfg.slug}-${evt.date}-${opp}`,
-                href: teamCfg.href,
-                teamLabel: teamCfg.short,
-                teamEmoji: teamCfg.emoji,
-                teamAccent: teamCfg.textAccent,
+                key: `${summary.slug}-${evt.date}-${opp}`,
+                href: `/sports/${summary.slug}`,
+                teamLabel: cfg.shortName || shortName(cfg.name),
+                teamEmoji: cfg.emoji || "⚽",
+                teamAccent: cfg.accentColor || "var(--accent-blue)",
                 opponent: shortName(opp),
                 opponentRank: rankIdx + 1,
                 homeAway: isHome ? "vs" : "@",
                 when: `${toCopenhagenDate(evt.date, evt.time)}${evt.time ? ` · ${toCopenhagenTime(evt.date, evt.time)} CEST` : ""}`,
-                leagueName: summary.config.leagueName,
+                leagueName: cfg.leagueName,
               });
               break; // one match per team is enough
             }

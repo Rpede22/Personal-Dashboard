@@ -166,10 +166,65 @@ export function sumEarningsInTerm(
   return gross;
 }
 
-/** Format a kr amount in Danish locale, no decimals for whole kr. */
-export function formatDkk(amount: number): string {
+/**
+ * Monthly hours to assume for any consumer (budget, etc.). When work-tracking
+ * is disabled, use the flat fallback; otherwise sum the logged sessions in the
+ * calendar month of `now`. Keeps downstream views working whether or not the
+ * user actually logs hours.
+ */
+export function effectiveMonthlyHours(
+  cfg: { enabled?: boolean; monthlyHoursFallback?: number; sessions?: Array<{ date: string; hours: number }> },
+  now: Date = new Date(),
+): number {
+  if (cfg.enabled === false) return cfg.monthlyHoursFallback ?? 160;
+  const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  return (cfg.sessions ?? [])
+    .filter((s) => s.date.startsWith(prefix))
+    .reduce((sum, s) => sum + s.hours, 0);
+}
+
+// ── Display currency (user-configurable) ────────────────────────────────────
+// All money in the app formats through here. The active currency is a global
+// preference (dashboard-settings `dashboard.currency`) synced into this module
+// var on boot + on change, so every `formatDkk`/`formatMoney` call respects it
+// without threading the code through each callsite.
+export interface CurrencyOption { code: string; label: string; locale: string }
+export const CURRENCIES: CurrencyOption[] = [
+  { code: "DKK", label: "Danish krone (kr)", locale: "da-DK" },
+  { code: "EUR", label: "Euro (€)", locale: "de-DE" },
+  { code: "USD", label: "US dollar ($)", locale: "en-US" },
+  { code: "GBP", label: "British pound (£)", locale: "en-GB" },
+  { code: "SEK", label: "Swedish krona (kr)", locale: "sv-SE" },
+  { code: "NOK", label: "Norwegian krone (kr)", locale: "nb-NO" },
+  { code: "CHF", label: "Swiss franc (CHF)", locale: "de-CH" },
+  { code: "AUD", label: "Australian dollar (A$)", locale: "en-AU" },
+  { code: "CAD", label: "Canadian dollar (C$)", locale: "en-CA" },
+  { code: "JPY", label: "Japanese yen (¥)", locale: "ja-JP" },
+];
+
+let _displayCurrency = "DKK";
+export function setDisplayCurrency(code: string): void {
+  if (CURRENCIES.some((c) => c.code === code)) _displayCurrency = code;
+}
+export function getDisplayCurrency(): string {
+  return _displayCurrency;
+}
+
+/** Format a money amount in the active display currency (whole units, no
+ *  decimals — matching the app's compact style). `code` overrides the global. */
+export function formatMoney(amount: number, code: string = _displayCurrency): string {
   const rounded = Math.round(amount);
-  return `${rounded.toLocaleString("da-DK")} kr`;
+  const cur = CURRENCIES.find((c) => c.code === code) ?? CURRENCIES[0];
+  try {
+    return new Intl.NumberFormat(cur.locale, { style: "currency", currency: cur.code, maximumFractionDigits: 0 }).format(rounded);
+  } catch {
+    return `${rounded.toLocaleString()} ${code}`;
+  }
+}
+
+/** Back-compat alias — now currency-aware (uses the active display currency). */
+export function formatDkk(amount: number): string {
+  return formatMoney(amount);
 }
 
 export function formatPaydayLabel(payday: Payday): string {

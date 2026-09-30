@@ -14,6 +14,8 @@ interface WowCharacter {
 interface CharStats {
   ilvl: number | null;
   rioScore: number | null;
+  weeklyHighestKey?: number | null;
+  tierSet?: { collected: number; total: number; name: string | null } | null;
 }
 
 interface ChecklistItem {
@@ -78,7 +80,7 @@ export default function WoWWidget() {
 
             return {
               char,
-              stats: { ilvl: statsJson.ilvl ?? null, rioScore: statsJson.rioScore ?? null },
+              stats: { ilvl: statsJson.ilvl ?? null, rioScore: statsJson.rioScore ?? null, weeklyHighestKey: statsJson.weeklyHighestKey ?? null, tierSet: statsJson.tierSet ?? null },
               mplusDone,
               normalDone,
               heroicDone,
@@ -123,6 +125,16 @@ export default function WoWWidget() {
                   {d.stats.rioScore !== null && (
                     <span className="text-xs font-medium" style={{ color: "var(--accent-orange)" }}>
                       {Math.round(d.stats.rioScore)} rio
+                    </span>
+                  )}
+                  {d.stats.weeklyHighestKey != null && (
+                    <span className="text-xs font-medium" style={{ color: "var(--accent-purple)" }} title="Highest M+ key this week">
+                      +{d.stats.weeklyHighestKey}
+                    </span>
+                  )}
+                  {d.stats.tierSet && d.stats.tierSet.total > 0 && (
+                    <span className="text-xs font-medium" style={{ color: d.stats.tierSet.collected >= d.stats.tierSet.total - 1 ? "var(--accent-green)" : "var(--text-muted)" }} title={`Tier set: ${d.stats.tierSet.name ?? ""} (4-set bonus is enough)`}>
+                      {d.stats.tierSet.collected}/{d.stats.tierSet.total} tier
                     </span>
                   )}
                 </div>

@@ -2,6 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import HubShell from "@/components/HubShell";
+import PodcastPanel from "@/components/media/PodcastPanel";
+import YouTubePanel from "@/components/media/YouTubePanel";
+import TwitchPanel from "@/components/media/TwitchPanel";
+
+type MediaTab = "tv" | "podcasts" | "youtube" | "twitch";
 
 interface Show {
   id: number;
@@ -67,8 +72,12 @@ function showsOnDay(shows: Show[], dayN: number): Show[] {
 }
 
 export default function MediaHub() {
+  const [tab, setTab] = useState<MediaTab>("tv");
   const [shows, setShows] = useState<Show[] | null>(null);
   const [saving, setSaving] = useState(false);
+  const [podcastNew, setPodcastNew] = useState<number>(0);
+  const [youtubeNew, setYoutubeNew] = useState<number>(0);
+  const [twitchLive, setTwitchLive] = useState<number>(0);
 
   const [addTitle, setAddTitle] = useState("");
   const [addChannel, setAddChannel] = useState("");
@@ -86,6 +95,39 @@ export default function MediaHub() {
     setShows(j.shows ?? []);
   }
   useEffect(() => { load(); }, []);
+
+  // Restore the last-viewed tab.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("dashboard.media.tab");
+      if (saved === "tv" || saved === "podcasts" || saved === "youtube" || saved === "twitch") setTab(saved);
+    } catch { /* ignore */ }
+  }, []);
+  const selectTab = (t: MediaTab) => {
+    setTab(t);
+    try { localStorage.setItem("dashboard.media.tab", t); } catch { /* ignore */ }
+  };
+
+  // Cheap poll for the Podcasts + YouTube tab badges (new-content counts).
+  useEffect(() => {
+    let cancelled = false;
+    async function loadNew() {
+      try {
+        const [pod, yt, tw] = await Promise.all([
+          fetch("/api/podcasts").then((r) => r.json()).catch(() => ({})),
+          fetch("/api/youtube").then((r) => r.json()).catch(() => ({})),
+          fetch("/api/twitch").then((r) => r.json()).catch(() => ({})),
+        ]);
+        if (cancelled) return;
+        setPodcastNew(pod.totalNew ?? 0);
+        setYoutubeNew(yt.totalNew ?? 0);
+        setTwitchLive(tw.liveCount ?? 0);
+      } catch { /* ignore */ }
+    }
+    loadNew();
+    const iv = setInterval(loadNew, 10 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [tab]);
 
   async function post(body: Record<string, unknown>) {
     setSaving(true);
@@ -153,13 +195,51 @@ export default function MediaHub() {
       emoji="📺"
       color="var(--accent-purple)"
       tabs={
-        <div className="flex items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
-          <span>{shows?.filter(s => s.active).length ?? 0} active shows</span>
-          <span className="ml-auto">Manual tracker — no scrape.</span>
+        <div className="flex items-center gap-2 text-sm">
+          {([
+            { id: "tv" as MediaTab, label: "📺 TV shows" },
+            { id: "podcasts" as MediaTab, label: "🎧 Podcasts" },
+            { id: "youtube" as MediaTab, label: "▶️ YouTube" },
+            { id: "twitch" as MediaTab, label: "🟣 Twitch" },
+          ]).map((t) => {
+            const on = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => selectTab(t.id)}
+                className="px-3 py-1 rounded-full font-medium flex items-center gap-1.5"
+                style={{
+                  background: on ? "var(--accent-purple)22" : "transparent",
+                  color: on ? "var(--accent-purple)" : "var(--text-muted)",
+                  border: `1px solid ${on ? "var(--accent-purple)" : "var(--border)"}`,
+                }}
+              >
+                {t.label}
+                {t.id === "podcasts" && podcastNew > 0 && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "var(--accent-pink)", color: "#fff" }}>{podcastNew}</span>
+                )}
+                {t.id === "youtube" && youtubeNew > 0 && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "var(--accent-red)", color: "#fff" }}>{youtubeNew}</span>
+                )}
+                {t.id === "twitch" && twitchLive > 0 && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "var(--accent-red)", color: "#fff" }}>{twitchLive} live</span>
+                )}
+              </button>
+            );
+          })}
+          <span className="ml-auto text-xs" style={{ color: "var(--text-muted)" }}>
+            {tab === "tv" ? "Danish TV tracker." : tab === "podcasts" ? "New-episode alerts." : tab === "youtube" ? "New-upload alerts." : "Who's live now."}
+          </span>
         </div>
       }
     >
-      {shows === null ? (
+      {tab === "podcasts" ? (
+        <PodcastPanel onCountChange={setPodcastNew} />
+      ) : tab === "youtube" ? (
+        <YouTubePanel onCountChange={setYoutubeNew} />
+      ) : tab === "twitch" ? (
+        <TwitchPanel onCountChange={setTwitchLive} />
+      ) : shows === null ? (
         <p style={{ color: "var(--text-muted)" }}>Loading shows…</p>
       ) : (
         <div className="space-y-6 max-w-5xl mx-auto">
@@ -376,10 +456,19 @@ export default function MediaHub() {
                               className="text-xs w-6 h-6 rounded disabled:opacity-30"
                               style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
                             >−</button>
-                            <button onClick={() => patch({ id: s.id, episodesSeen: s.episodesSeen + 1 })} title="Click after watching an episode. The counter drives the widget's 'next episode' number (Ep N + 1)."
-                              className="text-xs px-2 py-0.5 rounded" style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)" }}>
+                            <button
+                              onClick={() => { if (!isFinished(s)) patch({ id: s.id, episodesSeen: s.maxEpisodes ? Math.min(s.episodesSeen + 1, s.maxEpisodes) : s.episodesSeen + 1 }); }}
+                              disabled={isFinished(s)}
+                              title={isFinished(s) ? "All episodes watched — use Done to remove it." : "Click after watching an episode. The counter drives the widget's 'next episode' number (Ep N + 1)."}
+                              className="text-xs px-2 py-0.5 rounded disabled:opacity-40"
+                              style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)" }}>
                               Watched · {s.episodesSeen}{s.maxEpisodes ? ` / ${s.maxEpisodes}` : ""} ep
                             </button>
+                            {isFinished(s) && (
+                              <button onClick={() => del(s.id)} title="Finished the series — remove it from your list"
+                                className="text-xs px-2 py-0.5 rounded font-medium"
+                                style={{ background: "var(--accent-green)22", color: "var(--accent-green)", border: "1px solid var(--accent-green)" }}>Done ✓</button>
+                            )}
                             <button onClick={() => startEdit(s)} className="text-xs" style={{ color: "var(--text-muted)" }}>Edit</button>
                             <button onClick={() => del(s.id)} className="text-xs" style={{ color: "var(--accent-red)" }}>✕</button>
                           </span>

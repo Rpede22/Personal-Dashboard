@@ -44,6 +44,15 @@ interface Shoe {
 const SHOE_WARN_KM = 600;
 const SHOE_RETIRE_KM = 800;
 
+/** A run created by a Strava sync — the payload the shoe-picker prompt works on. */
+interface ImportedRun {
+  id: number;
+  date: string;
+  distance: number;
+  duration: number;
+  notes: string | null;
+}
+
 interface RunPlan {
   id: number;
   date: string;
@@ -206,12 +215,36 @@ export default function RunningHub() {
       } else {
         setStravaSyncResult(`Imported ${data.imported}, skipped ${data.skipped} duplicates`);
         loadRuns();
+        // If more than one active pair exists, let the athlete confirm which
+        // shoe each freshly-imported run was run in (they default to the
+        // last-used pair on import). Only prompt when there's a real choice.
+        const activeShoes = shoes.filter((s) => !s.retired);
+        if (activeShoes.length >= 2 && Array.isArray(data.importedRuns) && data.importedRuns.length > 0) {
+          setShoePrompt({ runs: data.importedRuns as ImportedRun[], defaultShoeId: data.defaultShoeId ?? null });
+        }
       }
     } catch {
       setStravaSyncResult("Sync failed");
     } finally {
       setStravaLoading(false);
     }
+  }
+
+  // Post-sync shoe-picker prompt (only shown when ≥2 active shoes exist).
+  const [shoePrompt, setShoePrompt] = useState<{ runs: ImportedRun[]; defaultShoeId: number | null } | null>(null);
+  async function saveShoeAssignments(assignments: Record<number, number | null>) {
+    await Promise.all(
+      Object.entries(assignments).map(([runId, shoeId]) =>
+        fetch(`/api/running/${runId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shoeId }),
+        }).catch(() => {}),
+      ),
+    );
+    setShoePrompt(null);
+    loadRuns();
+    loadShoes();
   }
 
   async function disconnectStrava() {
@@ -2141,6 +2174,110 @@ export default function RunningHub() {
       {selectedRun && (
         <RunDetailModal run={selectedRun} onClose={() => setSelectedRun(null)} />
       )}
+
+      {/* Post-sync shoe picker (only when ≥2 active pairs) */}
+      {shoePrompt && (
+        <ShoeAssignModal
+          runs={shoePrompt.runs}
+          defaultShoeId={shoePrompt.defaultShoeId}
+          shoes={shoes.filter((s) => !s.retired)}
+          onSave={saveShoeAssignments}
+          onClose={() => setShoePrompt(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Shown after a Strava sync when the athlete has more than one active pair:
+ * lists every run just imported and lets them confirm/change which shoe each
+ * was run in (all pre-set to the last-used pair). "Set all" applies one shoe to
+ * every row at once; Save PATCHes each run's `shoeId`.
+ */
+function ShoeAssignModal({
+  runs, defaultShoeId, shoes, onSave, onClose,
+}: {
+  runs: ImportedRun[];
+  defaultShoeId: number | null;
+  shoes: Shoe[];
+  onSave: (assignments: Record<number, number | null>) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [assignments, setAssignments] = useState<Record<number, number | null>>(
+    () => Object.fromEntries(runs.map((r) => [r.id, defaultShoeId])),
+  );
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
+  }, [onClose]);
+
+  const setAll = (shoeId: number | null) => setAssignments(Object.fromEntries(runs.map((r) => [r.id, shoeId])));
+
+  async function handleSave() {
+    setSaving(true);
+    await onSave(assignments);
+    setSaving(false);
+  }
+
+  const selectStyle = { background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" } as const;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)", paddingTop: 40 }} onClick={onClose}>
+      <div className="rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 flex-shrink-0" style={{ borderBottom: "1px solid var(--border)" }}>
+          <div>
+            <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>👟 Which shoe did you wear?</div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>{runs.length} run{runs.length === 1 ? "" : "s"} imported from Strava</div>
+          </div>
+          <button onClick={onClose} className="text-lg" style={{ color: "var(--text-muted)" }} title="Close">✕</button>
+        </div>
+
+        {/* Set all */}
+        <div className="flex items-center gap-2 px-4 py-2 flex-shrink-0" style={{ borderBottom: "1px solid var(--border)" }}>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>Set all to</span>
+          <select className="text-xs px-2 py-1 rounded flex-1" style={selectStyle}
+            onChange={(e) => setAll(e.target.value ? Number(e.target.value) : null)} defaultValue="">
+            <option value="">— pick a shoe —</option>
+            {shoes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+
+        {/* Per-run rows */}
+        <div className="overflow-y-auto flex-1 px-4 py-2 space-y-1.5">
+          {runs.map((r) => {
+            const d = new Date(r.date);
+            return (
+              <div key={r.id} className="flex items-center gap-2 text-sm rounded-md px-2 py-1.5" style={{ background: "var(--surface-2)" }}>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{r.distance.toFixed(2)} km</div>
+                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    {d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })}
+                    {r.notes ? ` · ${r.notes.replace(/^Strava:\s*/, "")}` : ""}
+                  </div>
+                </div>
+                <select className="text-xs px-2 py-1 rounded shrink-0" style={selectStyle}
+                  value={assignments[r.id] ?? ""} onChange={(e) => setAssignments((a) => ({ ...a, [r.id]: e.target.value ? Number(e.target.value) : null }))}>
+                  <option value="">No shoe</option>
+                  {shoes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-4 py-3 flex-shrink-0" style={{ borderTop: "1px solid var(--border)" }}>
+          <button onClick={onClose} className="text-sm px-3 py-1.5 rounded-md" style={{ color: "var(--text-muted)" }}>Skip</button>
+          <button onClick={handleSave} disabled={saving} className="text-sm px-4 py-1.5 rounded-md disabled:opacity-40"
+            style={{ background: "var(--accent-green)22", color: "var(--accent-green)", border: "1px solid var(--accent-green)" }}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

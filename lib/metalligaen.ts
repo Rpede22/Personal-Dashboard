@@ -216,8 +216,21 @@ export async function mlFetchMatches(startYear: number = currentSeasonStartYear(
 
 function mlMatchToEvent(m: RawMatch): SportsEvent {
   const finished = m.status === "AFTER_MATCH";
-  const final = m.results?.score?.final;
+  const score = m.results?.score;
+  const final = score?.final;
   const [datePart, timePart] = (m.start_date ?? "").split(" ");
+  // Per-period scores for the last-5 dropdown (1st/2nd/3rd, plus OT if present).
+  const periods: { home: number; away: number }[] = [];
+  if (finished && score) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const s = score as any;
+    for (const key of ["first_period", "second_period", "third_period", "overtime", "extra_time_period", "shooting"]) {
+      const p = s[key];
+      if (p && (typeof p.score_home === "number" || typeof p.score_guest === "number")) {
+        periods.push({ home: p.score_home ?? 0, away: p.score_guest ?? 0 });
+      }
+    }
+  }
   return {
     date: datePart ?? "",
     time: (timePart ?? "").slice(0, 5),
@@ -227,6 +240,7 @@ function mlMatchToEvent(m: RawMatch): SportsEvent {
     awayScore: finished && final ? final.score_guest : null,
     finished,
     league: m.league ?? "Metal Ligaen",
+    periods: periods.length ? periods : undefined,
   };
 }
 

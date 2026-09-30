@@ -417,9 +417,8 @@ export default function CalendarHub() {
         <div className="rounded-2xl p-6 space-y-3 max-w-lg" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
           <h2 className="font-semibold" style={{ color: "var(--text)" }}>Calendar not configured</h2>
           <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-            Add <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>CALENDAR_SDU_URL</code>,{" "}
-            <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>CALENDAR_CAND_URL</code>, and{" "}
-            <code className="px-1 rounded" style={{ background: "var(--surface-2)" }}>CALENDAR_ARBEJDE_URL</code> to .env.local.
+            Add an ICS feed URL or your iCloud CalDAV credentials in{" "}
+            <strong style={{ color: "var(--text)" }}>⚙️ Settings › Calendar</strong>.
           </p>
         </div>
       ) : error ? (

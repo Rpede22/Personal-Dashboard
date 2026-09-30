@@ -50,7 +50,7 @@ export default function WeekAheadHeatmap() {
     let cancelled = false;
 
     async function load() {
-      const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
+      const weatherUrl = `/api/weather?latitude=${city.lat}&longitude=${city.lon}` +
         `&hourly=temperature_2m,apparent_temperature,precipitation_probability,wind_speed_10m,weather_code` +
         `&forecast_days=7&wind_speed_unit=ms&timezone=Europe%2FCopenhagen`;
       const [schoolRes, calRes, runRes, wxRes] = await Promise.allSettled([
@@ -143,31 +143,54 @@ export default function WeekAheadHeatmap() {
         void (schoolRes.value?.assignments as Assignment[] | undefined);
       }
 
-      // Calendar: sum event durations that overlap each day, in hours.
+      // Calendar: busy hours per day = the UNION of the time ranges events
+      // cover, so two overlapping events (e.g. 10–12 inside 10–16) count once,
+      // not twice. The per-event breakdown still lists each event separately.
       if (calRes.status === "fulfilled") {
         const events: CalEvent[] = calRes.value?.events ?? [];
+        // Collect each day's clamped [start, end) intervals as we walk events.
+        const intervalsByCell = cells.map<[number, number][]>(() => []);
         for (const e of events) {
           if (e.allDay) continue; // all-day items shouldn't fill "busy hours" bars
           const s = new Date(e.start);
           const en = new Date(e.end);
           if (!isFinite(s.getTime()) || !isFinite(en.getTime())) continue;
-          for (const c of cells) {
+          cells.forEach((c, ci) => {
             // Overlap of [s, en) with [c.date, c.date + 24h)
             const dayStart = c.date.getTime();
             const dayEnd = dayStart + 24 * 3600 * 1000;
-            const overlap = Math.max(0, Math.min(en.getTime(), dayEnd) - Math.max(s.getTime(), dayStart));
-            if (overlap > 0) {
-              c.calendarHours += overlap / 3600000;
+            const lo = Math.max(s.getTime(), dayStart);
+            const hi = Math.min(en.getTime(), dayEnd);
+            if (hi > lo) {
+              intervalsByCell[ci].push([lo, hi]);
               const startHM = s.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
               const endHM   = en.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
               c.calBreakdown.push({
                 title: String(e.title ?? "Event"),
-                hours: overlap / 3600000,
+                hours: (hi - lo) / 3600000,
                 range: `${startHM}–${endHM}`,
               });
             }
-          }
+          });
         }
+        // Merge each day's intervals and sum the union length.
+        cells.forEach((c, ci) => {
+          const iv = intervalsByCell[ci].sort((a, b) => a[0] - b[0]);
+          let unionMs = 0;
+          let curStart = -1;
+          let curEnd = -1;
+          for (const [lo, hi] of iv) {
+            if (lo > curEnd) {
+              if (curEnd > curStart) unionMs += curEnd - curStart;
+              curStart = lo;
+              curEnd = hi;
+            } else if (hi > curEnd) {
+              curEnd = hi;
+            }
+          }
+          if (curEnd > curStart) unionMs += curEnd - curStart;
+          c.calendarHours += unionMs / 3600000;
+        });
       }
 
       if (!cancelled) setDays(cells);

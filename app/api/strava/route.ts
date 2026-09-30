@@ -65,14 +65,36 @@ export async function getValidToken(): Promise<string | null> {
   return config.access_token ?? null;
 }
 
-// GET /api/strava — check connection status
-export async function GET() {
+// GET /api/strava — check connection status.
+// `?profile=1` additionally resolves the connected athlete's name/handle (one
+// extra Strava call) so the UI can show *which* account is linked — used by the
+// onboarding wizard's Strava step to let you verify it's the right one. The
+// routine status check (no param) stays a cheap local-file read.
+export async function GET(request: Request) {
   const config = loadStravaConfig();
   const connected = !!config.access_token && !!config.refresh_token;
+  const wantProfile = new URL(request.url).searchParams.get("profile") === "1";
+
+  let athlete: { id: number; firstname?: string; lastname?: string; username?: string } | null = null;
+  if (connected && wantProfile) {
+    try {
+      const token = await getValidToken();
+      if (token) {
+        const r = await fetch("https://www.strava.com/api/v3/athlete", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (r.ok) {
+          const a = await r.json();
+          athlete = { id: a.id, firstname: a.firstname, lastname: a.lastname, username: a.username };
+        }
+      }
+    } catch { /* non-fatal — fall back to id only */ }
+  }
 
   return NextResponse.json({
     connected,
-    athleteId: config.athlete_id ?? null,
+    athleteId: config.athlete_id ?? athlete?.id ?? null,
+    athlete,
     hasCredentials: !!(process.env.STRAVA_CLIENT_ID && process.env.STRAVA_CLIENT_SECRET),
   });
 }

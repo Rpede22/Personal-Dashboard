@@ -4,6 +4,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import TitleRace from "@/components/sports/TitleRace";
 import ReorderableTabs from "@/components/ReorderableTabs";
+import SportsPlayoffs from "@/components/sports/SportsPlayoffs";
+import type { UsSport } from "@/lib/playoff-rules";
 
 interface MatchStats {
   homeTeam: string | null;
@@ -27,6 +29,14 @@ interface GoalEvent {
   awayScore: number;
 }
 
+interface EspnPlay {
+  period: number;
+  clock: string;
+  text: string;
+  homeScore: number;
+  awayScore: number;
+}
+
 interface StandingRow {
   rank: number;
   team: string;
@@ -39,10 +49,17 @@ interface StandingRow {
   goalsAgainst: number;
   goalDiff: number;
   points: number;
+  group?: string;      // ESPN (US sports) — conference
+  groupRank?: number;
+  seed?: number;
+  division?: string;   // ESPN — division (e.g. "Pacific Division")
+  divisionRank?: number;
 }
 
 interface SportsEvent {
   matchId?: string | null;
+  espnEventId?: string;                          // ESPN game — scoring dropdown
+  periods?: { home: number; away: number }[];    // Metal Ligaen per-period scores
   date: string;
   time: string;
   homeTeam: string;
@@ -77,7 +94,8 @@ interface TeamData {
   next5: SportsEvent[];
   allStandings: StandingRow[];
   subTables?: SubTable[];
-  source?: "fotmob" | "api-football" | "thesportsdb";
+  source?: "fotmob" | "api-football" | "thesportsdb" | "metalligaen" | "espn";
+  preseason?: boolean;   // ESPN — new season hasn't started (all rows 0-0-0)
 }
 
 // Convert a UTC `HH:MM` + `YYYY-MM-DD` pair to Copenhagen-local `HH:MM`.
@@ -123,7 +141,10 @@ interface TopScorer {
   goals: number;
   assists: number;
   points: number;
+  stats?: Record<string, number>; // ESPN US sports — rendered against statColumns
 }
+
+interface StatColumn { key: string; label: string; title?: string }
 type PlayoffMode = "projected" | "live";
 
 // Shape of the live playoffs response from /api/sports/playoffs.
@@ -203,6 +224,59 @@ const HOCKEY_HEADERS: { label: string; title: string }[] = [
   { label: "OTL",  title: "Overtime / Shootout Losses" },
   { label: "Pts",  title: "Points" },
 ];
+// US sports (NBA / NFL) are win-loss records, not points tables. NFL adds ties.
+const US_HEADERS: { label: string; title: string }[] = [
+  { label: "#",    title: "Rank" },
+  { label: "Team", title: "Team" },
+  { label: "GP",   title: "Games Played" },
+  { label: "W",    title: "Wins" },
+  { label: "L",    title: "Losses" },
+  { label: "Pct",  title: "Win Percentage" },
+];
+const US_NFL_HEADERS: { label: string; title: string }[] = [
+  { label: "#",    title: "Rank" },
+  { label: "Team", title: "Team" },
+  { label: "GP",   title: "Games Played" },
+  { label: "W",    title: "Wins" },
+  { label: "L",    title: "Losses" },
+  { label: "T",    title: "Ties" },
+  { label: "Pct",  title: "Win Percentage" },
+];
+
+function winPct(won: number, lost: number, drawn: number): string {
+  const total = won + lost + drawn;
+  if (total === 0) return ".000";
+  return (won / total).toFixed(3).replace(/^0/, "");
+}
+
+/** Sport-aware short conference name (NFL AFC/NFC · NHL/NBA East/West · else
+ *  strip the Conference/Division suffix). */
+function shortConference(name: string): string {
+  const n = name.trim();
+  if (/american football conference/i.test(n)) return "AFC";
+  if (/national football conference/i.test(n)) return "NFC";
+  if (/eastern conference/i.test(n)) return "East";
+  if (/western conference/i.test(n)) return "West";
+  return n.replace(/\s+Conference$/i, "").replace(/\s+Division$/i, "");
+}
+
+/** Group ESPN rows into conference sub-tables (rank = conference/playoff seed),
+ *  for the standings "Conference" view. */
+function espnConferenceTables(rows: StandingRow[]): SubTable[] {
+  const byConf = new Map<string, StandingRow[]>();
+  for (const r of rows) {
+    const k = r.group;
+    if (!k) continue;
+    if (!byConf.has(k)) byConf.set(k, []);
+    byConf.get(k)!.push(r);
+  }
+  return [...byConf.entries()]
+    .map(([name, rs]) => ({
+      name,
+      rows: rs.slice().sort((a, b) => (a.groupRank ?? 999) - (b.groupRank ?? 999)).map((r) => ({ ...r, rank: r.groupRank ?? r.rank })),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
 
 // ── Playoffs (Metal Ligaen-style: top 8, 1v8 2v7 3v6 4v5) ─────────────────────
 interface PlayoffTeam {
@@ -279,6 +353,8 @@ function StandingsTable({
   headers,
   isFootball,
   isHockey,
+  isUS = false,
+  isNFL = false,
   keyword,
   accent,
   colSpan,
@@ -291,6 +367,8 @@ function StandingsTable({
   headers: { label: string; title: string }[];
   isFootball: boolean;
   isHockey: boolean;
+  isUS?: boolean;
+  isNFL?: boolean;
   keyword: string;
   accent: string;
   colSpan: number;
@@ -354,12 +432,17 @@ function StandingsTable({
                         {row.otLosses ?? 0}
                       </td>
                     )}
+                    {isNFL && <td className="px-4 py-2" style={{ color: "var(--text-muted)" }}>{row.drawn}</td>}
                     {isFootball && (
                       <td className="px-4 py-2" style={{ color: row.goalDiff > 0 ? "var(--accent-green)" : row.goalDiff < 0 ? "var(--accent-red)" : "var(--text-muted)" }}>
                         {row.goalDiff > 0 ? "+" : ""}{row.goalDiff}
                       </td>
                     )}
-                    <td className="px-4 py-2 font-bold" style={{ color: isThis ? accent : "var(--text)" }}>{row.points}</td>
+                    {isUS ? (
+                      <td className="px-4 py-2 font-bold tabular-nums" style={{ color: isThis ? accent : "var(--text)" }}>{winPct(row.won, row.lost, row.drawn)}</td>
+                    ) : (
+                      <td className="px-4 py-2 font-bold" style={{ color: isThis ? accent : "var(--text)" }}>{row.points}</td>
+                    )}
                   </tr>
                 </React.Fragment>
               );
@@ -382,8 +465,12 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[] | "loading" | "error">>({});
   const [statsMap, setStatsMap] = useState<Record<string, MatchStats | "loading" | "error">>({});
+  const [espnScoreMap, setEspnScoreMap] = useState<Record<string, EspnPlay[] | "loading" | "error">>({});
   const [topScorers, setTopScorers] = useState<TopScorer[] | null>(null);
+  const [topScorerCols, setTopScorerCols] = useState<StatColumn[] | null>(null);
   const [topScorersLoading, setTopScorersLoading] = useState(false);
+  const [scorerScope, setScorerScope] = useState<"league" | "team">("league");
+  const [standingsView, setStandingsView] = useState<"division" | "conference" | "league">("division"); // ESPN teams only
 
   async function loadData() {
     try {
@@ -399,16 +486,21 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
     return () => clearInterval(interval);
   }, [teamSlug]);
 
-  // Top scorers — lazy-loaded when the user opens that tab.
+  // Top scorers — lazy-loaded when the user opens that tab (re-fetched when the
+  // League/This-team scope changes for Metal Ligaen).
   useEffect(() => {
     if (tab !== "top-scorers" || topScorers !== null || topScorersLoading) return;
     setTopScorersLoading(true);
-    fetch(`/api/sports/top-scorers?team=${teamSlug}&limit=10`)
+    const scopeQs = scorerScope === "team" ? "&scope=team" : "";
+    fetch(`/api/sports/top-scorers?team=${teamSlug}&limit=25${scopeQs}`)
       .then((r) => r.json())
-      .then((d: { leaders?: TopScorer[] }) => setTopScorers(d.leaders ?? []))
+      .then((d: { leaders?: TopScorer[]; statColumns?: StatColumn[] }) => {
+        setTopScorers(d.leaders ?? []);
+        setTopScorerCols(d.statColumns ?? null);
+      })
       .catch(() => setTopScorers([]))
       .finally(() => setTopScorersLoading(false));
-  }, [tab, teamSlug, topScorers, topScorersLoading]);
+  }, [tab, teamSlug, topScorers, topScorersLoading, scorerScope]);
 
   // Live playoff bracket — lazy-loaded when the user opens the Live sub-tab.
   useEffect(() => {
@@ -428,6 +520,21 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
       .catch((err) => setLivePlayoffsError(err.message || "Failed to load playoffs"))
       .finally(() => setLivePlayoffsLoading(false));
   }, [tab, playoffMode, teamSlug, livePlayoffs, livePlayoffsLoading]);
+
+  // ESPN game scoring plays (NHL/NFL) for the last-5 dropdown.
+  async function toggleEspnScoring(eventId: string) {
+    if (expandedMatch === eventId) { setExpandedMatch(null); return; }
+    setExpandedMatch(eventId);
+    if (espnScoreMap[eventId] !== undefined) return;
+    setEspnScoreMap((prev) => ({ ...prev, [eventId]: "loading" }));
+    try {
+      const res = await fetch(`/api/sports/espn-scoring?team=${teamSlug}&event=${eventId}`);
+      const d = await res.json();
+      setEspnScoreMap((prev) => ({ ...prev, [eventId]: d.plays ?? [] }));
+    } catch {
+      setEspnScoreMap((prev) => ({ ...prev, [eventId]: "error" }));
+    }
+  }
 
   async function toggleGoals(matchId: string, date: string) {
     if (expandedMatch === matchId) { setExpandedMatch(null); return; }
@@ -456,8 +563,17 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const keyword = cfg?.matchKeyword ?? teamSlug;
   const isFootball = cfg?.sport === "football";
   const isHockey = cfg?.sport === "icehockey";
-  const showPlayoffs = isHockey; // Only hockey gets a simple 1v8 bracket
-  const headers = isFootball ? FOOTBALL_HEADERS : HOCKEY_HEADERS;
+  const isNFL = cfg?.sport === "americanfootball";
+  const isUS = cfg?.sport === "basketball" || isNFL; // ESPN win-loss leagues
+  const preseason = data?.preseason === true; // ESPN — season not started, ranks meaningless
+  const showPlayoffs = isHockey && data?.source === "metalligaen"; // only Metal Ligaen has a live bracket source
+  // US majors (ESPN) get their own EDM-style playoff race + projected bracket.
+  const usSport: UsSport | null =
+    data?.source === "espn"
+      ? (cfg?.sport === "basketball" ? "nba" : isNFL ? "nfl" : isHockey ? "nhl" : null)
+      : null;
+  const showUsPlayoffs = usSport !== null;
+  const headers = isFootball ? FOOTBALL_HEADERS : isUS ? (isNFL ? US_NFL_HEADERS : US_HEADERS) : HOCKEY_HEADERS;
   const colSpan = headers.length;
 
   const bracket = useMemo(() => {
@@ -472,7 +588,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
     return buildBracket(top8);
   }, [data, showPlayoffs]);
 
-  const tabs: Tab[] = showPlayoffs
+  const tabs: Tab[] = (showPlayoffs || showUsPlayoffs)
     ? ["standings", "schedule", "top-scorers", "playoffs"]
     : ["standings", "schedule", "top-scorers"];
 
@@ -483,8 +599,14 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const promoRow = promoSubTable?.rows.find((r) =>
     r.team.toLowerCase().includes(keyword.toLowerCase())
   );
-  const displayRank = promoRow?.rank ?? data?.standing?.rank ?? null;
-  const displayRankLabel = promoRow ? "Opryk." : cfg?.leagueName ?? "";
+  // ESPN (US sports): show the within-conference position as the headline place
+  // (the NA equivalent of a league place), like the EDM hub. Conference/division
+  // names differ by sport — abbreviate them sport-aware.
+  const espnPos = data?.source === "espn" ? (data.standing?.groupRank || data.standing?.seed) : null;
+  const displayRank = promoRow?.rank ?? (espnPos ?? data?.standing?.rank) ?? null;
+  const displayRankLabel = promoRow ? "Opryk."
+    : espnPos && data?.standing?.group ? shortConference(data.standing.group)
+    : cfg?.leagueName ?? "";
 
   return (
     <div className="min-h-screen p-6 page-bg" style={{ color: "var(--text)" }}>
@@ -508,24 +630,38 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
           {data?.source && (
             <span className="text-xs px-2 py-0.5 rounded-full" style={{
               background: data.source === "fotmob" ? "var(--accent-blue)22" :
-                          data.source === "api-football" ? "var(--accent-green)22" : "var(--surface-2)",
+                          data.source === "api-football" ? "var(--accent-green)22" :
+                          data.source === "espn" ? "var(--accent-orange)22" : "var(--surface-2)",
               color:      data.source === "fotmob" ? "var(--accent-blue)" :
-                          data.source === "api-football" ? "var(--accent-green)" : "var(--text-muted)",
+                          data.source === "api-football" ? "var(--accent-green)" :
+                          data.source === "espn" ? "var(--accent-orange)" : "var(--text-muted)",
               border: "1px solid var(--border)",
             }}>
               {data.source === "fotmob" ? "FotMob" :
-               data.source === "api-football" ? "API-Football" : "TheSportsDB"}
+               data.source === "api-football" ? "API-Football" :
+               data.source === "espn" ? "ESPN" : "TheSportsDB"}
             </span>
           )}
-          {data?.standing && displayRank !== null && (
+          {preseason ? (
             <div className="rounded-xl px-4 py-2 text-center" style={{ background: "var(--surface)", border: `1px solid ${accent}44` }}>
-              <div className="text-2xl font-bold" style={{ color: accent }}>#{displayRank}</div>
-              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                {displayRankLabel && <span>{displayRankLabel} · </span>}
-                {(promoRow ?? data.standing).points} pts
-              </div>
+              <div className="text-lg font-bold" style={{ color: accent }}>Preseason</div>
+              <div className="text-xs" style={{ color: "var(--text-muted)" }}>season hasn&apos;t started</div>
             </div>
-          )}
+          ) : data?.standing && displayRank !== null && (() => {
+            const st = promoRow ?? data.standing;
+            const record = isUS
+              ? (isNFL && st.drawn > 0 ? `${st.won}-${st.lost}-${st.drawn}` : `${st.won}-${st.lost}`)
+              : `${st.points} pts`;
+            return (
+              <div className="rounded-xl px-4 py-2 text-center" style={{ background: "var(--surface)", border: `1px solid ${accent}44` }}>
+                <div className="text-2xl font-bold" style={{ color: accent }}>#{displayRank}</div>
+                <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  {displayRankLabel && <span>{displayRankLabel} · </span>}
+                  {record}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -555,52 +691,114 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
 
         /* ── STANDINGS ── */
         <div className="space-y-6">
+          {preseason && (
+            <div className="rounded-xl p-3 text-sm" style={{ background: `${accent}11`, border: `1px solid ${accent}44`, color: "var(--text-muted)" }}>
+              🏁 <span style={{ color: "var(--text)" }}>Preseason</span> — the new season hasn&apos;t started, so every team is 0-0-0 and the order below isn&apos;t a real ranking yet. The Schedule tab shows the upcoming fixtures.
+            </div>
+          )}
           {isFootball && (
             <TitleRace keyword={keyword} rows={data.allStandings} accent={accent} />
           )}
-          <StandingsTable
-            title="Regular Season"
-            rows={data.allStandings}
-            headers={headers}
-            isFootball={isFootball}
-            isHockey={isHockey}
-            keyword={keyword}
-            accent={accent}
-            colSpan={colSpan}
-            splitAfterRank={cfg?.splitAfterRank}
-            splitLabel={cfg?.splitLabel}
-          />
-
-          {/* Split subtables (Danish 1st Div post-round 22: Oprykningsspil + Nedrykningsspil) */}
-          {data.subTables
-            ?.filter((t) => t.name.toLowerCase().includes("group"))
-            .map((sub) => (
+          {data.source === "espn" ? (
+            /* US sports (NHL/NBA/NFL): switch between Division / Conference /
+               League views like the EDM hub. Division = the route's grouped
+               sub-tables; Conference = grouped by conference (seed order);
+               League = one flat table by overall record. */
+            (() => {
+              const divTables = (data.subTables?.length ?? 0) > 0
+                ? data.subTables!.map((sub) => ({ name: sub.name, rows: sub.rows.map((r) => ({ ...r, rank: r.divisionRank ?? r.groupRank ?? r.rank })) }))
+                : [];
+              const confTables = espnConferenceTables(data.allStandings);
+              const tables = standingsView === "conference" ? confTables
+                : standingsView === "division" && divTables.length > 0 ? divTables
+                : null; // league (or division with no groups) → single flat table
+              return (
+                <>
+                  <div className="flex gap-1 rounded-lg p-1" style={{ background: "var(--surface-2)", width: "fit-content" }}>
+                    {(["division", "conference", "league"] as const).map((v) => (
+                      <button key={v} onClick={() => setStandingsView(v)} className="px-3 py-1.5 rounded-md text-xs font-medium capitalize"
+                        style={{ background: standingsView === v ? accent : "transparent", color: standingsView === v ? "#fff" : "var(--text-muted)" }}>{v}</button>
+                    ))}
+                  </div>
+                  {tables
+                    ? tables.map((sub) => (
+                        <StandingsTable key={sub.name} title={sub.name} rows={sub.rows} headers={headers}
+                          isFootball={isFootball} isHockey={isHockey} isUS={isUS} isNFL={isNFL} keyword={keyword} accent={accent} colSpan={colSpan} />
+                      ))
+                    : (
+                      <StandingsTable title="League" rows={data.allStandings} headers={headers}
+                        isFootball={isFootball} isHockey={isHockey} isUS={isUS} isNFL={isNFL} keyword={keyword} accent={accent} colSpan={colSpan} />
+                    )}
+                </>
+              );
+            })()
+          ) : (
+            <>
               <StandingsTable
-                key={sub.name}
-                title={sub.localName ?? sub.name}
-                subtitle={sub.localName ? sub.name : undefined}
-                rows={sub.rows}
+                title="Regular Season"
+                rows={data.allStandings}
                 headers={headers}
                 isFootball={isFootball}
-            isHockey={isHockey}
+                isHockey={isHockey}
+                isUS={isUS}
+                isNFL={isNFL}
                 keyword={keyword}
                 accent={accent}
                 colSpan={colSpan}
+                splitAfterRank={cfg?.splitAfterRank}
+                splitLabel={cfg?.splitLabel}
               />
-            ))}
+
+              {/* Split subtables (Danish 1st Div post-round 22: Oprykningsspil + Nedrykningsspil) */}
+              {data.subTables
+                ?.filter((t) => t.name.toLowerCase().includes("group"))
+                .map((sub) => (
+                  <StandingsTable
+                    key={sub.name}
+                    title={sub.localName ?? sub.name}
+                    subtitle={sub.localName ? sub.name : undefined}
+                    rows={sub.rows}
+                    headers={headers}
+                    isFootball={isFootball}
+                    isHockey={isHockey}
+                    isUS={isUS}
+                    isNFL={isNFL}
+                    keyword={keyword}
+                    accent={accent}
+                    colSpan={colSpan}
+                  />
+                ))}
+            </>
+          )}
         </div>
 
       ) : tab === "top-scorers" ? (
 
         /* ── TOP SCORERS ── */
         <div className="rounded-2xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-          <div className="flex items-baseline justify-between px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+          <div className="flex items-baseline justify-between gap-3 px-4 py-3 border-b flex-wrap" style={{ borderColor: "var(--border)" }}>
             <h3 className="text-lg font-semibold" style={{ color: accent }}>
-              Top 10 scorers — {cfg?.leagueName}
+              {scorerScope === "team" ? `${cfg?.name ?? "Team"} scorers` : `Top scorers — ${cfg?.leagueName}`}
             </h3>
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              {isHockey ? "Sorted by points (G + A)" : "Sorted by goals"}
-            </span>
+            <div className="flex items-center gap-3">
+              {/* League ⇄ this-team toggle — Metal Ligaen only (its scorers feed
+                  can be filtered to one club; ESPN/FotMob stay league-wide). */}
+              {isHockey && data?.source === "metalligaen" && (
+                <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "var(--surface-2)" }}>
+                  {([["league", "League"], ["team", cfg?.shortName || "This team"]] as const).map(([s, label]) => (
+                    <button
+                      key={s}
+                      onClick={() => { if (scorerScope !== s) { setScorerScope(s); setTopScorers(null); setTopScorerCols(null); } }}
+                      className="px-2.5 py-1 rounded-md text-xs font-medium"
+                      style={{ background: scorerScope === s ? accent : "transparent", color: scorerScope === s ? "#fff" : "var(--text-muted)" }}
+                    >{label}</button>
+                  ))}
+                </div>
+              )}
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {topScorerCols ? `Sorted by ${topScorerCols[topScorerCols.length - 1]?.label ?? "scoring"}` : isHockey ? "Sorted by points (G + A)" : "Sorted by goals"}
+              </span>
+            </div>
           </div>
           {topScorersLoading && topScorers === null ? (
             <div className="p-8 text-center" style={{ color: "var(--text-muted)" }}>Loading scoring leaders…</div>
@@ -608,6 +806,39 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
             <div className="p-8 text-center" style={{ color: "var(--text-muted)" }}>
               No data available right now — league may be between seasons.
             </div>
+          ) : topScorerCols ? (
+            /* US sports (NBA/NFL) — generic stat columns from the API */
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
+                  <th className="text-left px-3 py-2 font-medium">#</th>
+                  <th className="text-left px-3 py-2 font-medium">Player</th>
+                  <th className="text-left px-3 py-2 font-medium">Team</th>
+                  <th className="text-left px-3 py-2 font-medium">Pos</th>
+                  {topScorerCols.map((c) => (
+                    <th key={c.key} title={c.title} className="text-right px-3 py-2 font-medium cursor-help">{c.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {topScorers.map((p, i) => {
+                  const isMyTeam = p.team.toLowerCase().includes(keyword.toLowerCase());
+                  return (
+                    <tr key={String(p.playerId)} style={{ background: isMyTeam ? `${accent}11` : "transparent", borderTop: "1px solid var(--border)" }}>
+                      <td className="px-3 py-2 font-semibold" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
+                      <td className="px-3 py-2 font-semibold">{p.name}</td>
+                      <td className="px-3 py-2" style={{ color: isMyTeam ? accent : "var(--text-muted)" }}>{p.team}</td>
+                      <td className="px-3 py-2" style={{ color: "var(--text-muted)" }}>{p.position ?? ""}</td>
+                      {topScorerCols.map((c, ci) => (
+                        <td key={c.key} className={`px-3 py-2 text-right${ci === topScorerCols.length - 1 ? " font-bold" : ""}`} style={ci === topScorerCols.length - 1 ? { color: accent } : undefined}>
+                          {p.stats?.[c.key] ?? 0}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           ) : (
             <table className="w-full text-sm tabular-nums">
               <thead>
@@ -662,16 +893,25 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
               <div className="space-y-2">
                 {data.last5.map((e, i) => {
                   const res = gameResult(e, keyword);
-                  const canExpand = !!(e.matchId && e.finished);
-                  const isExpanded = expandedMatch === e.matchId;
+                  const hasPeriods = !!(e.periods && e.periods.length);
+                  // Expandable: football (matchId → goals+stats), ESPN (espnEventId
+                  // → scoring plays), or Metal Ligaen (periods → per-period scores).
+                  const canExpand = !!(e.finished && (e.matchId || e.espnEventId || hasPeriods));
+                  const rowKey = e.matchId ?? e.espnEventId ?? `${e.date}-${e.homeTeam}-${i}`;
+                  const isExpanded = canExpand && expandedMatch === rowKey;
                   const goalsState = e.matchId ? goalsMap[e.matchId] : undefined;
                   const goals = Array.isArray(goalsState) ? goalsState : [];
+                  const onToggle = e.matchId
+                    ? () => toggleGoals(e.matchId!, e.date)
+                    : e.espnEventId
+                      ? () => toggleEspnScoring(e.espnEventId!)
+                      : () => setExpandedMatch(expandedMatch === rowKey ? null : rowKey);
                   return (
                     <div key={i} className="rounded-xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
                       {/* Match row */}
                       <div
                         className={`px-4 py-3 flex items-center gap-4${canExpand ? " cursor-pointer select-none" : ""}`}
-                        onClick={canExpand ? () => toggleGoals(e.matchId!, e.date) : undefined}
+                        onClick={canExpand ? onToggle : undefined}
                       >
                         {res ? (
                           <span className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0" style={{ background: RESULT_BG[res], color: "#fff" }}>
@@ -703,6 +943,37 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                       {/* Match stats (football only) + goal timeline */}
                       {isExpanded && (
                         <div className="px-4 pb-4 pt-2 border-t" style={{ borderColor: "var(--border)" }}>
+                          {/* ESPN (NHL/NFL) scoring plays */}
+                          {e.espnEventId && (() => {
+                            const st = espnScoreMap[e.espnEventId!];
+                            if (st === "loading") return <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading scoring…</p>;
+                            if (st === "error") return <p className="text-xs" style={{ color: "var(--accent-red)" }}>Failed to load scoring</p>;
+                            if (!st || st.length === 0) return <p className="text-xs" style={{ color: "var(--text-muted)" }}>No scoring plays available</p>;
+                            return (
+                              <div className="space-y-1.5">
+                                {st.map((p, pi) => (
+                                  <div key={pi} className="flex items-center gap-2.5 text-xs">
+                                    <span className="shrink-0 tabular-nums px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>P{p.period} {p.clock}</span>
+                                    <span className="flex-1 min-w-0" style={{ color: "var(--text)" }}>{p.text}</span>
+                                    <span className="shrink-0 font-bold tabular-nums" style={{ color: accent }}>{p.homeScore}–{p.awayScore}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                          {/* Metal Ligaen per-period scores */}
+                          {hasPeriods && e.periods && (
+                            <div className="flex flex-wrap gap-2 text-xs">
+                              {e.periods.map((p, pi) => (
+                                <span key={pi} className="px-2 py-1 rounded" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
+                                  P{pi + 1}: <span style={{ color: "var(--text)" }}>{p.home}–{p.away}</span>
+                                </span>
+                              ))}
+                              <span className="px-2 py-1 rounded font-bold" style={{ background: `${accent}22`, color: accent }}>
+                                Final: {e.homeScore}–{e.awayScore}
+                              </span>
+                            </div>
+                          )}
                           {isFootball && e.matchId && (() => {
                             const st = statsMap[e.matchId];
                             if (!st || st === "error") return null;
@@ -743,7 +1014,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                               </div>
                             );
                           })()}
-                          {goalsState === "loading" ? (
+                          {e.matchId && (goalsState === "loading" ? (
                             <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading…</p>
                           ) : goalsState === "error" ? (
                             <p className="text-xs" style={{ color: "var(--accent-red)" }}>Failed to load goals</p>
@@ -779,7 +1050,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                                 );
                               })}
                             </div>
-                          )}
+                          ))}
                         </div>
                       )}
                     </div>
@@ -815,6 +1086,24 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
             )}
           </div>
         </div>
+
+      ) : showUsPlayoffs && usSport ? (
+
+        /* ── PLAYOFFS (US majors: NHL / NBA / NFL via ESPN) ── */
+        preseason ? (
+          <div className="rounded-2xl p-8 text-center space-y-1" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+            <p className="font-medium">The playoff picture opens once the season starts</p>
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>No games have been played yet — check the Schedule tab for the upcoming fixtures.</p>
+          </div>
+        ) : (
+        <SportsPlayoffs
+          sport={usSport}
+          slug={teamSlug}
+          allStandings={data.allStandings}
+          keyword={keyword}
+          accent={accent}
+        />
+        )
 
       ) : (
 

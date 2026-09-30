@@ -2,22 +2,14 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { readFileSync, writeFileSync } from "fs";
 import { configPath } from "@/lib/config-dir";
+import { CURRENT_RAID_TIER, CURRENT_TIER_INSTANCES, CURRENT_TIER_BOSS_COUNT } from "@/lib/wow-tier";
 
 const BASELINE_PATH = configPath(".wow-raid-baseline.json");
 
 // ── Current raid tier ─────────────────────────────────────────────────────────
-// Update this slug when a new tier releases.
-// Raider.IO slug format: e.g. "liberation-of-undermine", "nerub-ar-palace",
-// "tier-mn-1" (Midnight Season 1 — 3 raids combined: Dreamrift + Voidspire + March on Quel'Danas, 9 bosses total)
-const CURRENT_RAID_TIER = "tier-mn-1";
-
-// Blizzard API instance names (en_US) for the current tier — used to filter encounters/raids response
-// to only the correct raids. If none match (tier not in API yet), Blizzard path returns null → RIO fallback.
-// Update alongside CURRENT_RAID_TIER.
-const CURRENT_TIER_INSTANCES = ["Dreamrift", "Voidspire", "March on Quel'Danas"];
-
-// Total boss count for the current tier (all difficulties share the same encounters).
-const CURRENT_TIER_BOSS_COUNT = 9;
+// All tier constants (raid slug, Blizzard instance names, boss count) come from
+// `wow-tier.json` via lib/wow-tier.ts — edit that one file when a new tier
+// releases (the seed's BOSS_COUNT reads the same JSON).
 
 interface RaidBaselineEntry {
   normalKills: number;

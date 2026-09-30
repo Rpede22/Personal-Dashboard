@@ -31,6 +31,7 @@ interface Block {
   label: string;         // "16–20"
   tempC: number;         // avg feels-like across the block
   rainChance: number;    // max rain % across the block (worst-case)
+  precipMm: number;      // total precipitation (mm) across the block — shown, like dmi.dk
   weatherCode: number;   // most common code in the block
 }
 
@@ -72,10 +73,10 @@ export default function WeatherWidget() {
       try {
         // 2 forecast days gives us a rolling 24 h window even when it's late
         // in the day and the remaining hours today aren't enough on their own.
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
+        const url = `/api/weather?latitude=${city.lat}&longitude=${city.lon}` +
           `&current=temperature_2m,apparent_temperature,weather_code` +
           `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
-          `&hourly=apparent_temperature,precipitation_probability,wind_speed_10m,weather_code` +
+          `&hourly=apparent_temperature,precipitation_probability,precipitation,wind_speed_10m,weather_code` +
           `&forecast_days=2&wind_speed_unit=ms&timezone=Europe%2FCopenhagen`;
         const res = await fetch(url);
         if (!res.ok) return;
@@ -83,6 +84,7 @@ export default function WeatherWidget() {
         const times: string[] = j?.hourly?.time ?? [];
         const feels: number[] = j?.hourly?.apparent_temperature ?? [];
         const rains: number[] = j?.hourly?.precipitation_probability ?? [];
+        const precips: number[] = j?.hourly?.precipitation ?? [];
         const winds: number[] = j?.hourly?.wind_speed_10m ?? [];
         const codes: number[] = j?.hourly?.weather_code ?? [];
 
@@ -117,6 +119,7 @@ export default function WeatherWidget() {
           const blockStart = new Date(start.getTime() + b * 4 * 3600 * 1000);
           const temps: number[] = [];
           const rns: number[] = [];
+          const mms: number[] = [];
           const cds: number[] = [];
           for (let h = 0; h < 4; h++) {
             const t = new Date(blockStart.getTime() + h * 3600 * 1000);
@@ -129,16 +132,19 @@ export default function WeatherWidget() {
             if (idx < 0) continue;
             temps.push(feels[idx]);
             rns.push(rains[idx] ?? 0);
+            mms.push(precips[idx] ?? 0);
             cds.push(codes[idx] ?? 0);
           }
           if (temps.length === 0) continue;
           const avgTemp = temps.reduce((s, x) => s + x, 0) / temps.length;
           const maxRain = rns.reduce((s, x) => Math.max(s, x), 0);
+          const sumMm = mms.reduce((s, x) => s + x, 0);
           const label = `${String(blockStart.getHours()).padStart(2, "0")}–${String((blockStart.getHours() + 4) % 24).padStart(2, "0")}`;
           blocks.push({
             label,
             tempC: Math.round(avgTemp),
             rainChance: Math.round(maxRain),
+            precipMm: Math.round(sumMm * 10) / 10,
             weatherCode: modeCode(cds),
           });
         }
@@ -200,15 +206,15 @@ export default function WeatherWidget() {
                   return (
                     <div
                       key={i}
-                      title={`${b.label} · ${bw.label} · ${b.tempC}° · rain ${b.rainChance}%`}
+                      title={`${b.label} · ${bw.label} · ${b.tempC}° · rain ${b.precipMm.toFixed(1)} mm`}
                       className="flex flex-col items-center rounded-md px-1 py-1.5"
                       style={{ background: "var(--surface-2)" }}
                     >
                       <span className="text-[9px] tabular-nums" style={{ color: "var(--text-muted)" }}>{b.label}</span>
                       <span className="text-base leading-none my-0.5">{bw.icon}</span>
                       <span className="text-[11px] font-semibold tabular-nums">{b.tempC}°</span>
-                      {b.rainChance >= 20 && (
-                        <span className="text-[9px] tabular-nums" style={{ color: "var(--accent-blue)" }}>💧{b.rainChance}%</span>
+                      {b.precipMm > 0 && (
+                        <span className="text-[9px] tabular-nums" style={{ color: "var(--accent-blue)" }}>💧{b.precipMm.toFixed(1)}</span>
                       )}
                     </div>
                   );

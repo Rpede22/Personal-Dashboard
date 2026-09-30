@@ -74,6 +74,9 @@ export async function POST() {
 
   let imported = 0;
   let skipped = 0;
+  // Runs actually created this sync — returned so the UI can offer a shoe
+  // picker when the athlete has more than one active pair.
+  const importedRuns: Array<{ id: number; date: string; distance: number; duration: number; notes: string | null }> = [];
 
   for (const run of runs) {
     const date = new Date(run.start_date);
@@ -143,7 +146,7 @@ export async function POST() {
       }
     } catch { /* silent — leave hrZonesJson null */ }
 
-    await prisma.runLog.create({
+    const created = await prisma.runLog.create({
       data: {
         date: dateUTC,
         distance: distKm,
@@ -157,10 +160,17 @@ export async function POST() {
         shoeId: defaultShoeId,
       },
     });
+    importedRuns.push({
+      id: created.id,
+      date: created.date.toISOString(),
+      distance: created.distance,
+      duration: created.duration,
+      notes: created.notes,
+    });
     // Remove any run plans for this day — the run covers it
     await prisma.runPlan.deleteMany({ where: { date: dateUTC } });
     imported++;
   }
 
-  return NextResponse.json({ imported, skipped, total: runs.length });
+  return NextResponse.json({ imported, skipped, total: runs.length, importedRuns, defaultShoeId });
 }

@@ -1,23 +1,16 @@
 import { NextResponse } from "next/server";
+import { fetchRss, getSource, readNewsSource } from "@/lib/news-config";
 
 /**
- * TV2 news feed — front-page scraper across two hosts:
- *   nyheder.tv2.dk  (general news · politik · samfund · udland · business · live · …)
- *   sport.tv2.dk    (football · håndbold · cykling · badminton · …)
+ * News feed — the selected source (from `news-config.json`) decides where the
+ * headlines come from:
+ *   • TV2 (Danish): no public RSS, so we scrape both nyheder.tv2.dk +
+ *     sport.tv2.dk front pages (URL shape `/[section/]YYYY-MM-DD-slug`; anchor
+ *     text = headline). Top-20 timestamps enriched from each article's JSON-LD.
+ *   • DR / BBC / Guardian: real RSS feeds via `fetchRss` in lib/news-config.
  *
- * TV2 doesn't publish a public RSS/Atom feed, but both hosts link every
- * article with a URL of the form:
- *   https://<host>/[<section>[/<subsection>]]/YYYY-MM-DD-<kebab-slug>[-<uuid>]
- * and the anchor's inner text is the actual headline (often prefixed with
- * the section label). We extract every matching link, dedupe, and return
- * the newest N sorted by publish timestamp.
- *
- * ── Timestamps ─────────────────────────────────────────────────────────
- * The URL slug gives us the date but not the time. For the top N (default
- * 20) articles we fetch the article page in parallel and parse the
- * `datePublished` field from its JSON-LD block. That timestamp is cached
- * per URL indefinitely — TV2 doesn't rewrite it after publish. Front-page
- * hits are still cached 15 min in aggregate.
+ * Source is switched in the unified Settings modal's News panel; the response
+ * carries `source` + `sourceLabel` so the hub footer can name it.
  */
 
 interface Article {
@@ -27,7 +20,8 @@ interface Article {
   publishedAt: string; // ISO if we resolved a time, YYYY-MM-DD otherwise
 }
 
-let cache: { articles: Article[]; ts: number } | null = null;
+// Cache per source id — switching sources shouldn't serve the other's articles.
+const cacheBySource = new Map<string, { articles: Article[]; ts: number }>();
 const TTL = 15 * 60 * 1000;
 
 // Long-lived map: article URL → precise publish timestamp (ISO). Populated
@@ -198,14 +192,19 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const limit = Math.min(Math.max(parseInt(searchParams.get("limit") ?? "50", 10) || 50, 1), 100);
 
-  if (cache && Date.now() - cache.ts < TTL) {
-    return NextResponse.json({ articles: cache.articles.slice(0, limit) });
+  const sourceId = readNewsSource();
+  const source = getSource(sourceId);
+  const label = source.label;
+
+  const cached = cacheBySource.get(sourceId);
+  if (cached && Date.now() - cached.ts < TTL) {
+    return NextResponse.json({ articles: cached.articles.slice(0, limit), source: sourceId, sourceLabel: label });
   }
   try {
-    const articles = await scrape();
-    cache = { articles, ts: Date.now() };
-    return NextResponse.json({ articles: articles.slice(0, limit) });
+    const articles = source.kind === "tv2" ? await scrape() : await fetchRss(source.feeds ?? []);
+    cacheBySource.set(sourceId, { articles, ts: Date.now() });
+    return NextResponse.json({ articles: articles.slice(0, limit), source: sourceId, sourceLabel: label });
   } catch (err) {
-    return NextResponse.json({ error: String(err), articles: [] }, { status: 500 });
+    return NextResponse.json({ error: String(err), articles: [], source: sourceId, sourceLabel: label }, { status: 500 });
   }
 }
