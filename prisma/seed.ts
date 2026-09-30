@@ -1,6 +1,9 @@
 import { PrismaClient } from "../app/generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import path from "path";
+// Single source of truth for the current tier — see lib/wow-tier.ts. Imported
+// directly (relative) because the seed runner doesn't share the `@/` alias.
+import tier from "../wow-tier.json";
 
 const DB_URL = `file:${path.join(process.cwd(), "dev.db")}`;
 const adapter = new PrismaBetterSqlite3({ url: DB_URL });
@@ -12,9 +15,10 @@ const MPLUS_TASKS = Array.from({ length: 8 }, (_, i) => ({
   isDefault: true,
 }));
 
-// 9 boss kills per difficulty (Midnight Season 1 — 3 raids combined: Dreamrift + Voidspire + March on Quel'Danas = 9 bosses)
-// RIO reports them under a single tier key `tier-mn-1` with total_bosses=9, so we track them as a single 1–9 grid per difficulty.
-const BOSS_COUNT = 9;
+// Boss kills per difficulty for the current tier. Count comes from wow-tier.json
+// (Midnight S1 = 3 raids combined into a single 1–N grid per difficulty, as RIO
+// reports them under one tier key with a combined total_bosses).
+const BOSS_COUNT = tier.bossCount;
 const BOSS_TASKS = [
   ...Array.from({ length: BOSS_COUNT }, (_, i) => ({ task: `Normal Boss ${i + 1}`, isDefault: true })),
   ...Array.from({ length: BOSS_COUNT }, (_, i) => ({ task: `Heroic Boss ${i + 1}`, isDefault: true })),

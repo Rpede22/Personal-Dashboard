@@ -10,6 +10,9 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    // The dev DB is always ./dev.db, and the build/electron pass DATABASE_URL
+    // inline where a different path is needed — so fall back to ./dev.db and the
+    // Prisma CLI works without a DATABASE_URL in the environment (.env removed).
+    url: process.env["DATABASE_URL"] ?? "file:./dev.db",
   },
 });

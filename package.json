@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "db:seed": "tsx prisma/seed.ts",
+    "make-seed": "node scripts/make-seed.js",
     "electron:dev": "concurrently -n next,electron -c blue,green \"next dev\" \"wait-on http://localhost:3000 && NODE_ENV=development electron .\"",
     "electron:build": "npx prisma generate && next build && node scripts/prepare-build.js && electron-builder --mac --arm64 && node scripts/restore-dev-binary.js",
     "electron:build:win": "npx prisma generate && next build && node scripts/prepare-build.js && electron-builder --win",

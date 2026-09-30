@@ -43,6 +43,14 @@ prisma/dev.db-journal
 .strava-tokens.json
 .school-settings.json
 .work-config.json
+countdowns.json
+news-config.json
+calendar-feeds.json
+followed-teams.json
+onboarding.json
+subscriptions.json
+budget.json
+watchlist.json
 
 # ── Claude Code / AI assistant files ─────────────────────────────────────────
 .claude/
@@ -75,4 +83,14 @@ next-env.d.ts
 /coverage
 
 # ── Vercel ────────────────────────────────────────────────────────────────────
-.vercel
+.vercelpodcasts.json
+tasks.json
+faceit-accounts.json
+meal-plan.json
+steam.json
+youtube-channels.json
+feedback.json
+twitch-channels.json
+
+# App config JSONs (moved into config/)
+/config/
