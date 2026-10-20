@@ -91,7 +91,11 @@ async function fetchFromESPN(espnLeague: string, date: string, keyword: string):
 // carry BOTH a scorer name AND a real minute, then dedupe by (minute+scorer+isHome).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function walkForFotMobGoals(root: any): GoalEvent[] | null {
-  interface Raw { minute: number; extraMinute: number | null; scorer: string; assist: string | null; type: GoalEvent["type"]; isHome: boolean }
+  // `isHome` here is FotMob's raw flag = the side whose score went up (the
+  // BENEFICIARY), not the scorer. `newScore` is FotMob's authoritative running
+  // score [home, away] after the event — used directly so own goals land on the
+  // right side (an own goal's beneficiary is the opponent).
+  interface Raw { minute: number; extraMinute: number | null; scorer: string; assist: string | null; type: GoalEvent["type"]; isHome: boolean; newScore: [number, number] | null }
   const raw: Raw[] = [];
   const seen = new WeakSet<object>();
 
@@ -136,12 +140,27 @@ function walkForFotMobGoals(root: any): GoalEvent[] | null {
       const scorer = extractScorer(obj);
       // Skip aggregate/summary nodes that lack real per-event data.
       if (time && scorer) {
+        // Assist: FotMob event rows carry `assistStr` ("assist by X"); other
+        // shapes use an assistPlayer/assist object.
         const assistObj = asObj(obj.assistPlayer) ?? asObj(obj.assist);
-        const assist = assistObj && typeof assistObj.name === "string" ? assistObj.name : null;
-        const type: GoalEvent["type"] =
-          typeStr === "own goal" ? "OWN_GOAL" :
-          typeStr.includes("penalty") ? "PENALTY" : "REGULAR";
-        raw.push({ minute: time.minute, extraMinute: time.extraMinute, scorer, assist, type, isHome: obj.isHome === true });
+        let assist = assistObj && typeof assistObj.name === "string" ? assistObj.name : null;
+        if (!assist && typeof obj.assistStr === "string" && (obj.assistStr as string).trim()) {
+          assist = (obj.assistStr as string).replace(/^assist by\s+/i, "").trim() || null;
+        }
+        // Subtype: FotMob ALWAYS reports `type: "Goal"` and flags own goals /
+        // penalties via `ownGoal` + `goalDescriptionKey`/`goalDescription`, not
+        // the type string — so check those first, then fall back to the type
+        // string (ESPN / SportAPI7-style payloads that do set it).
+        const descKey = typeof obj.goalDescriptionKey === "string" ? (obj.goalDescriptionKey as string).toLowerCase() : "";
+        const descStr = typeof obj.goalDescription === "string" ? (obj.goalDescription as string).toLowerCase() : "";
+        const isOwn = obj.ownGoal === true || typeStr === "own goal" || descKey.includes("owngoal") || descStr.includes("own goal");
+        const isPen = !isOwn && (typeStr.includes("penalty") || descKey.includes("penalty") || descStr.includes("penalty"));
+        const type: GoalEvent["type"] = isOwn ? "OWN_GOAL" : isPen ? "PENALTY" : "REGULAR";
+        const ns = obj.newScore;
+        const newScore: [number, number] | null =
+          Array.isArray(ns) && ns.length === 2 && typeof ns[0] === "number" && typeof ns[1] === "number"
+            ? [ns[0], ns[1]] : null;
+        raw.push({ minute: time.minute, extraMinute: time.extraMinute, scorer, assist, type, isHome: obj.isHome === true, newScore });
       }
     }
     for (const v of Object.values(obj)) visit(v);
@@ -156,18 +175,42 @@ function walkForFotMobGoals(root: any): GoalEvent[] | null {
   for (const g of raw) {
     const key = `${g.minute}-${g.extraMinute ?? ""}-${g.scorer}-${g.isHome ? "h" : "a"}`;
     const prev = byKey.get(key);
-    if (!prev || (!prev.assist && g.assist)) byKey.set(key, g);
+    if (!prev) { byKey.set(key, g); continue; }
+    // Prefer a typed row (OWN_GOAL / PENALTY) over a plain one captured from a
+    // path that didn't carry the flag; otherwise prefer the one with an assist.
+    const gTyped = g.type !== "REGULAR";
+    const prevTyped = prev.type !== "REGULAR";
+    if (gTyped && !prevTyped) byKey.set(key, g);
+    else if (gTyped === prevTyped && !prev.assist && g.assist) byKey.set(key, g);
   }
   const deduped = [...byKey.values()];
 
   deduped.sort((a, b) => (a.minute - b.minute) || ((a.extraMinute ?? 0) - (b.extraMinute ?? 0)));
 
   let h = 0, aw = 0;
+  let prevH = 0;
   const out: GoalEvent[] = [];
   for (const g of deduped) {
-    const creditHome = g.type === "OWN_GOAL" ? !g.isHome : g.isHome;
-    if (creditHome) h++; else aw++;
-    out.push({ ...g, homeScore: h, awayScore: aw });
+    // Beneficiary = the side whose score went up. Prefer FotMob's authoritative
+    // `newScore`; fall back to FotMob's `isHome` (which is already the
+    // beneficiary) when a node lacked it.
+    let benefHome: boolean;
+    if (g.newScore) {
+      [h, aw] = g.newScore;
+      benefHome = h > prevH;
+      prevH = h;
+    } else {
+      benefHome = g.type === "OWN_GOAL" ? !g.isHome : g.isHome;
+      if (benefHome) h++; else aw++;
+      prevH = h;
+    }
+    // The GoalEvent.isHome the client expects is the SCORER's side — for an own
+    // goal that's the opposite of who benefited.
+    const scorerIsHome = g.type === "OWN_GOAL" ? !benefHome : benefHome;
+    out.push({
+      minute: g.minute, extraMinute: g.extraMinute, scorer: g.scorer, assist: g.assist,
+      type: g.type, isHome: scorerIsHome, homeScore: h, awayScore: aw,
+    });
   }
   return out;
 }
@@ -266,6 +309,45 @@ async function fetchFromSportAPI7(slug: string, date: string): Promise<GoalEvent
   return goals;
 }
 
+export interface CardEvent {
+  minute: number;
+  extraMinute: number | null;
+  player: string;
+  card: "YELLOW" | "RED" | "SECOND_YELLOW";
+  isHome: boolean;
+}
+
+/** Yellow/red cards from FotMob's matchDetails (`events.events[]` type "Card").
+ *  Covers both FotMob-sourced teams (EFB) and ESPN-sourced ones (Barcelona),
+ *  since the FotMob matchId is on every fixture row. Never throws. */
+async function fetchFotMobCards(matchId: string): Promise<CardEvent[]> {
+  if (!matchId) return [];
+  try {
+    const res = await fetch(`https://www.fotmob.com/api/data/matchDetails?matchId=${matchId}`, {
+      headers: { "User-Agent": UA, "Accept": "application/json" },
+    });
+    if (!res.ok) return [];
+    const j = await res.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const evs: any[] = j?.content?.matchFacts?.events?.events ?? [];
+    const out: CardEvent[] = [];
+    for (const e of evs) {
+      if ((e?.type ?? "") !== "Card") continue;
+      const raw = String(e?.card ?? "").toLowerCase();
+      const card: CardEvent["card"] = raw.includes("red") && raw.includes("yellow") ? "SECOND_YELLOW"
+        : raw.includes("red") ? "RED" : "YELLOW";
+      out.push({
+        minute: typeof e.time === "number" ? e.time : 0,
+        extraMinute: typeof e.overloadTime === "number" ? e.overloadTime : null,
+        player: String(e.player?.name ?? e.nameStr ?? ""),
+        card,
+        isHome: e.isHome === true,
+      });
+    }
+    return out;
+  } catch { return []; }
+}
+
 // ── Route ─────────────────────────────────────────────────────────────────────
 // GET /api/sports/goals?matchId=<fotmob-id>&date=YYYY-MM-DD&slug=barcelona
 export async function GET(request: Request) {
@@ -303,8 +385,11 @@ export async function GET(request: Request) {
       goals = await fetchFromSportAPI7(slug, date);
     }
 
-    const payload = { goals: goals ?? [] };
-    if (goals && goals.length > 0) cache.set(cacheKey, { data: payload, ts: Date.now() });
+    // Yellow/red cards (FotMob) so the hub can show a goals+cards timeline.
+    const cards = matchId ? await fetchFotMobCards(matchId) : [];
+
+    const payload = { goals: goals ?? [], cards };
+    if ((goals && goals.length > 0) || cards.length > 0) cache.set(cacheKey, { data: payload, ts: Date.now() });
     return NextResponse.json(payload);
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

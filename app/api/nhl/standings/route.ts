@@ -16,7 +16,10 @@ export async function GET(request: Request) {
   }
 
   try {
-    const res = await fetch(STANDINGS_URL, { next: { revalidate: 600 } });
+    // no-store: the 10-min in-memory `cache` above is our only cache layer.
+    // Next's fetch Data Cache can bake a stale standings snapshot to disk that
+    // outlives its revalidate window (see lib/fotmob.ts).
+    const res = await fetch(STANDINGS_URL, { cache: "no-store" });
     if (!res.ok) throw new Error(`NHL API ${res.status}`);
     const raw = await res.json();
 

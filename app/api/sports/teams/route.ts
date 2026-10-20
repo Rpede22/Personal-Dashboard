@@ -3,6 +3,7 @@ import {
   readFollowedTeams,
   writeFollowedTeams,
   defaultFollowedTeams,
+  sanitizeColors,
   MAX_FOLLOWED,
   type FollowedTeam,
 } from "@/lib/followed-teams";
@@ -66,6 +67,14 @@ export async function POST(request: Request) {
   if (action === "remove") {
     const slug = typeof body.slug === "string" ? body.slug : "";
     teams = teams.filter((t) => t.slug !== slug);
+    writeFollowedTeams(teams);
+    return NextResponse.json({ teams });
+  }
+
+  if (action === "setColors") {
+    const slug = typeof body.slug === "string" ? body.slug : "";
+    const colors = sanitizeColors(body.colors);
+    teams = teams.map((t) => (t.slug === slug ? { ...t, borderColors: colors } : t));
     writeFollowedTeams(teams);
     return NextResponse.json({ teams });
   }

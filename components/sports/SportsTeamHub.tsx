@@ -29,13 +29,26 @@ interface GoalEvent {
   awayScore: number;
 }
 
-interface EspnPlay {
-  period: number;
-  clock: string;
-  text: string;
-  homeScore: number;
-  awayScore: number;
+interface CardEvent {
+  minute: number;
+  extraMinute: number | null;
+  player: string;
+  card: "YELLOW" | "RED" | "SECOND_YELLOW";
+  isHome: boolean;
 }
+interface FootballDetail { goals: GoalEvent[]; cards: CardEvent[] }
+
+// ESPN NHL goal/penalty detail (same shape as Metal Ligaen's).
+interface EspnGoalEvent {
+  period: number; time: string; team: "home" | "away";
+  strength: string; shortHanded: boolean; powerPlay: boolean; emptyNet: boolean; penaltyShot: boolean;
+  score: string; scorer: string; assists: string[];
+}
+interface EspnPenaltyEvent {
+  period: number; time: string; team: "home" | "away";
+  player: string; pim: string; offence: string;
+}
+interface EspnDetail { goals: EspnGoalEvent[]; penalties: EspnPenaltyEvent[] }
 
 interface StandingRow {
   rank: number;
@@ -60,6 +73,9 @@ interface SportsEvent {
   matchId?: string | null;
   espnEventId?: string;                          // ESPN game — scoring dropdown
   periods?: { home: number; away: number }[];    // Metal Ligaen per-period scores
+  metalMatchId?: string;                         // Metal Ligaen game — goals/penalties detail
+  overtime?: boolean;                            // Metal Ligaen — decided in OT
+  shootout?: boolean;                            // Metal Ligaen — decided in a shootout
   date: string;
   time: string;
   homeTeam: string;
@@ -69,16 +85,111 @@ interface SportsEvent {
   finished: boolean;
 }
 
+interface MetalGoalEvent {
+  period: number; time: string; team: "home" | "away";
+  strength: string; shortHanded: boolean; powerPlay: boolean;
+  score: string; scorer: string; assists: string[];
+  emptyNet: boolean; penaltyShot: boolean;
+}
+interface MetalPenaltyEvent {
+  period: number; time: string; team: "home" | "away";
+  player: string; pim: string; offence: string;
+}
+interface MetalDetail { overtime: boolean; shootout: boolean; goals: MetalGoalEvent[]; penalties: MetalPenaltyEvent[]; }
+
 interface TeamConfig {
   name: string;
   shortName: string;
   matchKeyword: string;
   accentColor: string;
+  borderColors?: string[];
   emoji: string;
   leagueName: string;
   sport: string;
   splitAfterRank?: number;
   splitLabel?: string;
+}
+
+// ── Shared match timeline (goals + penalties/cards, own-team highlighted) ────
+// One renderer for every sport: Metal Ligaen, ESPN NHL, and football all build
+// the same normalized item list and this draws the Esbjerg-Energy-style merged
+// chronological timeline.
+type TLGoalItem = { kind: "goal"; sort: number; when: string; team: "home" | "away"; score: string; scorer: string; assists: string[]; tag: string | null; tagColor: string };
+type TLSecItem = { kind: "sec"; sort: number; when: string; team: "home" | "away"; badge: string; badgeColor: string; player: string; detail: string };
+type TLItem = TLGoalItem | TLSecItem;
+
+function MatchTimeline({ items, e, keyword, accent, headerLabel, emptyText }: {
+  items: TLItem[];
+  e: SportsEvent;
+  keyword: string;
+  accent: string;
+  headerLabel: string;
+  emptyText: string;
+}) {
+  const myIsHome = e.homeTeam.toLowerCase().includes(keyword.toLowerCase());
+  const isMine = (t: "home" | "away") => (t === "home") === myIsHome;
+  const teamName = (t: "home" | "away") => (t === "home" ? e.homeTeam : e.awayTeam);
+  const sorted = [...items].sort((a, b) => a.sort - b.sort);
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide mb-1.5 flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
+        <span>{headerLabel}</span>
+        <span className="normal-case tracking-normal inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: accent }} /> {teamName(myIsHome ? "home" : "away")}</span>
+      </div>
+      {sorted.length === 0 ? (
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>{emptyText}</p>
+      ) : (
+        <div className="space-y-1">
+          {sorted.map((row, ri) => {
+            const mine = isMine(row.team);
+            if (row.kind === "goal") {
+              return (
+                <div key={ri} className="flex items-start gap-2 text-xs rounded px-1.5 py-1" style={{ background: mine ? `${accent}14` : "transparent", borderLeft: `2px solid ${mine ? accent : "transparent"}` }}>
+                  <span className="shrink-0 tabular-nums px-1 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>{row.when}</span>
+                  <span className="shrink-0">{mine ? "🚨" : "🥅"}</span>
+                  {row.score && <span className="shrink-0 font-bold tabular-nums" style={{ color: accent }}>{row.score}</span>}
+                  <div className="flex-1 min-w-0">
+                    <span style={{ color: mine ? accent : "var(--text)", fontWeight: mine ? 700 : 500 }}>{row.scorer || "—"}</span>
+                    {row.tag && <span className="ml-1.5 text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: `${row.tagColor}22`, color: row.tagColor }}>{row.tag}</span>}
+                    <span className="ml-1.5" style={{ color: "var(--text-muted)" }}>· {teamName(row.team)}</span>
+                    {row.assists.length > 0 && <div style={{ color: "var(--text-muted)" }}>↳ {row.assists.join(", ")}</div>}
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div key={ri} className="flex items-center gap-2 text-xs px-1.5 py-0.5" style={{ opacity: 0.85 }}>
+                <span className="shrink-0 tabular-nums px-1 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>{row.when}</span>
+                <span className="shrink-0 text-[9px] font-bold px-1 py-0.5 rounded tabular-nums" style={{ background: `${row.badgeColor}22`, color: row.badgeColor }}>{row.badge}</span>
+                <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text-muted)" }}>
+                  <span style={{ color: mine ? accent : "var(--text-muted)", fontWeight: mine ? 600 : 400 }}>{row.player}</span> · {teamName(row.team)}{row.detail ? ` · ${row.detail}` : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function goalTag(g: { shortHanded?: boolean; powerPlay?: boolean; emptyNet?: boolean; penaltyShot?: boolean }): { tag: string | null; color: string } {
+  if (g.penaltyShot) return { tag: "PS", color: "var(--text-muted)" };
+  if (g.shortHanded) return { tag: "SH", color: "var(--accent-orange)" };
+  if (g.powerPlay) return { tag: "PP", color: "var(--accent-green)" };
+  if (g.emptyNet) return { tag: "EN", color: "var(--text-muted)" };
+  return { tag: null, color: "var(--text-muted)" };
+}
+const timeToSec = (s: string) => { const [m, ss] = (s || "0:0").split(":").map(Number); return (m || 0) * 60 + (ss || 0); };
+
+/** Gradient from the team's up-to-3 border colours (Settings › Teams), else the
+ *  accent — mirrors the dashboard widget box so the hub shows the same colours. */
+function hubGradient(borderColors: string[] | undefined, accent: string): string {
+  const cs = borderColors ?? [];
+  if (cs.length >= 3) return `linear-gradient(90deg, ${cs[0]}, ${cs[1]}, ${cs[2]})`;
+  if (cs.length === 2) return `linear-gradient(90deg, ${cs[0]}, ${cs[1]})`;
+  if (cs.length === 1) return `linear-gradient(90deg, ${cs[0]}, ${cs[0]}66)`;
+  return `linear-gradient(90deg, ${accent}, ${accent}44)`;
 }
 
 interface SubTable {
@@ -100,10 +211,14 @@ interface TeamData {
 
 // Convert a UTC `HH:MM` + `YYYY-MM-DD` pair to Copenhagen-local `HH:MM`.
 // Falls back to the raw string if the time isn't parseable.
-function toCopenhagenTime(dateStr: string, timeStr: string): string {
+// `isLocal` = the source already reports Copenhagen-local time (Metal Ligaen):
+// return it verbatim so we don't double-add the +1/+2h offset (the "2 hours
+// late" bug on the hockey schedule).
+function toCopenhagenTime(dateStr: string, timeStr: string, isLocal = false): string {
   if (!dateStr || !timeStr) return timeStr;
   // TSDB "time" can be "HH:MM:SS"; truncate
   const hhmm = timeStr.slice(0, 5);
+  if (isLocal) return hhmm;
   const iso = `${dateStr}T${hhmm}:00Z`;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return hhmm;
@@ -115,18 +230,20 @@ function toCopenhagenTime(dateStr: string, timeStr: string): string {
   });
 }
 
-function toCopenhagenDate(dateStr: string, timeStr: string): string {
+function toCopenhagenDate(dateStr: string, timeStr: string, isLocal = false): string {
   if (!dateStr) return dateStr;
   if (!timeStr) return dateStr;
   const hhmm = timeStr.slice(0, 5);
-  const iso = `${dateStr}T${hhmm}:00Z`;
+  // Already-local date: format from the date parts alone (noon avoids any DST
+  // edge) with no timeZone conversion.
+  const iso = isLocal ? `${dateStr}T12:00:00` : `${dateStr}T${hhmm}:00Z`;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return dateStr;
   return d.toLocaleDateString("en-GB", {
     day: "2-digit",
     month: "short",
     year: "numeric",
-    timeZone: "Europe/Copenhagen",
+    ...(isLocal ? {} : { timeZone: "Europe/Copenhagen" }),
   });
 }
 
@@ -260,6 +377,24 @@ function shortConference(name: string): string {
   return n.replace(/\s+Conference$/i, "").replace(/\s+Division$/i, "");
 }
 
+/** Order ESPN rows into a true league table by overall record (points for
+ *  hockey, win% otherwise) and re-rank 1..N. `data.allStandings` arrives
+ *  grouped by conference (East then West), so using it verbatim for the
+ *  "League" view showed a conference-ordered list mislabelled as the league —
+ *  "completely wrong" (e.g. the #1 East team ranked above a better West team). */
+function leagueOrdered(rows: StandingRow[], isHockey: boolean): StandingRow[] {
+  const winPct = (r: StandingRow) => {
+    const gp = r.played || (r.won + r.lost + (r.drawn ?? 0) + (r.otLosses ?? 0));
+    return gp > 0 ? (r.won + 0.5 * (r.drawn ?? 0)) / gp : 0;
+  };
+  const key = (r: StandingRow) => (isHockey ? (r.points ?? 0) : winPct(r));
+  const diff = (r: StandingRow) => (r.goalsFor ?? 0) - (r.goalsAgainst ?? 0);
+  return rows
+    .slice()
+    .sort((a, b) => key(b) - key(a) || diff(b) - diff(a) || (b.won) - (a.won))
+    .map((r, i) => ({ ...r, rank: i + 1 }));
+}
+
 /** Group ESPN rows into conference sub-tables (rank = conference/playoff seed),
  *  for the standings "Conference" view. */
 function espnConferenceTables(rows: StandingRow[]): SubTable[] {
@@ -360,6 +495,7 @@ function StandingsTable({
   colSpan,
   splitAfterRank,
   splitLabel,
+  playoffBadges = false,
 }: {
   title: string;
   subtitle?: string;
@@ -374,6 +510,7 @@ function StandingsTable({
   colSpan: number;
   splitAfterRank?: number;
   splitLabel?: string;
+  playoffBadges?: boolean; // ESPN NHL: show P (division spot) / WC (wildcard) like the EDM hub
 }) {
   if (rows.length === 0) return null;
   return (
@@ -422,7 +559,20 @@ function StandingsTable({
                     }}
                   >
                     <td className="px-4 py-2 font-bold" style={{ color: "var(--text-muted)" }}>{row.rank}</td>
-                    <td className="px-4 py-2 font-semibold" style={{ color: isThis ? accent : "var(--text)" }}>{row.team}</td>
+                    <td className="px-4 py-2 font-semibold" style={{ color: isThis ? accent : "var(--text)" }}>
+                      <span className="inline-flex items-center gap-1.5">
+                        {row.team}
+                        {playoffBadges && (() => {
+                          // Top 3 of a division = guaranteed spot (P); else a conference
+                          // playoff seed (1–8, so 7–8 are the two wild cards) = WC.
+                          const guaranteed = (row.divisionRank ?? 99) <= 3;
+                          const wildcard = !guaranteed && (row.seed ?? 99) >= 1 && (row.seed ?? 99) <= 8;
+                          if (guaranteed) return <span title="Division playoff spot (top 3)" style={{ fontSize: "10px", fontWeight: 700, padding: "0 3px", borderRadius: "3px", background: "var(--accent-green)33", color: "var(--accent-green)" }}>P</span>;
+                          if (wildcard) return <span title="Wild card playoff spot" style={{ fontSize: "10px", fontWeight: 700, padding: "0 3px", borderRadius: "3px", background: "var(--accent-orange)33", color: "var(--accent-orange)" }}>WC</span>;
+                          return null;
+                        })()}
+                      </span>
+                    </td>
                     <td className="px-4 py-2">{row.played}</td>
                     <td className="px-4 py-2">{row.won}</td>
                     {isFootball && <td className="px-4 py-2">{row.drawn}</td>}
@@ -464,8 +614,10 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const [livePlayoffsLoading, setLivePlayoffsLoading] = useState(false);
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[] | "loading" | "error">>({});
+  const [cardsMap, setCardsMap] = useState<Record<string, CardEvent[]>>({}); // football yellow/red cards, keyed by matchId
   const [statsMap, setStatsMap] = useState<Record<string, MatchStats | "loading" | "error">>({});
-  const [espnScoreMap, setEspnScoreMap] = useState<Record<string, EspnPlay[] | "loading" | "error">>({});
+  const [espnScoreMap, setEspnScoreMap] = useState<Record<string, EspnDetail | "loading" | "error">>({});
+  const [metalMap, setMetalMap] = useState<Record<string, MetalDetail | "loading" | "error">>({});
   const [topScorers, setTopScorers] = useState<TopScorer[] | null>(null);
   const [topScorerCols, setTopScorerCols] = useState<StatColumn[] | null>(null);
   const [topScorersLoading, setTopScorersLoading] = useState(false);
@@ -530,9 +682,24 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
     try {
       const res = await fetch(`/api/sports/espn-scoring?team=${teamSlug}&event=${eventId}`);
       const d = await res.json();
-      setEspnScoreMap((prev) => ({ ...prev, [eventId]: d.plays ?? [] }));
+      setEspnScoreMap((prev) => ({ ...prev, [eventId]: { goals: d.goals ?? [], penalties: d.penalties ?? [] } }));
     } catch {
       setEspnScoreMap((prev) => ({ ...prev, [eventId]: "error" }));
+    }
+  }
+
+  async function toggleMetal(metalMatchId: string, rowKey: string) {
+    if (expandedMatch === rowKey) { setExpandedMatch(null); return; }
+    setExpandedMatch(rowKey);
+    if (metalMap[metalMatchId] !== undefined) return;
+    setMetalMap((prev) => ({ ...prev, [metalMatchId]: "loading" }));
+    try {
+      const res = await fetch(`/api/sports/metalligaen-match?id=${metalMatchId}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error("bad");
+      setMetalMap((prev) => ({ ...prev, [metalMatchId]: d as MetalDetail }));
+    } catch {
+      setMetalMap((prev) => ({ ...prev, [metalMatchId]: "error" }));
     }
   }
 
@@ -553,6 +720,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
       const res = await fetch(`/api/sports/goals?matchId=${matchId}&date=${date}&slug=${teamSlug}`);
       const d = await res.json();
       setGoalsMap((prev) => ({ ...prev, [matchId]: d.goals ?? [] }));
+      setCardsMap((prev) => ({ ...prev, [matchId]: d.cards ?? [] }));
     } catch {
       setGoalsMap((prev) => ({ ...prev, [matchId]: "error" }));
     }
@@ -563,6 +731,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
   const keyword = cfg?.matchKeyword ?? teamSlug;
   const isFootball = cfg?.sport === "football";
   const isHockey = cfg?.sport === "icehockey";
+  const isMetal = data?.source === "metalligaen"; // Metal Ligaen: times are already Copenhagen-local
   const isNFL = cfg?.sport === "americanfootball";
   const isUS = cfg?.sport === "basketball" || isNFL; // ESPN win-loss leagues
   const preseason = data?.preseason === true; // ESPN — season not started, ranks meaningless
@@ -618,6 +787,9 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
       <Link href="/" className="inline-flex items-center gap-1 text-sm mb-4" style={{ color: "var(--text-muted)" }}>
         ← Dashboard
       </Link>
+
+      {/* Team colour bar (from Settings › Teams border colours) */}
+      <div className="h-1 rounded-full mb-3" style={{ background: hubGradient(cfg?.borderColors, accent) }} />
 
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
@@ -723,11 +895,11 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                   {tables
                     ? tables.map((sub) => (
                         <StandingsTable key={sub.name} title={sub.name} rows={sub.rows} headers={headers}
-                          isFootball={isFootball} isHockey={isHockey} isUS={isUS} isNFL={isNFL} keyword={keyword} accent={accent} colSpan={colSpan} />
+                          isFootball={isFootball} isHockey={isHockey} isUS={isUS} isNFL={isNFL} keyword={keyword} accent={accent} colSpan={colSpan} playoffBadges={isHockey} />
                       ))
                     : (
-                      <StandingsTable title="League" rows={data.allStandings} headers={headers}
-                        isFootball={isFootball} isHockey={isHockey} isUS={isUS} isNFL={isNFL} keyword={keyword} accent={accent} colSpan={colSpan} />
+                      <StandingsTable title="League" rows={leagueOrdered(data.allStandings, isHockey)} headers={headers}
+                        isFootball={isFootball} isHockey={isHockey} isUS={isUS} isNFL={isNFL} keyword={keyword} accent={accent} colSpan={colSpan} playoffBadges={isHockey} />
                     )}
                 </>
               );
@@ -895,17 +1067,21 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                   const res = gameResult(e, keyword);
                   const hasPeriods = !!(e.periods && e.periods.length);
                   // Expandable: football (matchId → goals+stats), ESPN (espnEventId
-                  // → scoring plays), or Metal Ligaen (periods → per-period scores).
-                  const canExpand = !!(e.finished && (e.matchId || e.espnEventId || hasPeriods));
-                  const rowKey = e.matchId ?? e.espnEventId ?? `${e.date}-${e.homeTeam}-${i}`;
+                  // → scoring plays), or Metal Ligaen (metalMatchId → goals+penalties,
+                  // or periods-only fallback for per-period scores).
+                  const canExpand = !!(e.finished && (e.matchId || e.espnEventId || e.metalMatchId || hasPeriods));
+                  const rowKey = e.matchId ?? e.espnEventId ?? e.metalMatchId ?? `${e.date}-${e.homeTeam}-${i}`;
                   const isExpanded = canExpand && expandedMatch === rowKey;
                   const goalsState = e.matchId ? goalsMap[e.matchId] : undefined;
                   const goals = Array.isArray(goalsState) ? goalsState : [];
+                  const otSo = e.shootout ? "SO" : e.overtime ? "OT" : null; // hockey result decided in OT/SO
                   const onToggle = e.matchId
                     ? () => toggleGoals(e.matchId!, e.date)
                     : e.espnEventId
                       ? () => toggleEspnScoring(e.espnEventId!)
-                      : () => setExpandedMatch(expandedMatch === rowKey ? null : rowKey);
+                      : e.metalMatchId
+                        ? () => toggleMetal(e.metalMatchId!, rowKey)
+                        : () => setExpandedMatch(expandedMatch === rowKey ? null : rowKey);
                   return (
                     <div key={i} className="rounded-xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
                       {/* Match row */}
@@ -914,8 +1090,9 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                         onClick={canExpand ? onToggle : undefined}
                       >
                         {res ? (
-                          <span className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0" style={{ background: RESULT_BG[res], color: "#fff" }}>
+                          <span className="w-8 h-8 rounded-lg flex flex-col items-center justify-center text-xs font-bold shrink-0 leading-none" style={{ background: RESULT_BG[res], color: "#fff" }}>
                             {res}
+                            {otSo && <span className="text-[8px] font-semibold opacity-90 mt-0.5">{otSo}</span>}
                           </span>
                         ) : (
                           <span className="w-8 h-8 rounded-lg shrink-0" style={{ background: "var(--surface-2)" }} />
@@ -925,12 +1102,13 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                             {e.homeTeam} <span style={{ color: "var(--text-muted)" }}>vs</span> {e.awayTeam}
                           </div>
                           <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                            {toCopenhagenDate(e.date, e.time)}{e.time ? " · " + toCopenhagenTime(e.date, e.time) + " CEST" : ""}
+                            {toCopenhagenDate(e.date, e.time, isMetal)}{e.time ? " · " + toCopenhagenTime(e.date, e.time, isMetal) : ""}
                           </div>
                         </div>
                         {e.homeScore !== null && e.awayScore !== null && (
-                          <span className="text-lg font-bold shrink-0" style={{ color: accent }}>
+                          <span className="text-lg font-bold shrink-0 flex items-baseline gap-1" style={{ color: accent }}>
                             {e.homeScore}–{e.awayScore}
+                            {otSo && <span className="text-[10px] font-semibold" style={{ color: "var(--text-muted)" }}>{otSo}</span>}
                           </span>
                         )}
                         {canExpand && (
@@ -943,26 +1121,57 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                       {/* Match stats (football only) + goal timeline */}
                       {isExpanded && (
                         <div className="px-4 pb-4 pt-2 border-t" style={{ borderColor: "var(--border)" }}>
-                          {/* ESPN (NHL/NFL) scoring plays */}
+                          {/* ESPN (NHL/NFL) goals + penalties — Esbjerg-Energy-style merged timeline */}
                           {e.espnEventId && (() => {
                             const st = espnScoreMap[e.espnEventId!];
                             if (st === "loading") return <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading scoring…</p>;
                             if (st === "error") return <p className="text-xs" style={{ color: "var(--accent-red)" }}>Failed to load scoring</p>;
-                            if (!st || st.length === 0) return <p className="text-xs" style={{ color: "var(--text-muted)" }}>No scoring plays available</p>;
+                            if (!st || typeof st === "string") return null;
+                            // ESPN play clock is ELAPSED within a period (counts up) → sort ascending.
+                            const items: TLItem[] = [
+                              ...st.goals.map((g): TLItem => {
+                                const { tag, color } = goalTag(g);
+                                return { kind: "goal", sort: g.period * 10000 + timeToSec(g.time), when: `P${g.period} ${g.time}`, team: g.team, score: g.score, scorer: g.scorer, assists: g.assists, tag, tagColor: color };
+                              }),
+                              ...st.penalties.map((p): TLItem => ({ kind: "sec", sort: p.period * 10000 + timeToSec(p.time), when: `P${p.period} ${p.time}`, team: p.team, badge: `PIM ${p.pim}`, badgeColor: "var(--accent-red)", player: p.player, detail: p.offence })),
+                            ];
+                            return <MatchTimeline items={items} e={e} keyword={keyword} accent={accent} headerLabel="Goals & penalties" emptyText="No scoring plays available" />;
+                          })()}
+                          {/* Metal Ligaen goals + penalties (lazy) */}
+                          {e.metalMatchId && (() => {
+                            const md = metalMap[e.metalMatchId!];
+                            if (md === "loading") return <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading scoring…</p>;
+                            if (md === "error") return <p className="text-xs" style={{ color: "var(--accent-red)" }}>Failed to load match detail</p>;
+                            if (!md) return null;
+                            // Metal clock counts UP within a period → sort = period*BIG + elapsed.
+                            const items: TLItem[] = [
+                              ...md.goals.map((g): TLItem => {
+                                const { tag, color } = goalTag(g);
+                                return { kind: "goal", sort: g.period * 10000 + timeToSec(g.time), when: `P${g.period} ${g.time}`, team: g.team, score: g.score, scorer: g.scorer, assists: g.assists, tag, tagColor: color };
+                              }),
+                              ...md.penalties.map((p): TLItem => ({ kind: "sec", sort: p.period * 10000 + timeToSec(p.time), when: `P${p.period} ${p.time}`, team: p.team, badge: `PIM ${p.pim}`, badgeColor: "var(--accent-red)", player: p.player, detail: p.offence })),
+                            ];
                             return (
-                              <div className="space-y-1.5">
-                                {st.map((p, pi) => (
-                                  <div key={pi} className="flex items-center gap-2.5 text-xs">
-                                    <span className="shrink-0 tabular-nums px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>P{p.period} {p.clock}</span>
-                                    <span className="flex-1 min-w-0" style={{ color: "var(--text)" }}>{p.text}</span>
-                                    <span className="shrink-0 font-bold tabular-nums" style={{ color: accent }}>{p.homeScore}–{p.awayScore}</span>
+                              <div className="space-y-3">
+                                <MatchTimeline items={items} e={e} keyword={keyword} accent={accent} headerLabel="Goals & penalties" emptyText="No goal/penalty data available" />
+                                {/* Per-period scores footer */}
+                                {hasPeriods && e.periods && (
+                                  <div className="flex flex-wrap gap-2 text-xs pt-1">
+                                    {e.periods.map((p, pi) => (
+                                      <span key={pi} className="px-2 py-1 rounded" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
+                                        P{pi + 1}: <span style={{ color: "var(--text)" }}>{p.home}–{p.away}</span>
+                                      </span>
+                                    ))}
+                                    <span className="px-2 py-1 rounded font-bold" style={{ background: `${accent}22`, color: accent }}>
+                                      Final: {e.homeScore}–{e.awayScore}{e.shootout ? " (SO)" : e.overtime ? " (OT)" : ""}
+                                    </span>
                                   </div>
-                                ))}
+                                )}
                               </div>
                             );
                           })()}
-                          {/* Metal Ligaen per-period scores */}
-                          {hasPeriods && e.periods && (
+                          {/* Metal Ligaen per-period scores (fallback when no detail id) */}
+                          {!e.metalMatchId && hasPeriods && e.periods && (
                             <div className="flex flex-wrap gap-2 text-xs">
                               {e.periods.map((p, pi) => (
                                 <span key={pi} className="px-2 py-1 rounded" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
@@ -970,7 +1179,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                                 </span>
                               ))}
                               <span className="px-2 py-1 rounded font-bold" style={{ background: `${accent}22`, color: accent }}>
-                                Final: {e.homeScore}–{e.awayScore}
+                                Final: {e.homeScore}–{e.awayScore}{e.overtime ? " (OT)" : e.shootout ? " (SO)" : ""}
                               </span>
                             </div>
                           )}
@@ -1018,39 +1227,40 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                             <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading…</p>
                           ) : goalsState === "error" ? (
                             <p className="text-xs" style={{ color: "var(--accent-red)" }}>Failed to load goals</p>
-                          ) : goals.length === 0 ? (
-                            <p className="text-xs" style={{ color: "var(--text-muted)" }}>No goals recorded</p>
-                          ) : (
-                            <div className="space-y-1.5">
-                              {goals.map((gl, gi) => {
-                                const myTeamGoal = gl.type !== "OWN_GOAL"
-                                  ? (gl.isHome === e.homeTeam.toLowerCase().includes(keyword.toLowerCase()))
-                                  : (gl.isHome !== e.homeTeam.toLowerCase().includes(keyword.toLowerCase()));
-                                const minuteStr = gl.extraMinute ? `${gl.minute}+${gl.extraMinute}′` : `${gl.minute}′`;
-                                const typeColor = gl.type === "PENALTY" ? "var(--accent-orange)" : gl.type === "OWN_GOAL" ? "var(--accent-red)" : undefined;
-                                return (
-                                  <div key={gi} className="flex items-center gap-2.5 text-xs">
-                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: myTeamGoal ? accent : "var(--text-muted)" }} />
-                                    <span className="w-9 shrink-0 tabular-nums" style={{ color: "var(--text-muted)" }}>{minuteStr}</span>
-                                    <span className="flex-1 min-w-0 flex flex-wrap items-center gap-1">
-                                      {gl.type !== "REGULAR" && (
-                                        <span style={{ fontSize: "9px", fontWeight: 700, padding: "0 3px 1px", borderRadius: "3px", background: `${typeColor}33`, color: typeColor }}>
-                                          {gl.type === "OWN_GOAL" ? "OG" : "PEN"}
-                                        </span>
-                                      )}
-                                      <span style={{ color: myTeamGoal ? "var(--text)" : "var(--text-muted)", fontWeight: myTeamGoal ? 600 : 400 }}>
-                                        {gl.scorer}
-                                      </span>
-                                      {gl.assist && <span style={{ color: "var(--text-muted)" }}>({gl.assist})</span>}
-                                    </span>
-                                    <span className="shrink-0 font-bold tabular-nums" style={{ color: myTeamGoal ? accent : "var(--text-muted)" }}>
-                                      {gl.homeScore}–{gl.awayScore}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ))}
+                          ) : (() => {
+                            const cards = cardsMap[e.matchId!] ?? [];
+                            if (goals.length === 0 && cards.length === 0) {
+                              return <p className="text-xs" style={{ color: "var(--text-muted)" }}>No goals recorded</p>;
+                            }
+                            // Football is minute-based → sort = minute*100 + stoppage-time.
+                            const fSort = (minute: number, extra: number | null) => minute * 100 + (extra ?? 0);
+                            const fWhen = (minute: number, extra: number | null) => (extra ? `${minute}+${extra}′` : `${minute}′`);
+                            const items: TLItem[] = [
+                              ...goals.map((gl): TLItem => {
+                                // `team` = the side the goal COUNTS FOR (an own goal counts for the
+                                // opponent), so highlight + team name match the score increment.
+                                const benHome = gl.type === "OWN_GOAL" ? !gl.isHome : gl.isHome;
+                                const tag = gl.type === "OWN_GOAL" ? "OG" : gl.type === "PENALTY" ? "PEN" : null;
+                                const tagColor = gl.type === "OWN_GOAL" ? "var(--accent-red)" : "var(--accent-orange)";
+                                return {
+                                  kind: "goal", sort: fSort(gl.minute, gl.extraMinute), when: fWhen(gl.minute, gl.extraMinute),
+                                  team: benHome ? "home" : "away", score: `${gl.homeScore}–${gl.awayScore}`,
+                                  scorer: gl.scorer, assists: gl.assist ? [gl.assist] : [], tag, tagColor,
+                                };
+                              }),
+                              ...cards.map((c): TLItem => {
+                                const red = c.card === "RED" || c.card === "SECOND_YELLOW";
+                                return {
+                                  kind: "sec", sort: fSort(c.minute, c.extraMinute), when: fWhen(c.minute, c.extraMinute),
+                                  team: c.isHome ? "home" : "away",
+                                  badge: c.card === "SECOND_YELLOW" ? "🟨🟥" : red ? "🟥" : "🟨",
+                                  badgeColor: red ? "var(--accent-red)" : "#eab308",
+                                  player: c.player, detail: c.card === "SECOND_YELLOW" ? "second yellow" : red ? "red card" : "yellow card",
+                                };
+                              }),
+                            ];
+                            return <MatchTimeline items={items} e={e} keyword={keyword} accent={accent} headerLabel="Goals & cards" emptyText="No goals recorded" />;
+                          })())}
                         </div>
                       )}
                     </div>
@@ -1077,7 +1287,7 @@ export default function SportsTeamHub({ teamSlug }: { teamSlug: string }) {
                         {e.homeTeam} <span style={{ color: "var(--text-muted)" }}>vs</span> {e.awayTeam}
                       </div>
                       <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        {toCopenhagenDate(e.date, e.time)}{e.time ? " · " + toCopenhagenTime(e.date, e.time) + " CEST" : ""}
+                        {toCopenhagenDate(e.date, e.time, isMetal)}{e.time ? " · " + toCopenhagenTime(e.date, e.time, isMetal) : ""}
                       </div>
                     </div>
                   </div>

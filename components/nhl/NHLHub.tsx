@@ -75,6 +75,15 @@ interface GoalEvent {
   strength: "EV" | "PP1" | "PP2" | "SH" | "EN" | "SO";
 }
 
+interface PenaltyEvent {
+  period: number;
+  timeInPeriod: string;
+  player: string;
+  isHome: boolean;
+  pim: number;
+  offence: string;
+}
+
 // ── Live bracket types ─────────────────────────────────────────────────────────
 
 interface BracketSeries {
@@ -192,6 +201,7 @@ export default function NHLHub() {
   const [bracket, setBracket] = useState<BracketData | null>(null);
   const [loadingBracket, setLoadingBracket] = useState(false);
   const [goalsMap, setGoalsMap] = useState<Record<string, GoalEvent[]>>({});
+  const [penaltiesMap, setPenaltiesMap] = useState<Record<string, PenaltyEvent[]>>({});
   const [loadingGoals, setLoadingGoals] = useState<Set<string>>(new Set());
   const [expandedGame, setExpandedGame] = useState<string | null>(null);
 
@@ -268,6 +278,7 @@ export default function NHLHub() {
       const res = await fetch(`/api/nhl/goals?gameId=${gameId}`);
       const data = await res.json();
       setGoalsMap((prev) => ({ ...prev, [gameId]: data.goals ?? [] }));
+      setPenaltiesMap((prev) => ({ ...prev, [gameId]: data.penalties ?? [] }));
     } finally {
       setLoadingGoals((prev) => { const s = new Set(prev); s.delete(gameId); return s; });
     }
@@ -727,7 +738,16 @@ export default function NHLHub() {
                   const gid = String(g.gameId ?? i);
                   const isExpanded = expandedGame === gid;
                   const goals: GoalEvent[] = goalsMap[gid] ?? [];
+                  const penalties: PenaltyEvent[] = penaltiesMap[gid] ?? [];
                   const isLoadingGoals = loadingGoals.has(gid);
+                  // Merge goals + penalties into one chronological timeline (NHL play
+                  // clock is elapsed → sort ascending by period then time).
+                  const toSec = (s: string) => { const [m, ss] = (s || "0:0").split(":").map(Number); return (m || 0) * 60 + (ss || 0); };
+                  type TLRow = { kind: "goal"; sort: number; gl: GoalEvent } | { kind: "pen"; sort: number; p: PenaltyEvent };
+                  const timeline: TLRow[] = [
+                    ...goals.map((gl): TLRow => ({ kind: "goal", sort: gl.period * 10000 + toSec(gl.timeInPeriod), gl })),
+                    ...penalties.map((p): TLRow => ({ kind: "pen", sort: p.period * 10000 + toSec(p.timeInPeriod), p })),
+                  ].sort((a, b) => a.sort - b.sort);
                   return (
                     <div key={i} className="rounded-xl overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
                       {/* Game row */}
@@ -762,11 +782,29 @@ export default function NHLHub() {
                         <div className="px-4 pb-4 pt-2 border-t" style={{ borderColor: "var(--border)" }}>
                           {isLoadingGoals ? (
                             <p className="text-xs py-2" style={{ color: "var(--text-muted)" }}>Loading goals…</p>
-                          ) : goals.length === 0 ? (
+                          ) : timeline.length === 0 ? (
                             <p className="text-xs py-2" style={{ color: "var(--text-muted)" }}>No goals data</p>
                           ) : (
                             <div className="space-y-2 pt-1">
-                              {goals.map((gl, gi) => {
+                              {timeline.map((row, ri) => {
+                                if (row.kind === "pen") {
+                                  const p = row.p;
+                                  const isEdm = (p.isHome && g.homeTeam.abbrev === "EDM") || (!p.isHome && g.awayTeam.abbrev === "EDM");
+                                  return (
+                                    <div key={ri} className="flex items-center gap-2.5 text-xs" style={{ opacity: 0.85 }}>
+                                      <span className="w-2 h-2 shrink-0" />
+                                      <span style={{ color: "var(--text-muted)", minWidth: "3.5rem" }}>P{p.period} {p.timeInPeriod}</span>
+                                      <span style={{ fontSize: "9px", fontWeight: 700, padding: "0 3px 1px", borderRadius: "3px", background: "color-mix(in srgb, var(--accent-red) 20%, transparent)", color: "var(--accent-red)" }}>
+                                        PIM {p.pim}
+                                      </span>
+                                      <span className="min-w-0 truncate" style={{ color: "var(--text-muted)" }}>
+                                        <span style={{ color: isEdm ? "var(--text)" : "var(--text-muted)", fontWeight: isEdm ? 600 : 400 }}>{p.player}</span> · {p.offence}
+                                      </span>
+                                    </div>
+                                  );
+                                }
+                                const gl = row.gl;
+                                const gi = ri;
                                 const isEdmGoal = (gl.isHomeGoal && g.homeTeam.abbrev === "EDM") || (!gl.isHomeGoal && g.awayTeam.abbrev === "EDM");
                                 const periodLabel = gl.periodType === "OT" ? "OT" : gl.periodType === "SO" ? "SO" : `P${gl.period}`;
                                 const scoreStr = `${gl.awayScore}–${gl.homeScore}`;

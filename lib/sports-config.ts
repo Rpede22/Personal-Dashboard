@@ -10,6 +10,7 @@ export interface TeamConfig {
   leagueName: string;
   sport: "football" | "icehockey" | "basketball" | "americanfootball";
   accentColor: string;
+  borderColors?: string[];  // up to 3 custom border-gradient colours (widget box)
   emoji: string;
   season: string;
   // Whether league-level event endpoints work reliably (false = use team-level only)

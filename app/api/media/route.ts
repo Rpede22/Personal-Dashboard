@@ -14,9 +14,32 @@ function normDays(v: unknown): string {
   return "";
 }
 
+/** Monday of the current local week as YYYY-MM-DD (the weekly check-off key). */
+function currentMonday(now = new Date()): string {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const off = (d.getDay() + 6) % 7; // Mon = 0
+  d.setDate(d.getDate() - off);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Watched weekday numbers for THIS week only — [] if the stored record is from
+ *  a previous week (auto-reset each Monday). */
+function watchedThisWeek(json: string | null | undefined, monday: string): number[] {
+  if (!json) return [];
+  try {
+    const p = JSON.parse(json);
+    if (p?.week !== monday || !Array.isArray(p?.days)) return [];
+    return p.days.filter((n: unknown) => Number.isInteger(n)).map((n: number) => Math.max(0, Math.min(6, n)));
+  } catch { return []; }
+}
+
 export async function GET() {
   const shows = await prisma.mediaShow.findMany({ orderBy: [{ sortOrder: "asc" }, { id: "asc" }] });
-  return NextResponse.json({ shows });
+  const monday = currentMonday();
+  // Attach each show's valid-for-this-week watched days (so the client doesn't
+  // have to re-implement the reset logic).
+  const withWatched = shows.map((s) => ({ ...s, watchedThisWeek: watchedThisWeek(s.weeklyWatchedJson, monday) }));
+  return NextResponse.json({ shows: withWatched, weekMonday: monday });
 }
 
 export async function POST(request: Request) {
@@ -66,8 +89,18 @@ export async function PATCH(request: Request) {
       ? null
       : Number.isInteger(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : null;
   }
+  // Weekly episode check-off: toggle a weekday for the current week (auto-reset
+  // if the stored record is from a previous week).
+  const monday = currentMonday();
+  if ("toggleDay" in body) {
+    const day = Math.max(0, Math.min(6, Math.floor(Number(body.toggleDay))));
+    const existing = await prisma.mediaShow.findUnique({ where: { id } });
+    const cur = watchedThisWeek(existing?.weeklyWatchedJson, monday);
+    const next = cur.includes(day) ? cur.filter((d) => d !== day) : [...cur, day].sort((a, b) => a - b);
+    data.weeklyWatchedJson = JSON.stringify({ week: monday, days: next });
+  }
   const show = await prisma.mediaShow.update({ where: { id }, data });
-  return NextResponse.json(show);
+  return NextResponse.json({ ...show, watchedThisWeek: watchedThisWeek(show.weeklyWatchedJson, monday) });
 }
 
 export async function DELETE(request: Request) {

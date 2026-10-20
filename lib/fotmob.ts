@@ -137,9 +137,15 @@ export async function fmFetchLeague(leagueId: number): Promise<FMLeagueData | nu
   if (cached && Date.now() - cached.ts < TTL) return cached.data;
 
   try {
+    // `cache: "no-store"` — do NOT use Next's fetch Data Cache here. With
+    // `next: { revalidate }` a mid-season snapshot got baked into `.next/cache`
+    // and stuck for weeks: finished matches (e.g. a result from 9 days ago)
+    // kept showing as upcoming fixtures. Our own 30-min in-memory `cache` Map
+    // above is the only layer we rely on for politeness. (Same lesson as
+    // lib/metalligaen.ts.)
     const res = await fetch(`${FOTMOB_BASE}?id=${leagueId}`, {
       headers: { "User-Agent": UA },
-      next: { revalidate: 1800 },
+      cache: "no-store",
     });
     if (!res.ok) return null;
     const data = await res.json();

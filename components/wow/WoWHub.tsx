@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { loadWowBoxConfig, useSettingsTick, type WowBoxSlug } from "@/lib/dashboard-settings";
+import { CURRENT_TIER_BOSS_COUNT } from "@/lib/wow-tier";
 
 interface WowCharacter {
   id: number;
@@ -24,6 +26,7 @@ interface CharacterStats {
   raidProgress: string | null;
   tierSet?: TierSet | null;              // #70 tier-set pieces collected
   weeklyHighestKey?: number | null;      // #69 highest M+ key this reset
+  seasonHighestKey?: number | null;      // highest M+ key this season
   mplusVault?: (number | null)[] | null; // #68 Great Vault M+ slots
   weeklyRaidKills?: number | null;       // #68 Great Vault raid — bosses this reset
   errors: string[];
@@ -252,6 +255,12 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
   const [gearWishlist, setGearWishlist] = useState<GearWishlistItem[]>([]);
   const [gearEdits, setGearEdits] = useState<Record<string, string>>({});
   const [notesEdit, setNotesEdit] = useState("");
+  const settingsTick = useSettingsTick();
+  // Which character boxes to show + in what order (Settings › Games › WoW).
+  const wowBoxes = useMemo(() => {
+    const cfg = loadWowBoxConfig();
+    return cfg.order.filter((s) => !cfg.hidden.includes(s));
+  }, [settingsTick]);
 
   async function loadCharacters() {
     setLoadingChars(true);
@@ -480,7 +489,7 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
           : "";
         setSyncResult(`Baseline set — sync again after killing bosses to auto-tick this week's kills${crawled}`);
       } else {
-        const n = data.synced.totalBosses || 9;
+        const n = data.synced.totalBosses || CURRENT_TIER_BOSS_COUNT;
         const source = data.raidDataSource === "blizzard" ? " · Blizzard API" : " · RIO baseline";
         const crawled = data.lastCrawledAt
           ? ` · RIO ${new Date(data.lastCrawledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
@@ -596,9 +605,17 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
     mplusTasks.find((t) => getMPlusNumber(t.task) === i + 1) ?? null
   );
 
-  // Build boss grids (9 slots each)
+  // Build boss grids — one slot per boss in the current tier (wow-tier.json),
+  // but never fewer than the highest boss number already in the checklist so a
+  // lagging template set can't clip a box.
+  const bossSlots = Math.max(
+    CURRENT_TIER_BOSS_COUNT,
+    ...["Normal", "Heroic", "Mythic"].flatMap((d) =>
+      checklist.map((t) => getBossNumber(t.task, d) ?? 0)
+    ),
+  );
   function buildBossGrid(tasks: ChecklistItem[], diff: string): (ChecklistItem | null)[] {
-    return Array.from({ length: 9 }, (_, i) =>
+    return Array.from({ length: bossSlots }, (_, i) =>
       tasks.find((t) => getBossNumber(t.task, diff) === i + 1) ?? null
     );
   }
@@ -1173,9 +1190,54 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
         </div>
       </div>
 
-      {/* ── Gear Wishlist ──────────────────────────────────────────────────── */}
-      {selectedChar && (
+      {/* ── Per-character boxes (order + visibility from Settings › Games › WoW) ── */}
+      {selectedChar && wowBoxes.map((box: WowBoxSlug) => {
+        if (box === "highestKey") {
+          const sk = stats?.seasonHighestKey;
+          return (
+            <div key="highestKey" className="rounded-2xl p-5 mt-6 flex items-center gap-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl" style={{ background: "var(--accent-purple)22" }}>🗝️</div>
+              <div>
+                <p className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Highest key this season</p>
+                {sk != null && sk > 0 ? (
+                  <p className="text-2xl font-bold" style={{ color: "var(--accent-purple)" }}>+{sk}</p>
+                ) : (
+                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>No ranked keys this season yet</p>
+                )}
+              </div>
+            </div>
+          );
+        }
+        if (box === "notes") {
+          return (
+            <div key="notes" className="rounded-2xl p-5 mt-6" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Notes</p>
+                {notesEdit.trim() && (
+                  <button
+                    onClick={clearNotes}
+                    className="text-xs px-2 py-0.5 rounded-md"
+                    style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--border)" }}
+                    title="Clear all notes for this character"
+                  >Clear</button>
+                )}
+              </div>
+              <textarea
+                value={notesEdit}
+                onChange={(e) => setNotesEdit(e.target.value)}
+                onBlur={saveNotes}
+                placeholder="Add notes for this character…"
+                rows={4}
+                className="w-full rounded-xl px-3 py-2.5 text-sm resize-none outline-none"
+                style={{ background: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+              />
+            </div>
+          );
+        }
+        // box === "gear"
+        return (
         <div
+          key="gear"
           className="rounded-2xl p-5 mt-6"
           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
         >
@@ -1274,36 +1336,9 @@ export default function WoWHub(_props?: { hideHeader?: boolean }) {
               </div>
             ))}
           </div>
-
-          {/* Notes */}
-          <div className="mt-5">
-            <div className="flex items-center justify-between mb-1.5">
-              <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Notes</p>
-              {notesEdit.trim() && (
-                <button
-                  onClick={clearNotes}
-                  className="text-xs px-2 py-0.5 rounded-md"
-                  style={{ background: "var(--surface-2)", color: "var(--accent-red)", border: "1px solid var(--border)" }}
-                  title="Clear all notes for this character"
-                >Clear</button>
-              )}
-            </div>
-            <textarea
-              value={notesEdit}
-              onChange={(e) => setNotesEdit(e.target.value)}
-              onBlur={saveNotes}
-              placeholder="Add notes for this character…"
-              rows={4}
-              className="w-full rounded-xl px-3 py-2.5 text-sm resize-none outline-none"
-              style={{
-                background: "var(--surface-2)",
-                color: "var(--text)",
-                border: "1px solid var(--border)",
-              }}
-            />
-          </div>
         </div>
-      )}
+        );
+      })}
     </div>
   );
 }

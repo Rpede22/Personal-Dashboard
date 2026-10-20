@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { GAMES, GameKey, loadEnabledGames, saveEnabledGames, useEnabledGames } from "@/lib/games-visibility";
+import { loadWowBoxConfig, saveWowBoxConfig, WOW_BOX_META, type WowBoxConfig, type WowBoxSlug } from "@/lib/dashboard-settings";
 
 /**
  * Games panel for the unified Settings modal:
@@ -148,6 +149,8 @@ export default function GamesSettings() {
     saveEnabledGames(next);
   }
 
+  const wowEnabled = enabled.has("wow");
+
   return (
     <div className="space-y-5">
       {/* Visibility */}
@@ -182,6 +185,51 @@ export default function GamesSettings() {
           ))}
         </div>
       </section>
+
+      {/* WoW character boxes — show/hide + reorder */}
+      {wowEnabled && (
+        <section>
+          <h3 className="text-xs uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>WoW character boxes</h3>
+          <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>Pick which boxes show under each WoW character — and drag the order (raiders might put Gear first, key-pushers the highest key).</p>
+          <WowBoxesEditor />
+        </section>
+      )}
     </div>
+  );
+}
+
+/** Show/hide + reorder the per-character WoW boxes (highest key / gear / notes). */
+function WowBoxesEditor() {
+  const [cfg, setCfg] = useState<WowBoxConfig>(() => loadWowBoxConfig());
+  const label = (s: WowBoxSlug) => WOW_BOX_META.find((m) => m.slug === s)?.label ?? s;
+  function update(next: WowBoxConfig) { setCfg(next); saveWowBoxConfig(next); }
+  function toggle(slug: WowBoxSlug) {
+    const hidden = cfg.hidden.includes(slug) ? cfg.hidden.filter((s) => s !== slug) : [...cfg.hidden, slug];
+    update({ ...cfg, hidden });
+  }
+  function move(i: number, dir: -1 | 1) {
+    const order = [...cfg.order];
+    const j = i + dir;
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    update({ ...cfg, order });
+  }
+  return (
+    <ul className="space-y-1">
+      {cfg.order.map((slug, i) => {
+        const on = !cfg.hidden.includes(slug);
+        return (
+          <li key={slug} className="flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+            <span className="text-xs tabular-nums w-4 text-center" style={{ color: "var(--text-muted)" }}>{i + 1}</span>
+            <span className="flex-1 text-sm" style={{ color: on ? "var(--text)" : "var(--text-muted)" }}>{label(slug)}</span>
+            <button onClick={() => move(i, -1)} disabled={i === 0} className="text-xs px-1.5 py-0.5 rounded disabled:opacity-30" style={{ color: "var(--text-muted)" }} title="Move up">↑</button>
+            <button onClick={() => move(i, 1)} disabled={i === cfg.order.length - 1} className="text-xs px-1.5 py-0.5 rounded disabled:opacity-30" style={{ color: "var(--text-muted)" }} title="Move down">↓</button>
+            <button onClick={() => toggle(slug)} className="text-xs px-2 py-0.5 rounded" style={{ background: on ? "var(--accent-purple)22" : "transparent", color: on ? "var(--accent-purple)" : "var(--text-muted)", border: `1px solid ${on ? "var(--accent-purple)55" : "var(--border)"}` }}>
+              {on ? "✓ shown" : "hidden"}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

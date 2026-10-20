@@ -36,25 +36,36 @@ function dmiValues(cov: any, param: string): number[] {
 // same city at once will 429. Cache the parsed hourly map per rounded coord for
 // 30 min and de-dupe concurrent fetches so we hit DMI at most once per city.
 type DmiMap = Map<number, DmiHour>;
-const DMI_TTL = 30 * 60 * 1000;
-const dmiCache = new Map<string, { data: DmiMap | null; ts: number }>();
+const DMI_FRESH = 30 * 60 * 1000;      // under this age, serve cache without refetching
+const DMI_STALE = 6 * 60 * 60 * 1000;  // up to this age, keep serving the last good DMI data
+const dmiCache = new Map<string, { data: DmiMap; ts: number }>(); // successes only
 const dmiInflight = new Map<string, Promise<DmiMap | null>>();
 
+/**
+ * DMI is keyless but slow + rate-limits bursts, so a naive "null on failure →
+ * open-meteo" made DK cities keep flipping back to open-meteo. Strategy:
+ *  - fresh cache (<30 min) → serve immediately, no refetch.
+ *  - stale cache (<6 h) → serve the last good DMI data immediately AND refresh
+ *    in the background, so a transient DMI failure never drops us to open-meteo.
+ *  - no usable cache → await one (timeout-bounded) fetch.
+ */
 async function fetchDmi(lat: number, lon: number): Promise<DmiMap | null> {
   const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
   const cached = dmiCache.get(key);
-  if (cached && Date.now() - cached.ts < DMI_TTL) return cached.data;
-  const existing = dmiInflight.get(key);
-  if (existing) return existing;
-  const p = fetchDmiUncached(lat, lon)
-    .then((data) => {
-      // Only cache a success; a null (429/parse fail) is retried next call.
-      if (data) dmiCache.set(key, { data, ts: Date.now() });
-      return data;
-    })
-    .finally(() => { dmiInflight.delete(key); });
-  dmiInflight.set(key, p);
-  return p;
+  const age = cached ? Date.now() - cached.ts : Infinity;
+  if (cached && age < DMI_FRESH) return cached.data;
+
+  // Kick off a (deduped) refresh.
+  if (!dmiInflight.has(key)) {
+    const p = fetchDmiUncached(lat, lon)
+      .then((data) => { if (data) dmiCache.set(key, { data, ts: Date.now() }); return data; })
+      .finally(() => { dmiInflight.delete(key); });
+    dmiInflight.set(key, p);
+  }
+  // Serve stale-but-recent data now; let the refresh land for next time.
+  if (cached && age < DMI_STALE) return cached.data;
+  // Nothing usable cached → wait for the fetch (bounded by its timeout).
+  return dmiInflight.get(key) ?? null;
 }
 
 /** Fetch DMI HARMONIE hourly for a point → map keyed by UTC hour-index. */
@@ -62,7 +73,12 @@ async function fetchDmiUncached(lat: number, lon: number): Promise<DmiMap | null
   const params = "temperature-2m,wind-speed-10m,fraction-of-cloud-cover,total-precipitation,relative-humidity-2m";
   const url = `${DMI_BASE}?coords=POINT(${lon}%20${lat})&crs=crs84&parameter-name=${params}`;
   try {
-    const res = await fetch(url, { next: { revalidate: 1800 } });
+    // no-store: this is wrapped by an in-memory cache (fetchDmi), so the only
+    // effect of Next's disk Data Cache here would be to bake a stale DMI window
+    // — same freeze-in-the-past issue as the open-meteo proxy.
+    // 12 s timeout: DMI can be slow; without this a hung request would stall the
+    // whole /api/weather response instead of failing over cleanly.
+    const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(12_000) });
     if (!res.ok) return null;
     const cov = await res.json();
     const times: string[] = cov?.domain?.axes?.t?.values ?? [];

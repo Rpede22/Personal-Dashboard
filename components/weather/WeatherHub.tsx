@@ -395,12 +395,9 @@ export default function WeatherHub() {
             </div>
           </div>
 
-          {/* ── Hourly today ── */}
-          {todayHours.length > 0 && (
-            <HourlyStrip title={`${dayLabel(todayKey)} — hourly`} hours={todayHours} />
-          )}
-          {tomorrowHours.length > 0 && (
-            <HourlyStrip title={`${dayLabel(tomorrowKey)} — hourly`} hours={tomorrowHours} />
+          {/* ── Two-day hourly graph (today + tomorrow), dmi.dk-style ── */}
+          {(todayHours.length > 0 || tomorrowHours.length > 0) && (
+            <TwoDayGraph hours={[...todayHours, ...tomorrowHours]} />
           )}
 
           {/* ── 7-day forecast (click a day → hour-by-hour popup) ── */}
@@ -590,32 +587,106 @@ function DayHourlyModal({
 }
 
 /** 24-hour scrollable strip; each cell shows time · icon · temp · rain%. */
-function HourlyStrip({ title, hours }: { title: string; hours: Forecast["hourly"] }) {
+/** DMI-style continuous 48 h graph (today + tomorrow): a red feels-free temp
+ *  line over blue precipitation bars, with weather icons + hour labels along
+ *  the top/bottom and a per-day header — the "two first days like dmi.dk". */
+function TwoDayGraph({ hours }: { hours: Forecast["hourly"] }) {
+  if (hours.length < 2) return null;
+
+  // Geometry (fixed px; the container scrolls horizontally on narrow screens).
+  const colW = 26;                          // px per hour
+  const padL = 34, padR = 30, padT = 46, padB = 40;
+  const plotH = 150;
+  const n = hours.length;
+  const W = padL + padR + colW * n;
+  const H = padT + plotH + padB;
+  const xMid = (i: number) => padL + colW * i + colW / 2;
+
+  // Temperature scale (pad the range so a near-flat line isn't a straight edge).
+  const temps = hours.map((h) => h.tempC);
+  let tMin = Math.min(...temps), tMax = Math.max(...temps);
+  if (tMax - tMin < 4) { const m = (tMin + tMax) / 2; tMin = m - 2; tMax = m + 2; }
+  tMin = Math.floor(tMin) - 1; tMax = Math.ceil(tMax) + 1;
+  const yTemp = (t: number) => padT + plotH - ((t - tMin) / (tMax - tMin)) * plotH;
+
+  // Precip scale — bars occupy the lower ~55% of the plot; min 2 mm cap so a
+  // light shower is still visible, grows if there's heavier rain.
+  const maxMm = Math.max(2, ...hours.map((h) => h.precipMm));
+  const barMaxH = plotH * 0.55;
+  const barH = (mm: number) => (mm > 0 ? Math.max(1.5, (mm / maxMm) * barMaxH) : 0);
+  const baseY = padT + plotH;
+
+  const linePts = hours.map((h, i) => `${xMid(i)},${yTemp(h.tempC)}`).join(" ");
+
+  // Day groups → header labels + midnight separators.
+  const dayStart: { i: number; key: string }[] = [];
+  hours.forEach((h, i) => {
+    const key = h.isoTime.slice(0, 10);
+    if (i === 0 || key !== hours[i - 1].isoTime.slice(0, 10)) dayStart.push({ i, key });
+  });
+
+  // °C gridlines at min / mid / max.
+  const tMid = Math.round((tMin + tMax) / 2);
+  const gridTemps = [tMax, tMid, tMin];
+
+  const hourOf = (iso: string) => parseInt(iso.slice(11, 13), 10);
+
   return (
     <div>
-      <h3 className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>{title}</h3>
+      <h3 className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
+        Next 48 hours <span className="normal-case tracking-normal" style={{ opacity: 0.7 }}>· hourly, like dmi.dk</span>
+      </h3>
       <div className="rounded-2xl overflow-x-auto" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-        <div className="flex gap-1 p-2 min-w-max">
-          {hours.map((h) => {
-            const dec = decode(h.weatherCode);
-            const key = toHourKey(h.isoTime);
+        <svg width={W} height={H} style={{ display: "block" }} role="img" aria-label="48-hour temperature and precipitation graph">
+          {/* °C gridlines + labels */}
+          {gridTemps.map((t) => (
+            <g key={`g${t}`}>
+              <line x1={padL} y1={yTemp(t)} x2={W - padR} y2={yTemp(t)} stroke="var(--border)" strokeWidth={1} strokeDasharray="2 3" />
+              <text x={padL - 6} y={yTemp(t) + 3} textAnchor="end" fontSize={9} fill="var(--text-muted)">{t}°</text>
+            </g>
+          ))}
+          {/* mm axis cap label (right) */}
+          <text x={W - padR + 6} y={baseY + 3} textAnchor="start" fontSize={9} fill="var(--accent-blue)">0</text>
+          <text x={W - padR + 6} y={baseY - barMaxH + 3} textAnchor="start" fontSize={9} fill="var(--accent-blue)">{maxMm % 1 === 0 ? maxMm : maxMm.toFixed(1)}mm</text>
+
+          {/* Day separators + header labels */}
+          {dayStart.map(({ i, key }, di) => {
+            const sepX = padL + colW * i;
+            const nextI = di + 1 < dayStart.length ? dayStart[di + 1].i : n;
+            const centerX = padL + colW * ((i + nextI) / 2);
             return (
-              <div
-                key={key}
-                className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-md text-center min-w-[52px]"
-                style={{ background: "var(--surface-2)" }}
-                title={`Feels ${h.feelsLikeC}° · wind ${h.windMs.toFixed(1)} m/s`}
-              >
-                <div className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>{hourLabel(h.isoTime)}</div>
-                <div className="text-lg">{dec.icon}</div>
-                <div className="text-sm font-semibold">{h.tempC}°</div>
-                <div className="text-[10px]" style={{ color: h.precipMm > 0 ? "var(--accent-blue)" : "var(--text-muted)" }}>
-                  {fmtMm(h.precipMm)}
-                </div>
-              </div>
+              <g key={key}>
+                {i > 0 && <line x1={sepX} y1={padT - 6} x2={sepX} y2={baseY} stroke="var(--border)" strokeWidth={1} />}
+                <text x={centerX} y={16} textAnchor="middle" fontSize={11} fontWeight={700} fill="var(--text)">{dayLabel(key)}</text>
+              </g>
             );
           })}
-        </div>
+
+          {/* Precip bars */}
+          {hours.map((h, i) => {
+            const bh = barH(h.precipMm);
+            if (bh <= 0) return null;
+            return <rect key={`b${i}`} x={xMid(i) - colW * 0.3} y={baseY - bh} width={colW * 0.6} height={bh} rx={1.5} fill="var(--accent-blue)" opacity={0.75} />;
+          })}
+
+          {/* Temp line */}
+          <polyline points={linePts} fill="none" stroke="var(--accent-red)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+          {/* Per-hour: icon (every 3h) + temp dot/value (every 3h) + hour label (every 3h) */}
+          {hours.map((h, i) => {
+            const hr = hourOf(h.isoTime);
+            const show = hr % 3 === 0;
+            return (
+              <g key={`h${i}`}>
+                {show && <text x={xMid(i)} y={padT - 8} textAnchor="middle" fontSize={13}>{decode(h.weatherCode).icon}</text>}
+                {show && <text x={xMid(i)} y={yTemp(h.tempC) - 6} textAnchor="middle" fontSize={9} fontWeight={600} fill="var(--text)">{h.tempC}°</text>}
+                {show && <circle cx={xMid(i)} cy={yTemp(h.tempC)} r={2} fill="var(--accent-red)" />}
+                {show && <text x={xMid(i)} y={baseY + 14} textAnchor="middle" fontSize={9} fill="var(--text-muted)">{String(hr).padStart(2, "0")}</text>}
+                {show && h.precipMm > 0 && <text x={xMid(i)} y={baseY + 26} textAnchor="middle" fontSize={8} fill="var(--accent-blue)">{h.precipMm.toFixed(1)}</text>}
+              </g>
+            );
+          })}
+        </svg>
       </div>
     </div>
   );

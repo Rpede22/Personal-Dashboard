@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Card, { CardHeader } from "@/components/Card";
 import { SkeletonList } from "@/components/Skeleton";
+import { CURRENT_TIER_BOSS_COUNT } from "@/lib/wow-tier";
 
 interface WowCharacter {
   id: number;
@@ -144,16 +145,16 @@ export default function WoWWidget() {
                   M+ {d.mplusDone}/8
                 </span>
                 <span>·</span>
-                <span style={{ color: d.normalDone === 9 ? "var(--accent-green)" : undefined }}>
-                  N {d.normalDone}/9
+                <span style={{ color: d.normalDone === CURRENT_TIER_BOSS_COUNT ? "var(--accent-green)" : undefined }}>
+                  N {d.normalDone}/{CURRENT_TIER_BOSS_COUNT}
                 </span>
                 <span>·</span>
-                <span style={{ color: d.heroicDone === 9 ? "var(--accent-green)" : undefined }}>
-                  H {d.heroicDone}/9
+                <span style={{ color: d.heroicDone === CURRENT_TIER_BOSS_COUNT ? "var(--accent-green)" : undefined }}>
+                  H {d.heroicDone}/{CURRENT_TIER_BOSS_COUNT}
                 </span>
                 <span>·</span>
-                <span style={{ color: d.mythicDone === 9 ? "var(--accent-green)" : undefined }}>
-                  M {d.mythicDone}/9
+                <span style={{ color: d.mythicDone === CURRENT_TIER_BOSS_COUNT ? "var(--accent-green)" : undefined }}>
+                  M {d.mythicDone}/{CURRENT_TIER_BOSS_COUNT}
                 </span>
                 {d.customTasks.map((ct) => (
                   <span key={ct.name}>

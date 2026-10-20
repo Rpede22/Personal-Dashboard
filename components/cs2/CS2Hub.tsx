@@ -259,10 +259,15 @@ function MatchRow({ m, onOpen }: { m: FaceitMatchRow; onOpen: () => void }) {
   );
 }
 
+/** Relative "time since the game was played": hours within the last 24 h,
+ *  days beyond that (minutes under the hour so it never reads "0h ago"). */
 function relDay(iso: string, now = Date.now()): string {
-  const days = Math.floor((now - new Date(iso).getTime()) / 86400000);
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const diffMs = now - new Date(iso).getTime();
+  if (!isFinite(diffMs) || diffMs < 0) return "";
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 60) return mins <= 1 ? "just now" : `${mins}m ago`;
+  const hours = Math.floor(diffMs / 3600000);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(diffMs / 86400000);
+  return `${days}d ago`;
 }

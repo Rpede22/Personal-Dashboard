@@ -296,9 +296,14 @@ interface MetalLigaenRow {
  *  the whole top-scorers tab blank). Observed behaviour: their own site retries
  *  ~7 times before the first 200, so we try up to 8 with a short delay. `size`
  *  can be bumped to pull the full field so we can filter to one team's players. */
+// Last good rows per (size+sorter) — the upstream 500s in bursts, so we serve
+// stale rather than blank the tab during an outage.
+const metalRowsCache = new Map<string, { rows: MetalLigaenRow[]; ts: number }>();
+
 async function fetchMetalLigaenRows(size = 25, sorter = "points"): Promise<MetalLigaenRow[]> {
+  const cacheKey = `${sorter}-${size}`;
   const url = `https://statistik.metalligaen.dk/metal-liga-stats-theme/stats/get?goalies=0&endgame=0&sorter=${sorter}&limit=${size}&page=1&size=${size}`;
-  for (let attempt = 0; attempt < 8; attempt++) {
+  for (let attempt = 0; attempt < 10; attempt++) {
     try {
       const res = await fetch(url, {
         headers: {
@@ -312,15 +317,21 @@ async function fetchMetalLigaenRows(size = 25, sorter = "points"): Promise<Metal
       if (res.ok) {
         const raw: unknown = await res.json();
         // Endpoint returns `{data:[...]}` (current), `{last_page,data:[...]}`, or a bare `[...]`.
-        return Array.isArray(raw)
+        const rows = Array.isArray(raw)
           ? (raw as MetalLigaenRow[])
-          : Array.isArray((raw as { data?: unknown }).data)
+          : Array.isArray((raw as { data?: unknown })?.data)
             ? ((raw as { data: MetalLigaenRow[] }).data)
             : [];
+        if (rows.length > 0) metalRowsCache.set(cacheKey, { rows, ts: Date.now() });
+        return rows;
       }
     } catch { /* retry */ }
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 300 + attempt * 250)); // backoff
   }
+  // The metalligaen stats endpoint is very flaky (500s in bursts). Serve the
+  // last good result (up to 24 h old) instead of a blank Top-scorers tab.
+  const stale = metalRowsCache.get(cacheKey);
+  if (stale && Date.now() - stale.ts < 24 * 60 * 60 * 1000) return stale.rows;
   return [];
 }
 

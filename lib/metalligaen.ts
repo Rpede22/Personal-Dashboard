@@ -224,7 +224,7 @@ function mlMatchToEvent(m: RawMatch): SportsEvent {
   if (finished && score) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const s = score as any;
-    for (const key of ["first_period", "second_period", "third_period", "overtime", "extra_time_period", "shooting"]) {
+    for (const key of ["first_period", "second_period", "third_period", "overtime", "extra_time_period", "shootout", "shooting"]) {
       const p = s[key];
       if (p && (typeof p.score_home === "number" || typeof p.score_guest === "number")) {
         periods.push({ home: p.score_home ?? 0, away: p.score_guest ?? 0 });
@@ -233,6 +233,8 @@ function mlMatchToEvent(m: RawMatch): SportsEvent {
   }
   return {
     date: datePart ?? "",
+    // start_date is already Europe/Copenhagen local time — consumers must NOT
+    // re-convert it as UTC (that was the "2 hours late" bug).
     time: (timePart ?? "").slice(0, 5),
     homeTeam: m.home?.name ?? "",
     awayTeam: m.guest?.name ?? "",
@@ -241,6 +243,155 @@ function mlMatchToEvent(m: RawMatch): SportsEvent {
     finished,
     league: m.league ?? "Metal Ligaen",
     periods: periods.length ? periods : undefined,
+    metalMatchId: m.id ? String(m.id) : undefined,
+    // A shootout game also records an OT period (played, no winner), so
+    // `extra_time` is true for both OT- and SO-decided games. `shooting` is the
+    // decider: shooting → SO; extra_time without shooting → the OT goal won it.
+    // (Matches the "goal in the OT period → OT, else shootout" rule.)
+    shootout: !!m.results?.shooting,
+    overtime: !!m.results?.extra_time && !m.results?.shooting,
+  };
+}
+
+// ── Per-match detail (goals + penalties) ──────────────────────────────────────
+// The match detail page (metalligaen.dk/kampe/detalje?gameId=N) is rendered
+// client-side from a widget JSON on a second S3 endpoint. It carries the full
+// scoring + penalty log the hub's last-5 dropdown needs.
+
+const WIDGET_BASE = "https://s3-eu-west-1.amazonaws.com/den.hokejovyzapis.cz/widget/esports";
+
+interface RawPlayer {
+  playerFirstname?: string;
+  playerLastname?: string;
+  playerMiddlename?: string;
+  playerJerseyNr?: number;
+}
+interface RawGoal {
+  gameTimeFormatted?: string;
+  gameTimePeriod?: number;
+  scoredBy?: RawPlayer | null;
+  assistBy?: RawPlayer | null;
+  assist2By?: RawPlayer | null;
+  newScore?: string;       // "home:away"
+  gameStrength?: string;   // EQ | PP | SH | PP2 | …
+  isEmptyNet?: boolean;
+  isPenaltyShot?: boolean;
+}
+interface RawPenalty {
+  gameTimeFormatted?: string;
+  gameTimePeriod?: number;
+  offender?: RawPlayer | null;
+  servedBy?: RawPlayer | null;
+  offence?: string;        // "TRIP" | "HOLD" | …
+  offenceReason?: string | null;
+  penaltyLength?: number;  // seconds (120 = 2:00)
+}
+interface RawMatchWidget {
+  data?: {
+    gameData?: { isOvertime?: number | boolean; isShootOut?: number | boolean };
+    homeGoals?: RawGoal[];
+    awayGoals?: RawGoal[];
+    homePenalties?: RawPenalty[];
+    awayPenalties?: RawPenalty[];
+  };
+}
+
+export interface MetalGoalEvent {
+  period: number;
+  time: string;              // "6:37"
+  team: "home" | "away";
+  strength: string;          // "EQ" | "PP" | "SH" | …
+  shortHanded: boolean;      // gameStrength starts with "SH"
+  powerPlay: boolean;        // gameStrength starts with "PP"
+  score: string;             // running "home:away" after this goal
+  scorer: string;            // "#59 Christian Thunbo"
+  assists: string[];         // ["#15 Mikey Bergmann", "#55 Lasse Carlsen"]
+  emptyNet: boolean;
+  penaltyShot: boolean;
+}
+export interface MetalPenaltyEvent {
+  period: number;
+  time: string;              // "2:56"
+  team: "home" | "away";
+  player: string;            // "#12 Mathias Hansen"
+  pim: string;               // "2:00"
+  offence: string;           // "TRIP · Tripping" (code + reason when present)
+}
+export interface MetalMatchDetail {
+  overtime: boolean;
+  shootout: boolean;
+  goals: MetalGoalEvent[];      // merged home+away, chronological
+  penalties: MetalPenaltyEvent[]; // merged home+away, chronological
+}
+
+function playerLabel(p: RawPlayer | null | undefined): string {
+  if (!p) return "";
+  const name = [p.playerFirstname, p.playerMiddlename, p.playerLastname]
+    .map((s) => (s ?? "").trim()).filter(Boolean).join(" ");
+  const jersey = p.playerJerseyNr != null ? `#${p.playerJerseyNr} ` : "";
+  return `${jersey}${name}`.trim();
+}
+
+function pimLabel(seconds: number | undefined): string {
+  const s = seconds ?? 0;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+/** Period+time → a sortable key ("1" + mm:ss → "1-06:37"). */
+function evtSortKey(period: number, time: string): string {
+  return `${period}-${(time || "").padStart(5, "0")}`;
+}
+
+/** Fetch the goals + penalties log for one Metal Ligaen game. Returns null on
+ *  any failure (network / shape change) so the dropdown can show a soft error. */
+export async function mlFetchMatchDetail(matchId: string | number): Promise<MetalMatchDetail | null> {
+  const j = await fetchJson<RawMatchWidget>(`${WIDGET_BASE}/match/${matchId}.json`);
+  const d = j?.data;
+  if (!d) return null;
+
+  const mapGoal = (g: RawGoal, team: "home" | "away"): MetalGoalEvent => {
+    const strength = (g.gameStrength ?? "EQ").toUpperCase();
+    const assists = [playerLabel(g.assistBy), playerLabel(g.assist2By)].filter(Boolean);
+    return {
+      period: g.gameTimePeriod ?? 0,
+      time: g.gameTimeFormatted ?? "",
+      team,
+      strength,
+      shortHanded: strength.startsWith("SH"),
+      powerPlay: strength.startsWith("PP"),
+      score: g.newScore ?? "",
+      scorer: playerLabel(g.scoredBy),
+      assists,
+      emptyNet: !!g.isEmptyNet,
+      penaltyShot: !!g.isPenaltyShot,
+    };
+  };
+  const mapPenalty = (p: RawPenalty, team: "home" | "away"): MetalPenaltyEvent => ({
+    period: p.gameTimePeriod ?? 0,
+    time: p.gameTimeFormatted ?? "",
+    team,
+    player: playerLabel(p.offender),
+    pim: pimLabel(p.penaltyLength),
+    offence: [p.offence, p.offenceReason].map((s) => (s ?? "").trim()).filter(Boolean).join(" · "),
+  });
+
+  const goals = [
+    ...(d.homeGoals ?? []).map((g) => mapGoal(g, "home")),
+    ...(d.awayGoals ?? []).map((g) => mapGoal(g, "away")),
+  ].sort((a, b) => evtSortKey(a.period, a.time).localeCompare(evtSortKey(b.period, b.time)));
+
+  const penalties = [
+    ...(d.homePenalties ?? []).map((p) => mapPenalty(p, "home")),
+    ...(d.awayPenalties ?? []).map((p) => mapPenalty(p, "away")),
+  ].sort((a, b) => evtSortKey(a.period, a.time).localeCompare(evtSortKey(b.period, b.time)));
+
+  return {
+    overtime: !!d.gameData?.isOvertime,
+    shootout: !!d.gameData?.isShootOut,
+    goals,
+    penalties,
   };
 }
 

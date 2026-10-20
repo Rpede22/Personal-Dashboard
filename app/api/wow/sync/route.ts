@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { readFileSync, writeFileSync } from "fs";
 import { configPath } from "@/lib/config-dir";
 import { CURRENT_RAID_TIER, CURRENT_TIER_INSTANCES, CURRENT_TIER_BOSS_COUNT } from "@/lib/wow-tier";
+import { ensureWowTemplates } from "@/lib/wow-templates";
 
 const BASELINE_PATH = configPath(".wow-raid-baseline.json");
 
@@ -309,6 +310,7 @@ export async function POST(request: Request) {
 
   // Always sync checklist with current templates — adds missing tasks without touching ticked ones.
   // Handles mid-week template changes (e.g. boss count update) and first-load seeding.
+  await ensureWowTemplates(); // create any missing boss templates (e.g. the 10th boss) first
   const templates = await prisma.wowChecklistTemplate.findMany();
   if (templates.length > 0) {
     for (const t of templates) {

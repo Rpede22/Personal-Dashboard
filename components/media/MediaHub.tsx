@@ -22,6 +22,7 @@ interface Show {
   notes: string;
   sortOrder: number;
   createdAt: string;
+  watchedThisWeek?: number[]; // weekday nums ticked off this week (auto-resets Monday)
 }
 
 /** True when the user has watched every known episode. Shows without a
@@ -290,43 +291,89 @@ export default function MediaHub() {
             )}
           </div>
 
-          {/* ── Weekly grid ── */}
-          <div>
-            <h3 className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>This week</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
-              {DAYS.map((d) => {
-                const isToday = d.n === todayN;
-                const dayShows = showsOnDay(shows, d.n);
-                return (
-                  <div
-                    key={d.n}
-                    className="rounded-xl p-3 min-h-[110px]"
-                    style={{
-                      background: "var(--surface)",
-                      border: `1px solid ${isToday ? "var(--accent-purple)" : "var(--border)"}`,
-                    }}
-                  >
-                    <div className="text-xs font-semibold mb-2" style={{ color: isToday ? "var(--accent-purple)" : "var(--text-muted)" }}>
-                      {d.short}{isToday && " · today"}
-                    </div>
-                    {dayShows.length === 0 ? (
-                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>—</div>
-                    ) : (
-                      <ul className="space-y-1">
-                        {dayShows.map((s) => (
-                          <li key={s.id} className="text-xs">
-                            {s.airTime && <span className="tabular-nums font-semibold mr-1" style={{ color: "var(--text-muted)" }}>{s.airTime}</span>}
-                            <span>{s.title}</span>
-                            {s.channel && <span className="ml-1" style={{ color: "var(--text-muted)" }}>· {s.channel}</span>}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          {/* ── Weekly grid (tick off each episode; auto-resets Monday) ── */}
+          {(() => {
+            const now = new Date();
+            const todayMon = (todayN + 6) % 7;        // Mon = 0 ordering
+            const nowMin = now.getHours() * 60 + now.getMinutes();
+            // Has this week's airing on `dayN` already passed?
+            const airingPast = (dayN: number, airTime: string) => {
+              const m = (dayN + 6) % 7;
+              if (m < todayMon) return true;
+              if (m > todayMon) return false;
+              if (!airTime) return false;             // unknown time today → don't call it missed yet
+              const [h, mm] = airTime.split(":").map(Number);
+              return (h * 60 + mm) <= nowMin;
+            };
+            const isWatched = (s: Show, dayN: number) => (s.watchedThisWeek ?? []).includes(dayN);
+            // Missed = aired this week, not ticked.
+            let missed = 0;
+            for (const s of shows) {
+              if (!s.active || isFinished(s)) continue;
+              for (const dayN of parseDays(s.airDays)) if (airingPast(dayN, s.airTime) && !isWatched(s, dayN)) missed++;
+            }
+            return (
+              <div>
+                <h3 className="text-xs uppercase tracking-wide mb-2 flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
+                  <span>This week <span className="normal-case tracking-normal" style={{ opacity: 0.7 }}>· tick off what you&apos;ve watched</span></span>
+                  {missed > 0 && (
+                    <span className="normal-case tracking-normal text-[11px] font-semibold px-1.5 py-0.5 rounded" style={{ background: "var(--accent-orange)22", color: "var(--accent-orange)" }}>
+                      ⚠ {missed} missed
+                    </span>
+                  )}
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
+                  {DAYS.map((d) => {
+                    const isToday = d.n === todayN;
+                    const dayShows = showsOnDay(shows, d.n);
+                    return (
+                      <div
+                        key={d.n}
+                        className="rounded-xl p-3 min-h-[110px]"
+                        style={{ background: "var(--surface)", border: `1px solid ${isToday ? "var(--accent-purple)" : "var(--border)"}` }}
+                      >
+                        <div className="text-xs font-semibold mb-2" style={{ color: isToday ? "var(--accent-purple)" : "var(--text-muted)" }}>
+                          {d.short}{isToday && " · today"}
+                        </div>
+                        {dayShows.length === 0 ? (
+                          <div className="text-xs" style={{ color: "var(--text-muted)" }}>—</div>
+                        ) : (
+                          <ul className="space-y-1.5">
+                            {dayShows.map((s) => {
+                              const watched = isWatched(s, d.n);
+                              const isMissed = !watched && airingPast(d.n, s.airTime);
+                              return (
+                                <li key={s.id} className="text-xs flex items-start gap-1.5">
+                                  <button
+                                    onClick={() => patch({ id: s.id, toggleDay: d.n })}
+                                    disabled={saving}
+                                    title={watched ? "Watched — click to unmark" : "Mark as watched"}
+                                    className="shrink-0 w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold mt-0.5"
+                                    style={{
+                                      background: watched ? "var(--accent-green)" : "transparent",
+                                      border: `1px solid ${watched ? "var(--accent-green)" : isMissed ? "var(--accent-orange)" : "var(--border)"}`,
+                                      color: watched ? "#fff" : "var(--accent-orange)",
+                                    }}
+                                  >
+                                    {watched ? "✓" : isMissed ? "!" : ""}
+                                  </button>
+                                  <span className="min-w-0" style={{ opacity: watched ? 0.55 : 1 }}>
+                                    {s.airTime && <span className="tabular-nums font-semibold mr-1" style={{ color: "var(--text-muted)" }}>{s.airTime}</span>}
+                                    <span style={{ textDecoration: watched ? "line-through" : "none", color: isMissed ? "var(--accent-orange)" : "var(--text)" }}>{s.title}</span>
+                                    {s.channel && <span className="ml-1" style={{ color: "var(--text-muted)" }}>· {s.channel}</span>}
+                                  </span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Add a new show ── */}
           <div className="rounded-2xl p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>

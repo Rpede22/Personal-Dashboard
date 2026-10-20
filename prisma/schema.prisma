@@ -144,6 +144,10 @@ model MediaShow {
                                        // auto-drops from Tonight / Next up
   notes       String   @default("")
   sortOrder   Int      @default(0)
+  // Weekly episode check-off: {"week":"YYYY-MM-DD"(Monday),"days":[weekday nums]}.
+  // Auto-resets when the stored week ≠ the current week (consumers ignore a
+  // stale week), so ticks clear every Monday without a cron.
+  weeklyWatchedJson String?
   createdAt   DateTime @default(now())
 }
 

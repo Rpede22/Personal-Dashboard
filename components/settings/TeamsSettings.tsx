@@ -24,6 +24,7 @@ interface FollowedTeam {
   leagueName: string;
   emoji: string;
   accentColor: string;
+  borderColors?: string[];
 }
 interface CatLeague { id: string; label: string; country: string; sport: string; emoji: string }
 interface CatTeam { name: string; matchKeyword: string; fotmobTeamId?: number }
@@ -41,6 +42,21 @@ export default function TeamsSettings() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [edmShown, setEdmShown] = useState(true);
+  const [colorEdit, setColorEdit] = useState<string | null>(null); // slug whose colour editor is open
+
+  // Set/clear one of a team's up-to-3 border colours and persist.
+  function setColorSlot(t: FollowedTeam, idx: number, value: string | null) {
+    const cur = [t.borderColors?.[0] ?? "", t.borderColors?.[1] ?? "", t.borderColors?.[2] ?? ""];
+    cur[idx] = value ?? "";
+    mutate({ action: "setColors", slug: t.slug, colors: cur.filter(Boolean) });
+  }
+  function teamPreviewGradient(t: FollowedTeam): string {
+    const cs = t.borderColors ?? [];
+    if (cs.length >= 3) return `linear-gradient(135deg, ${cs[0]}, ${cs[1]}, ${cs[2]})`;
+    if (cs.length === 2) return `linear-gradient(135deg, ${cs[0]}, ${cs[1]})`;
+    if (cs.length === 1) return `linear-gradient(135deg, ${cs[0]}, ${cs[0]}44)`;
+    return `linear-gradient(135deg, ${t.accentColor}, ${t.accentColor}44)`;
+  }
 
   useEffect(() => { setEdmShown(loadShowEdm()); }, []);
   function toggleEdm() { const next = !edmShown; setEdmShown(next); setShowEdm(next); }
@@ -143,15 +159,44 @@ export default function TeamsSettings() {
         ) : (
           <ul className="space-y-1.5">
             {teams.map((t, i) => (
-              <li key={t.slug} className="flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
-                <span className="text-sm">{t.emoji}</span>
-                <span className="flex-1 min-w-0">
-                  <span className="text-sm font-medium" style={{ color: t.accentColor }}>{t.name}</span>
-                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>{t.leagueName}</span>
-                </span>
-                <button onClick={() => move(i, -1)} disabled={busy || i === 0} className="text-xs px-1.5 py-0.5 rounded disabled:opacity-30" style={{ color: "var(--text-muted)" }} title="Move up">↑</button>
-                <button onClick={() => move(i, 1)} disabled={busy || i === teams.length - 1} className="text-xs px-1.5 py-0.5 rounded disabled:opacity-30" style={{ color: "var(--text-muted)" }} title="Move down">↓</button>
-                <button onClick={() => mutate({ action: "remove", slug: t.slug })} disabled={busy} className="text-xs px-1.5 py-0.5 rounded" style={{ color: "var(--accent-red)" }} title="Remove">✕</button>
+              <li key={t.slug} className="rounded-lg px-2 py-1.5" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-5 rounded-sm shrink-0" style={{ background: teamPreviewGradient(t) }} title="Border colour" />
+                  <span className="text-sm">{t.emoji}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="text-sm font-medium" style={{ color: t.accentColor }}>{t.name}</span>
+                    <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>{t.leagueName}</span>
+                  </span>
+                  <button onClick={() => setColorEdit(colorEdit === t.slug ? null : t.slug)} disabled={busy} className="text-xs px-1.5 py-0.5 rounded" style={{ color: colorEdit === t.slug ? "var(--accent-purple)" : "var(--text-muted)" }} title="Border colours">🎨</button>
+                  <button onClick={() => move(i, -1)} disabled={busy || i === 0} className="text-xs px-1.5 py-0.5 rounded disabled:opacity-30" style={{ color: "var(--text-muted)" }} title="Move up">↑</button>
+                  <button onClick={() => move(i, 1)} disabled={busy || i === teams.length - 1} className="text-xs px-1.5 py-0.5 rounded disabled:opacity-30" style={{ color: "var(--text-muted)" }} title="Move down">↓</button>
+                  <button onClick={() => mutate({ action: "remove", slug: t.slug })} disabled={busy} className="text-xs px-1.5 py-0.5 rounded" style={{ color: "var(--accent-red)" }} title="Remove">✕</button>
+                </div>
+                {colorEdit === t.slug && (
+                  <div className="flex items-center flex-wrap gap-2 mt-2 pt-2" style={{ borderTop: "1px solid var(--border)" }}>
+                    <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Border colours</span>
+                    {[0, 1, 2].map((idx) => {
+                      const c = t.borderColors?.[idx] ?? "";
+                      return (
+                        <span key={idx} className="flex items-center gap-1">
+                          <input
+                            type="color"
+                            value={/^#[0-9a-f]{6}$/i.test(c) ? c : "#3b82f6"}
+                            onChange={(e) => setColorSlot(t, idx, e.target.value)}
+                            disabled={busy}
+                            title={`Colour ${idx + 1}`}
+                            className="w-6 h-6 rounded cursor-pointer"
+                            style={{ background: "transparent", border: c ? "2px solid var(--accent-purple)" : "1px solid var(--border)" }}
+                          />
+                          {c && (
+                            <button onClick={() => setColorSlot(t, idx, null)} disabled={busy} className="text-[10px]" style={{ color: "var(--accent-red)" }} title="Clear colour">✕</button>
+                          )}
+                        </span>
+                      );
+                    })}
+                    <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>Pick up to 3 · empty = default</span>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

@@ -66,8 +66,11 @@ export interface SportsEvent {
   matchId?: string | null; // FotMob match ID — present when source is fotmob
   espnEventId?: string;    // ESPN event id — present when source is espn (last-5 scoring dropdown)
   periods?: { home: number; away: number }[]; // Metal Ligaen per-period scores (last-5 dropdown)
+  metalMatchId?: string;   // Metal Ligaen game id — present when source is metalligaen (goals/penalties detail)
+  overtime?: boolean;      // Metal Ligaen — game decided in overtime
+  shootout?: boolean;      // Metal Ligaen — game decided in a shootout
   date: string;
-  time: string;
+  time: string;            // Metal Ligaen: already Europe/Copenhagen local; FotMob/ESPN: UTC
   homeTeam: string;
   awayTeam: string;
   homeScore: number | null;
@@ -341,6 +344,61 @@ function espnSubTables(allStandings: SportsStandingRow[]): SportsSubTable[] {
   return tables;
 }
 
+/** Short label for an ESPN conference/division name (for the match-of-the-week
+ *  chip): "Eastern Conference" → "East", "Pacific Division" → "Pacific". */
+function shortScope(name: string | undefined): string {
+  const n = (name ?? "").trim();
+  if (/american football conference/i.test(n)) return "AFC";
+  if (/national football conference/i.test(n)) return "NFC";
+  if (/eastern conference/i.test(n)) return "East";
+  if (/western conference/i.test(n)) return "West";
+  return n.replace(/\s+Conference$/i, "").replace(/\s+Division$/i, "");
+}
+
+export interface NotableOpponent { rank: number; scope: string }
+
+/** For a followed US (ESPN) team, work out which other teams would make a
+ *  "match of the week" and the right context to show for each — mirroring the
+ *  user's rule: a top-3 team in the followed team's OWN division, else a top-3
+ *  team in its conference (shown with the conference rank), else a top-3 team
+ *  in the whole league (league rank). Keyed by opponent team name. */
+function espnNotableOpponents(
+  team: TeamConfig,
+  allStandings: SportsStandingRow[],
+  standing: SportsStandingRow | null,
+): Record<string, NotableOpponent> {
+  if (!standing) return {};
+  const isHockey = team.sport === "icehockey";
+  const winPct = (r: SportsStandingRow) => {
+    const gp = r.played || (r.won + r.lost + (r.drawn ?? 0) + (r.otLosses ?? 0));
+    return gp > 0 ? (r.won + 0.5 * (r.drawn ?? 0)) / gp : 0;
+  };
+  const keyOf = (r: SportsStandingRow) => (isHockey ? (r.points ?? 0) : winPct(r));
+  const diff = (r: SportsStandingRow) => (r.goalsFor ?? 0) - (r.goalsAgainst ?? 0);
+  // True league rank by overall record (allStandings is conference-grouped).
+  const leagueRank = new Map<string, number>();
+  [...allStandings]
+    .sort((a, b) => keyOf(b) - keyOf(a) || diff(b) - diff(a) || b.won - a.won)
+    .forEach((r, i) => leagueRank.set(r.team, i + 1));
+
+  const myDiv = standing.division;
+  const myConf = standing.group;
+  const leagueShort = (team.espnLeague ?? "").toUpperCase();
+  const out: Record<string, NotableOpponent> = {};
+  for (const r of allStandings) {
+    if (r.team.toLowerCase().includes(team.matchKeyword.toLowerCase())) continue;
+    if (myDiv && r.division === myDiv && (r.divisionRank ?? 999) <= 3) {
+      out[r.team] = { rank: r.divisionRank!, scope: shortScope(r.division) };
+    } else if (myConf && r.group === myConf && (r.groupRank ?? 999) <= 3) {
+      out[r.team] = { rank: r.groupRank!, scope: shortScope(r.group) };
+    } else {
+      const lr = leagueRank.get(r.team) ?? 999;
+      if (lr <= 3) out[r.team] = { rank: lr, scope: leagueShort };
+    }
+  }
+  return out;
+}
+
 function espnGameToEvent(g: EspnGame, leagueName: string): SportsEvent {
   return {
     matchId:   null,
@@ -556,8 +614,10 @@ export async function GET(request: Request) {
 
   if (!teamSlug || !followedTeam) {
     // Dashboard summary — standings + last5 only (no next5 to save API quota).
-    // Cache key includes the followed slugs so editing the list busts it.
-    const summaryKey = `all-summary-${useAF ? "af" : "tsdb"}-${followed.map((t) => t.slug).join(",")}`;
+    // Cache key includes the followed slugs AND each team's border colours so
+    // editing the list or recolouring a team busts it (the colours ride on the
+    // returned config → the widget's box gradient).
+    const summaryKey = `all-summary-${useAF ? "af" : "tsdb"}-${followed.map((t) => `${t.slug}:${(t.borderColors ?? []).join("/")}`).join(",")}`;
     const cached = cache.get(summaryKey);
     if (cached && Date.now() - cached.ts < ttl) return NextResponse.json(cached.data);
 
@@ -571,6 +631,12 @@ export async function GET(request: Request) {
           .sort((a, b) => a.rank - b.rank)
           .slice(0, 3)
           .map((r) => r.team);
+        // ESPN (US sports): a richer, correctly-scoped opponent map — top-3 of
+        // the followed team's division / conference / league, each tagged with
+        // the right context (fixes "EDM vs MIN" showing MIN's own-division rank).
+        const notableOpponents = result.source === "espn"
+          ? espnNotableOpponents(team, result.allStandings, result.standing)
+          : {};
         return {
           slug: team.slug,
           config: { ...team, ...result.resolvedConfig },
@@ -581,6 +647,7 @@ export async function GET(request: Request) {
           source: result.source,
           preseason: result.preseason,
           topOpponents,
+          notableOpponents,
         };
       })
     );
@@ -589,7 +656,7 @@ export async function GET(request: Request) {
     return NextResponse.json(payload);
   }
 
-  const cacheKey = `team-${teamSlug}-${useAF ? "af" : "tsdb"}`;
+  const cacheKey = `team-${teamSlug}-${useAF ? "af" : "tsdb"}-${(followedTeam.borderColors ?? []).join("/")}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < ttl) return NextResponse.json(cached.data);
 

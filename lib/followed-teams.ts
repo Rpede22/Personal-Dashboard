@@ -27,6 +27,9 @@ export interface FollowedTeam {
   /** Substring used to find the team in standings/fixtures. */
   matchKeyword: string;
   accentColor: string;
+  /** Up to 3 custom border colours for the team's widget box (gradient).
+   *  Empty/undefined → fall back to a built-in gradient or the accent colour. */
+  borderColors?: string[];
   emoji: string;
   fotmobLeagueId?: number;
   fotmobTeamId?: number;
@@ -68,6 +71,24 @@ export function defaultFollowedTeams(): FollowedTeam[] {
   ];
 }
 
+/** Accept a CSS colour: hex (#rgb/#rrggbb/#rrggbbaa), a `var(--…)` token, or an
+ *  rgb()/hsl() function. Keeps a hostile/garbage value out of inline styles. */
+export function isColor(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  const s = v.trim();
+  if (s.length === 0 || s.length > 40) return false;
+  return /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s)
+    || /^var\(--[a-z0-9-]+\)$/i.test(s)
+    || /^(rgb|hsl)a?\([0-9.,%\s/]+\)$/i.test(s);
+}
+
+/** Up to 3 valid colours, trimmed + deduped; undefined when none. */
+export function sanitizeColors(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = [...new Set(v.filter(isColor).map((c) => (c as string).trim()))].slice(0, 3);
+  return out.length ? out : undefined;
+}
+
 function coerce(raw: unknown): FollowedTeam | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -89,6 +110,7 @@ function coerce(raw: unknown): FollowedTeam | null {
     leagueName: str(r.leagueName).trim(),
     matchKeyword: str(r.matchKeyword).trim() || name,
     accentColor: str(r.accentColor).trim() || "var(--accent-blue)",
+    borderColors: sanitizeColors(r.borderColors),
     emoji: str(r.emoji).trim() || defaultEmoji,
     fotmobLeagueId: num(r.fotmobLeagueId),
     fotmobTeamId: num(r.fotmobTeamId),
@@ -133,6 +155,7 @@ export function followedToTeamConfig(ft: FollowedTeam): TeamConfig {
     leagueName: ft.leagueName,
     sport: ft.sport,
     accentColor: ft.accentColor,
+    borderColors: ft.borderColors,
     emoji: ft.emoji,
     season: "2025-2026",
     leagueEventsWork: false,

@@ -49,13 +49,33 @@ export interface EspnGame {
   finished: boolean;
 }
 
-/** One scoring play from an ESPN game summary (last-5 dropdown). */
-export interface EspnScoringPlay {
+// Structured goal/penalty events for the hockey last-5 timeline — shaped to
+// match Metal Ligaen's MetalGoalEvent/MetalPenaltyEvent so the hub reuses one
+// renderer (merged chronological timeline, own-team highlight).
+export interface EspnGoalEvent {
   period: number;
-  clock: string;      // "13:39"
-  text: string;       // "Porter Martone Goal (2) Backhand, assists: …"
-  homeScore: number;  // running score after the play
-  awayScore: number;
+  time: string;              // "1:18"
+  team: "home" | "away";
+  strength: string;          // "EQ" | "PP" | "SH" | …
+  shortHanded: boolean;
+  powerPlay: boolean;
+  emptyNet: boolean;
+  penaltyShot: boolean;
+  score: string;             // "home:away" running score, e.g. "1:0"
+  scorer: string;
+  assists: string[];
+}
+export interface EspnPenaltyEvent {
+  period: number;
+  time: string;
+  team: "home" | "away";
+  player: string;
+  pim: string;               // minutes, e.g. "2"
+  offence: string;           // "High-sticking"
+}
+export interface EspnGameDetail {
+  goals: EspnGoalEvent[];
+  penalties: EspnPenaltyEvent[];
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -124,7 +144,7 @@ async function fetchDivisionMap(path: EspnLeaguePath): Promise<Map<string, { div
   try {
     const res = await fetch(`${BASE}/v2/sports/${path.sport}/${path.league}/standings?level=3`, {
       headers: UA,
-      next: { revalidate: 600 },
+      cache: "no-store", // live standings — avoid Next's disk Data Cache baking a stale snapshot (see lib/fotmob.ts)
     });
     if (!res.ok) return map;
     const j = await res.json();
@@ -144,7 +164,7 @@ export async function espnFetchStandings(path: EspnLeaguePath): Promise<EspnStan
     const [res, divisionMap] = await Promise.all([
       fetch(`${BASE}/v2/sports/${path.sport}/${path.league}/standings`, {
         headers: UA,
-        next: { revalidate: 600 },
+        cache: "no-store", // live standings — see note in fetchDivisionMap
       }),
       fetchDivisionMap(path),
     ]);
@@ -212,7 +232,7 @@ async function fetchSchedule(path: EspnLeaguePath, teamId: string, season?: numb
   const qs = season ? `?season=${season}` : "";
   const res = await fetch(`${BASE}/site/v2/sports/${path.sport}/${path.league}/teams/${teamId}/schedule${qs}`, {
     headers: UA,
-    next: { revalidate: 900 },
+    cache: "no-store", // live schedule/results — a cached snapshot leaves finished games showing as upcoming (see lib/fotmob.ts)
   });
   if (!res.ok) return null;
   return res.json();
@@ -247,27 +267,71 @@ export async function espnFetchTeamGames(path: EspnLeaguePath, teamId: string): 
  * a descriptive `text` (scorer + assists). NBA is intentionally excluded — a
  * basketball game has 100+ scoring plays, which isn't a useful "goal timeline".
  */
-export async function espnFetchGameScoring(path: EspnLeaguePath, eventId: string): Promise<EspnScoringPlay[]> {
-  if (!eventId) return [];
+/**
+ * Full goal + penalty log for one completed ESPN game, structured for the
+ * last-5 timeline. Goals come from `scoringPlay === true` plays (scorer +
+ * assisters in `participants`, `strength` for PP/SH tags, running score);
+ * penalties from any play carrying `type.penaltyMinutes` (offender + minutes +
+ * offence). Team is resolved to home/away via the header competitors so the
+ * client can highlight the followed team (same contract as Metal Ligaen).
+ */
+export async function espnFetchGameDetail(path: EspnLeaguePath, eventId: string): Promise<EspnGameDetail> {
+  const empty: EspnGameDetail = { goals: [], penalties: [] };
+  if (!eventId) return empty;
   try {
     const res = await fetch(`${BASE}/site/v2/sports/${path.sport}/${path.league}/summary?event=${eventId}`, {
       headers: UA,
-      next: { revalidate: 3600 },
+      next: { revalidate: 3600 }, // a finished game's plays are immutable
     });
-    if (!res.ok) return [];
+    if (!res.ok) return empty;
     const j = await res.json();
+    // team id → "home"/"away"
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const plays: any[] = Array.isArray(j.scoringPlays) && j.scoringPlays.length ? j.scoringPlays : (j.plays ?? []);
-    return plays
-      .filter((p) => p?.scoringPlay === true || /goal|touchdown|field goal/i.test(p?.type?.text ?? ""))
-      .map((p) => ({
-        period: Number(p.period?.number ?? p.period ?? 0) || 0,
-        clock: String(p.clock?.displayValue ?? p.clock ?? ""),
-        text: String(p.text ?? p.type?.text ?? ""),
-        homeScore: Number(p.homeScore ?? 0) || 0,
-        awayScore: Number(p.awayScore ?? 0) || 0,
-      }));
+    const competitors: any[] = j.header?.competitions?.[0]?.competitors ?? [];
+    const side = new Map<string, "home" | "away">();
+    for (const c of competitors) {
+      const id = String(c?.team?.id ?? "");
+      if (id) side.set(id, c?.homeAway === "away" ? "away" : "home");
+    }
+    const teamSide = (id: unknown): "home" | "away" => side.get(String(id ?? "")) ?? "home";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plays: any[] = Array.isArray(j.plays) ? j.plays : [];
+    const goals: EspnGoalEvent[] = [];
+    const penalties: EspnPenaltyEvent[] = [];
+    for (const p of plays) {
+      const period = Number(p.period?.number ?? 0) || 0;
+      const time = String(p.clock?.displayValue ?? "");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parts: any[] = Array.isArray(p.participants) ? p.participants : [];
+
+      if (p.scoringPlay === true || p.type?.text === "Goal") {
+        const strengthText = String(p.strength?.text ?? "");
+        const powerPlay = /power\s*play/i.test(strengthText);
+        const shortHanded = /short/i.test(strengthText);
+        const emptyNet = /empty\s*net/i.test(strengthText) || /empty net/i.test(String(p.text ?? ""));
+        const penaltyShot = /penalty\s*shot/i.test(strengthText) || /penalty shot/i.test(String(p.text ?? ""));
+        const scorer = parts.find((a) => a?.type === "scorer")?.athlete?.displayName
+          ?? parts[0]?.athlete?.displayName ?? "";
+        const assists = parts.filter((a) => a?.type === "assister").map((a) => a?.athlete?.displayName).filter(Boolean);
+        goals.push({
+          period, time, team: teamSide(p.team?.id),
+          strength: powerPlay ? "PP" : shortHanded ? "SH" : emptyNet ? "EN" : "EQ",
+          shortHanded, powerPlay, emptyNet, penaltyShot,
+          score: `${Number(p.homeScore ?? 0) || 0}:${Number(p.awayScore ?? 0) || 0}`,
+          scorer: String(scorer), assists: assists.map(String),
+        });
+      } else if (p.type?.penaltyMinutes != null) {
+        penalties.push({
+          period, time, team: teamSide(p.team?.id),
+          player: String(parts[0]?.athlete?.displayName ?? ""),
+          pim: String(p.type?.penaltyMinutes ?? ""),
+          offence: String(p.type?.text ?? ""),
+        });
+      }
+    }
+    return { goals, penalties };
   } catch {
-    return [];
+    return empty;
   }
 }

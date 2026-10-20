@@ -14,7 +14,11 @@ interface TeamStanding {
   wins: number;
   losses: number;
   otLosses: number;
+  division?: string;
+  conference?: string;
   divisionRank: number;
+  conferenceRank?: number;
+  leagueRank?: number;
 }
 interface NHLGame {
   gameDate: string;
@@ -53,20 +57,36 @@ interface SportsStanding {
   lost: number;
   otLosses?: number; // hockey only — Metal Ligaen source populates this
   points: number;
-  group?: string;    // ESPN (US sports) — conference/division name
+  group?: string;    // ESPN (US sports) — conference name
   groupRank?: number;
+  division?: string; // ESPN — division name
+  divisionRank?: number;
   seed?: number;     // conference playoff seed
 }
 /** Sport-aware short name for an ESPN conference/division:
- *  NFL "National Football Conference" → "NFC", NHL/NBA "Eastern Conference" →
- *  "East", "Pacific Division" → "Pacific". */
+ *  NFL "National Football Conference" → "NFC", NHL/NBA "Eastern Conference" (or
+ *  the bare "Eastern" the NHL API uses) → "East", "Pacific Division" → "Pacific". */
 function shortGroup(name: string): string {
   const n = name.trim();
   if (/american football conference/i.test(n)) return "AFC";
   if (/national football conference/i.test(n)) return "NFC";
-  if (/eastern conference/i.test(n)) return "East";
-  if (/western conference/i.test(n)) return "West";
+  if (/^eastern( conference)?$/i.test(n)) return "East";
+  if (/^western( conference)?$/i.test(n)) return "West";
   return n.replace(/\s+Conference$/i, "").replace(/\s+Division$/i, "");
+}
+/** Which standing to headline for a US team: the division position when the
+ *  team is in a division playoff spot (top 3), otherwise its conference
+ *  position — "first look at division, if within a playoff spot show that, else
+ *  conference" (per Rasmus). Returns the rank + short scope label. */
+function naStandingLabel(
+  divisionRank: number | undefined, division: string | undefined,
+  conferenceRank: number | undefined, conference: string | undefined,
+  seed?: number,
+): { rank: number; scope: string } | null {
+  if (divisionRank && divisionRank <= 3 && division) return { rank: divisionRank, scope: shortGroup(division) };
+  if (conferenceRank && conference) return { rank: conferenceRank, scope: shortGroup(conference) };
+  if (seed) return { rank: seed, scope: "seed" };
+  return null;
 }
 interface SportsSubTable {
   name: string;
@@ -76,12 +96,13 @@ interface SportsSubTable {
 type SportKind = "football" | "icehockey" | "basketball" | "americanfootball";
 interface SportsSummary {
   slug: string;
-  config: { name: string; shortName: string; matchKeyword: string; accentColor: string; emoji: string; leagueName: string; sport?: SportKind };
+  config: { name: string; shortName: string; matchKeyword: string; accentColor: string; borderColors?: string[]; emoji: string; leagueName: string; sport?: SportKind };
   standing: SportsStanding | null;
   last5: SportsEvent[];
   next5: SportsEvent[];
   subTables: SportsSubTable[];
   topOpponents?: string[];
+  notableOpponents?: Record<string, { rank: number; scope: string }>; // ESPN — division/conference/league-scoped match-of-week opponents
   source?: string;
   preseason?: boolean;   // ESPN — new season hasn't started (all rows 0-0-0)
 }
@@ -131,7 +152,14 @@ const KNOWN_TEAM_GRADIENTS: Record<string, string> = {
   "esbjerg-energy": "linear-gradient(135deg, #FFC400 0%, #003087 100%)",   // yellow & dark blue
 };
 
-function teamGradient(slug: string, accent: string): string {
+function teamGradient(slug: string, accent: string, borderColors?: string[]): string {
+  // User-chosen colours win over the built-in gradients (they picked them).
+  if (borderColors && borderColors.length > 0) {
+    const [c1, c2, c3] = borderColors;
+    if (c3) return `linear-gradient(135deg, ${c1} 0%, ${c2} 50%, ${c3} 100%)`;
+    if (c2) return `linear-gradient(135deg, ${c1} 0%, ${c2} 100%)`;
+    return `linear-gradient(135deg, ${c1} 0%, ${c1}44 100%)`;
+  }
   return KNOWN_TEAM_GRADIENTS[slug] ?? `linear-gradient(135deg, ${accent} 0%, ${accent}44 100%)`;
 }
 
@@ -195,18 +223,22 @@ function edmDateLabel(game: NHLGame): string {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Europe/Berlin" });
 }
 
-function toCopenhagenTime(dateStr: string, timeStr?: string): string {
+// `isLocal` = the source already reports Copenhagen-local time (Metal Ligaen):
+// return it verbatim rather than re-converting it as UTC (that was the "+2 h"
+// bug in the EEN box / match-of-week strip).
+function toCopenhagenTime(dateStr: string, timeStr?: string, isLocal = false): string {
   if (!timeStr) return "";
+  if (isLocal) return timeStr.slice(0, 5);
   try {
     const dt = new Date(`${dateStr}T${timeStr}:00Z`);
     return dt.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Copenhagen" });
   } catch { return timeStr; }
 }
 
-function toCopenhagenDate(dateStr: string, timeStr?: string): string {
+function toCopenhagenDate(dateStr: string, timeStr?: string, isLocal = false): string {
   try {
-    const dt = new Date(timeStr ? `${dateStr}T${timeStr}:00Z` : `${dateStr}T12:00:00Z`);
-    return dt.toLocaleDateString("da-DK", { day: "numeric", month: "short", timeZone: "Europe/Copenhagen" });
+    const dt = new Date(isLocal ? `${dateStr}T12:00:00` : (timeStr ? `${dateStr}T${timeStr}:00Z` : `${dateStr}T12:00:00Z`));
+    return dt.toLocaleDateString("da-DK", { day: "numeric", month: "short", ...(isLocal ? {} : { timeZone: "Europe/Copenhagen" }) });
   } catch { return dateStr; }
 }
 
@@ -429,9 +461,11 @@ export default function SportsWidget() {
   /** "in 4h 22m" / "in 45m" — only returned when kickoff is < 12h away.
    *  Sports fixtures carry UTC HH:MM from FotMob, so we build a UTC instant
    *  and compare against Date.now(). */
-  function kickoffCountdown(dateStr: string | undefined | null, timeStr: string | undefined | null): string | null {
+  function kickoffCountdown(dateStr: string | undefined | null, timeStr: string | undefined | null, isLocal = false): string | null {
     if (!dateStr || !timeStr) return null;
-    const t = new Date(`${dateStr}T${timeStr}:00Z`).getTime();
+    // Metal Ligaen times are already local; parse without the UTC 'Z' so the
+    // countdown isn't off by the Copenhagen offset.
+    const t = new Date(isLocal ? `${dateStr}T${timeStr.slice(0, 5)}:00` : `${dateStr}T${timeStr}:00Z`).getTime();
     if (!isFinite(t)) return null;
     const ms = t - Date.now();
     if (ms <= 0) return null;
@@ -567,10 +601,12 @@ export default function SportsWidget() {
                     R{edmSeries.roundNumber}
                   </span>
                 ) : edm && (() => {
-                  const d = rankDelta("edm", edm.divisionRank);
+                  const lbl = naStandingLabel(edm.divisionRank, edm.division, edm.conferenceRank, edm.conference)
+                    ?? { rank: edm.divisionRank, scope: "Pacific" };
+                  const d = rankDelta("edm", lbl.rank);
                   return (
                     <span className="text-xs font-bold flex items-center gap-1.5" style={{ color: EDM_ACCENT }}>
-                      #{edm.divisionRank} Pacific
+                      #{lbl.rank} {lbl.scope}
                       {d != null && <RankDeltaChip delta={d} />}
                     </span>
                   );
@@ -640,21 +676,23 @@ export default function SportsWidget() {
             const last5 = summary.last5 ?? [];
             const next = summary.next5?.[0] ?? null;
             const keyword = cfg.matchKeyword ?? short;
+            const isMetal = summary.source === "metalligaen"; // times already Copenhagen-local
 
             const promoRank = oprykningsspilRank(summary);
             const standing = summary.standing ?? null;
             const mySeries = usSeries[summary.slug] ?? null;
             const preseason = summary.preseason === true; // ESPN — ranks meaningless (0-0-0)
             const displayRank = promoRank ?? standing?.rank ?? null;
-            // ESPN (US sports) teams show conference position — the NA
-            // equivalent of a league place — like the EDM box's "#3 Pacific".
-            const espnCtx = (standing?.groupRank && standing.group) ? `#${standing.groupRank} ${shortGroup(standing.group)}`
-              : (standing?.seed ? `#${standing.seed} seed` : null);
+            // ESPN (US sports) teams show the division position when in a
+            // division playoff spot (top 3), else the conference position —
+            // like the EDM box.
+            const naLbl = naStandingLabel(standing?.divisionRank, standing?.division, standing?.groupRank, standing?.group, standing?.seed);
+            const espnCtx = naLbl ? `#${naLbl.rank} ${naLbl.scope}` : null;
             const rankLabel = promoRank ? `#${promoRank} Opryk.` : espnCtx ?? (displayRank ? `#${displayRank}` : null);
 
             return (
               <Link key={summary.slug} href={href} className="block transition-all hover:brightness-110">
-                <GradientBorder gradient={teamGradient(summary.slug, accent)} className="p-3 h-full">
+                <GradientBorder gradient={teamGradient(summary.slug, accent, cfg.borderColors)} className="p-3 h-full">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold" style={{ color: accent }}>
                       {emoji} {short}
@@ -719,11 +757,11 @@ export default function SportsWidget() {
                     )}
                   </div>
                   {next && (() => {
-                    const cd = kickoffCountdown(next.date, next.time);
+                    const cd = kickoffCountdown(next.date, next.time, isMetal);
                     return (
                       <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        Next: {toCopenhagenDate(next.date, next.time)} · {nextMatchLabel(next, keyword)}
-                        {next.time && ` · ${toCopenhagenTime(next.date, next.time)} CEST`}
+                        Next: {toCopenhagenDate(next.date, next.time, isMetal)} · {nextMatchLabel(next, keyword)}
+                        {next.time && ` · ${toCopenhagenTime(next.date, next.time, isMetal)}${isMetal ? "" : " CEST"}`}
                         {cd && <span style={{ color: "var(--accent-orange)" }}> · {cd}</span>}
                       </div>
                     );
@@ -750,19 +788,34 @@ export default function SportsWidget() {
             teamAccent: string;
             opponent: string;
             opponentRank: number;
+            scope?: string;          // "Pacific" / "West" / "NHL" — which table the rank is in
             homeAway: "vs" | "@";
             when: string;
             leagueName: string;
           };
           const found: Highlight[] = [];
 
-          if (edmNext && nhlStandings.length > 0) {
+          if (edmNext && edm && nhlStandings.length > 0) {
             const start = edmNext.startTimeUTC ? new Date(edmNext.startTimeUTC).getTime() : new Date(edmNext.gameDate + "T12:00:00Z").getTime();
             if (start >= now && start <= weekOut) {
               const isHome = edmNext.homeTeam.abbrev === "EDM";
               const oppAbbrev = isHome ? edmNext.awayTeam.abbrev : edmNext.homeTeam.abbrev;
               const opp = nhlStandings.find((s) => s.teamAbbrev === oppAbbrev);
-              if (opp && opp.divisionRank <= 3) {
+              // Tiered per Rasmus: a top-3 team in EDM's OWN division, else a
+              // top-3 team in its conference (shown with the conference rank),
+              // else a top-3 team in the league. (Old bug: flagged MIN as "#1"
+              // using MIN's own-division rank though MIN isn't in EDM's division.)
+              let ctx: { rank: number; scope: string } | null = null;
+              if (opp) {
+                if (edm.division && opp.division === edm.division && opp.divisionRank <= 3) {
+                  ctx = { rank: opp.divisionRank, scope: shortGroup(edm.division) };
+                } else if (opp.conferenceRank && opp.conferenceRank <= 3) {
+                  ctx = { rank: opp.conferenceRank, scope: shortGroup(opp.conference ?? "") };
+                } else if (opp.leagueRank && opp.leagueRank <= 3) {
+                  ctx = { rank: opp.leagueRank, scope: "NHL" };
+                }
+              }
+              if (ctx) {
                 found.push({
                   key: `nhl-${oppAbbrev}`,
                   href: "/nhl",
@@ -770,7 +823,8 @@ export default function SportsWidget() {
                   teamEmoji: "🏒",
                   teamAccent: EDM_ACCENT,
                   opponent: oppAbbrev,
-                  opponentRank: opp.divisionRank,
+                  opponentRank: ctx.rank,
+                  scope: ctx.scope,
                   homeAway: isHome ? "vs" : "@",
                   when: `${edmDateLabel(edmNext)} · ${formatCEST(edmNext)}`,
                   leagueName: "NHL",
@@ -780,16 +834,32 @@ export default function SportsWidget() {
           }
 
           for (const summary of sportsSummaries) {
-            if (!summary.topOpponents?.length) continue;
             const cfg = summary.config;
+            const isEspn = summary.source === "espn";
+            const isMetalMow = summary.source === "metalligaen"; // local times
+            // ESPN teams use the correctly-scoped notableOpponents map (top-3 of
+            // this team's division/conference/league); other sports keep the
+            // single-table top-3 list.
+            const notable = summary.notableOpponents;
+            if (isEspn ? !notable || Object.keys(notable).length === 0 : !summary.topOpponents?.length) continue;
             for (const evt of summary.next5 ?? []) {
               const start = new Date(`${evt.date}T${evt.time ?? "12:00"}:00Z`).getTime();
               if (!isFinite(start) || start < now || start > weekOut) continue;
               const isHome = evt.homeTeam.toLowerCase().includes(cfg.matchKeyword.toLowerCase());
               const opp = isHome ? evt.awayTeam : evt.homeTeam;
               const oppLower = opp.toLowerCase();
-              const rankIdx = summary.topOpponents.findIndex((t) => oppLower.includes(t.toLowerCase()) || t.toLowerCase().includes(oppLower));
-              if (rankIdx === -1) continue;
+              let opponentRank: number;
+              let scope: string | undefined;
+              if (isEspn) {
+                const hit = Object.entries(notable!).find(([name]) => oppLower.includes(name.toLowerCase()) || name.toLowerCase().includes(oppLower));
+                if (!hit) continue;
+                opponentRank = hit[1].rank;
+                scope = hit[1].scope;
+              } else {
+                const rankIdx = summary.topOpponents!.findIndex((t) => oppLower.includes(t.toLowerCase()) || t.toLowerCase().includes(oppLower));
+                if (rankIdx === -1) continue;
+                opponentRank = rankIdx + 1;
+              }
               found.push({
                 key: `${summary.slug}-${evt.date}-${opp}`,
                 href: `/sports/${summary.slug}`,
@@ -797,9 +867,10 @@ export default function SportsWidget() {
                 teamEmoji: cfg.emoji || "⚽",
                 teamAccent: cfg.accentColor || "var(--accent-blue)",
                 opponent: shortName(opp),
-                opponentRank: rankIdx + 1,
+                opponentRank,
+                scope,
                 homeAway: isHome ? "vs" : "@",
-                when: `${toCopenhagenDate(evt.date, evt.time)}${evt.time ? ` · ${toCopenhagenTime(evt.date, evt.time)} CEST` : ""}`,
+                when: `${toCopenhagenDate(evt.date, evt.time, isMetalMow)}${evt.time ? ` · ${toCopenhagenTime(evt.date, evt.time, isMetalMow)}${isMetalMow ? "" : " CEST"}` : ""}`,
                 leagueName: cfg.leagueName,
               });
               break; // one match per team is enough
@@ -829,7 +900,7 @@ export default function SportsWidget() {
                         className="text-[9px] font-bold px-1 rounded"
                         style={{ background: "var(--accent-orange)22", color: "var(--accent-orange)" }}
                       >
-                        #{h.opponentRank}
+                        #{h.opponentRank}{h.scope ? ` ${h.scope}` : ""}
                       </span>
                       <span style={{ color: "var(--text-muted)" }}>· {h.when}</span>
                     </div>

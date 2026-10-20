@@ -97,13 +97,17 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-async function faceitFetch<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; status: number }> {
+async function faceitFetch<T>(path: string, fresh = false): Promise<{ ok: true; data: T } | { ok: false; status: number }> {
   const key = process.env.FACEIT_API_KEY;
   if (!key) return { ok: false, status: 503 };
   try {
     const res = await fetch(`${BASE}${path}`, {
       headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
-      next: { revalidate: 300 },
+      // The match LIST grows as you play — never serve it from Next's disk
+      // Data Cache (that's why recent games didn't show in the 7-day review
+      // until you opened the CS2 tab and hit Update). Lifetime stats/profile
+      // tolerate the short revalidate.
+      ...(fresh ? { cache: "no-store" as const } : { next: { revalidate: 300 } }),
     });
     if (!res.ok) return { ok: false, status: res.status };
     return { ok: true, data: (await res.json()) as T };
@@ -191,6 +195,7 @@ export async function fetchPlayerMatches(account: FaceitAccount, limit = 30): Pr
   // Immutable once played — cache long.
   const r = await faceitFetch<{ items?: Array<{ stats?: RawStats }> }>(
     `/players/${playerId}/games/cs2/stats?limit=${Math.min(Math.max(limit, 1), 100)}`,
+    true, // fresh — the list grows with each game
   );
   if (!r.ok) return null;
   return (r.data.items ?? []).map((it) => {

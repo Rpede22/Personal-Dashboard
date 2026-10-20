@@ -326,6 +326,36 @@ export function setReviewWowChars(ids: string[]): void {
   broadcastSettingsChange();
 }
 
+// ── WoW character boxes — which extra boxes show per character + their order ──
+// Highest-season-key / Gear wishlist / Notes can each be toggled, and reordered
+// so a raider can put Gear first, a key-pusher the highest key, etc.
+export type WowBoxSlug = "highestKey" | "gear" | "notes";
+export const WOW_BOX_META: Array<{ slug: WowBoxSlug; label: string }> = [
+  { slug: "highestKey", label: "Highest M+ key (season)" },
+  { slug: "gear", label: "Gear wishlist" },
+  { slug: "notes", label: "Notes" },
+];
+const ALL_WOW_BOXES: WowBoxSlug[] = ["highestKey", "gear", "notes"];
+const WOW_BOXES_KEY = "dashboard.wow.boxes";
+export interface WowBoxConfig { order: WowBoxSlug[]; hidden: WowBoxSlug[] }
+const isWowBox = (s: unknown): s is WowBoxSlug => typeof s === "string" && (ALL_WOW_BOXES as string[]).includes(s);
+
+export function loadWowBoxConfig(): WowBoxConfig {
+  if (typeof window === "undefined") return { order: [...ALL_WOW_BOXES], hidden: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem(WOW_BOXES_KEY) ?? "{}");
+    const storedOrder: WowBoxSlug[] = Array.isArray(raw.order) ? raw.order.filter(isWowBox) : [];
+    // Append any box not in the stored order (new boxes default visible, at the end).
+    const order = [...storedOrder, ...ALL_WOW_BOXES.filter((s) => !storedOrder.includes(s))];
+    const hidden: WowBoxSlug[] = Array.isArray(raw.hidden) ? raw.hidden.filter(isWowBox) : [];
+    return { order, hidden };
+  } catch { return { order: [...ALL_WOW_BOXES], hidden: [] }; }
+}
+export function saveWowBoxConfig(cfg: WowBoxConfig): void {
+  try { localStorage.setItem(WOW_BOXES_KEY, JSON.stringify(cfg)); } catch { /* ignore */ }
+  broadcastSettingsChange();
+}
+
 // ── Today in full (/today) — which sections show ─────────────────────────────
 export type TodaySection = "agenda" | "tasks" | "dinner" | "run" | "deadlines" | "tonight";
 export const TODAY_SECTION_META: Array<{ slug: TodaySection; label: string }> = [

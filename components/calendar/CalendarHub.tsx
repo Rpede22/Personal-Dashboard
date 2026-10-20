@@ -74,6 +74,25 @@ function buildEventsByDay(events: CalEvent[]): Map<string, CalEvent[]> {
   return map;
 }
 
+/** ISO-8601 week number (weeks start Monday; week 1 contains the first
+ *  Thursday of the year). */
+function isoWeek(d: Date): number {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = (date.getUTCDay() + 6) % 7; // Mon = 0
+  date.setUTCDate(date.getUTCDate() - dayNum + 3); // to the week's Thursday
+  const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+  return 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 86400000));
+}
+
+/** Chunk the flat month grid into weeks of 7 cells. */
+function chunkWeeks(cells: (Date | null)[]): (Date | null)[][] {
+  const weeks: (Date | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
+}
+
 function buildMonthGrid(year: number, month: number): (Date | null)[] {
   const firstDay = new Date(year, month, 1);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -95,6 +114,7 @@ export default function CalendarHub() {
   const [calendarNames, setCalendarNames] = useState<string[]>([]);
   const [writeableCalendars, setWriteableCalendars] = useState<string[]>([]);
   const [deletingUid, setDeletingUid] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [viewDate, setViewDate] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -211,7 +231,7 @@ export default function CalendarHub() {
 
   // Load calendar data. `bust=true` skips the server cache to force a fresh fetch.
   const loadCalendar = useCallback((bust = false) => {
-    fetch(`/api/calendar${bust ? "?bust=1" : ""}`)
+    return fetch(`/api/calendar${bust ? "?bust=1" : ""}`)
       .then((r) => r.json())
       .then((d) => {
         setConfigured(d.configured ?? true);
@@ -282,8 +302,18 @@ export default function CalendarHub() {
           </Link>
           <h1 className="text-2xl font-bold" style={{ color: "var(--accent-purple)" }}>📅 Calendar</h1>
           <button
+            onClick={() => { if (refreshing) return; setRefreshing(true); loadCalendar(true).finally(() => setRefreshing(false)); }}
+            disabled={refreshing}
+            title="Refresh calendar"
+            className="ml-auto text-xs px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5"
+            style={{ background: "var(--surface-2)", color: "var(--text-muted)", opacity: refreshing ? 0.6 : 1 }}
+          >
+            <span style={{ display: "inline-block", transition: "transform .3s", transform: refreshing ? "rotate(360deg)" : "none" }}>↻</span>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+          <button
             onClick={() => setAddOpen((v) => !v)}
-            className="ml-auto text-xs px-3 py-1.5 rounded-lg font-medium"
+            className="text-xs px-3 py-1.5 rounded-lg font-medium"
             style={{ background: addOpen ? "var(--surface-2)" : "var(--accent-purple)", color: addOpen ? "var(--text-muted)" : "#fff" }}
           >
             {addOpen ? "Cancel" : "+ Add event"}
@@ -449,8 +479,9 @@ export default function CalendarHub() {
             </button>
           </div>
 
-          {/* Day column headers */}
-          <div className="grid grid-cols-7 gap-1.5 mb-1.5">
+          {/* Day column headers (leading "Wk" column for week numbers) */}
+          <div className="grid gap-1.5 mb-1.5" style={{ gridTemplateColumns: "1.75rem repeat(7, minmax(0, 1fr))" }}>
+            <div className="text-center text-[10px] font-semibold uppercase tracking-wide py-1" style={{ color: "var(--text-muted)" }}>Wk</div>
             {DAY_HEADERS.map((d) => (
               <div
                 key={d}
@@ -462,9 +493,18 @@ export default function CalendarHub() {
             ))}
           </div>
 
-          {/* Calendar grid */}
-          <div className="grid grid-cols-7 gap-1.5">
-            {cells.map((date, i) => {
+          {/* Calendar grid — 8 columns: week number + Mon…Sun */}
+          <div className="grid gap-1.5" style={{ gridTemplateColumns: "1.75rem repeat(7, minmax(0, 1fr))" }}>
+            {chunkWeeks(cells).flatMap((week, wi) => {
+              const anyDate = week.find((d): d is Date => d != null);
+              const weekNo = anyDate ? isoWeek(anyDate) : null;
+              const weekCell = (
+                <div key={`wk-${wi}`} className="flex items-center justify-center text-[11px] font-semibold tabular-nums" style={{ color: "var(--text-muted)", opacity: 0.7 }}>
+                  {weekNo ?? ""}
+                </div>
+              );
+              const dayCells = week.map((date, di) => {
+              const i = wi * 7 + di;
               if (!date) return <div key={i} />;
               const key = toDateKey(date);
               const dayEvs = eventsByDay.get(key) ?? [];
@@ -520,6 +560,8 @@ export default function CalendarHub() {
                   </div>
                 </button>
               );
+              });
+              return [weekCell, ...dayCells];
             })}
           </div>
 

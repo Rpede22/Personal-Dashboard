@@ -15,6 +15,12 @@ import { overlayDmi, inDenmark } from "@/lib/weather";
 
 const OPEN_METEO = "https://api.open-meteo.com/v1/forecast";
 
+// Short in-memory cache (keyed by the full query) so the ~5 weather widgets
+// loading at once don't each hit open-meteo, without using Next's disk Data
+// Cache (which froze the forecast weeks in the past).
+const cache = new Map<string, { data: unknown; ts: number }>();
+const TTL = 10 * 60 * 1000;
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const lat = Number(searchParams.get("latitude"));
@@ -23,11 +29,19 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "latitude and longitude required" }, { status: 400 });
   }
 
+  const qs = searchParams.toString();
+  const cached = cache.get(qs);
+  if (cached && Date.now() - cached.ts < TTL) return NextResponse.json(cached.data);
+
   // Forward every param the caller supplied to open-meteo untouched.
-  const omUrl = `${OPEN_METEO}?${searchParams.toString()}`;
+  const omUrl = `${OPEN_METEO}?${qs}`;
   let om: Record<string, unknown>;
   try {
-    const res = await fetch(omUrl, { next: { revalidate: 900 } });
+    // no-store: open-meteo returns a rolling forecast whose dates shift daily;
+    // Next's fetch Data Cache baked an old window to disk, freezing the forecast
+    // weeks in the past (see lib/fotmob.ts). Consumers refresh on a ~30-60 min
+    // client timer, so no server cache is needed.
+    const res = await fetch(omUrl, { cache: "no-store" });
     if (!res.ok) return NextResponse.json({ error: `open-meteo ${res.status}` }, { status: 502 });
     om = await res.json();
   } catch (e) {
@@ -41,5 +55,7 @@ export async function GET(request: Request) {
     } catch { /* DMI is a best-effort overlay — fall back to pure open-meteo */ }
   }
 
-  return NextResponse.json({ ...om, source });
+  const payload = { ...om, source };
+  cache.set(qs, { data: payload, ts: Date.now() });
+  return NextResponse.json(payload);
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureWowTemplates } from "@/lib/wow-templates";
 
 function currentWeekStart(): Date {
   const now = new Date();
@@ -46,6 +47,7 @@ export async function GET(request: Request) {
   // Get or create this week's checklist
   // Always sync with current templates — adds any missing tasks without touching already-ticked ones.
   // This handles: first load, new templates added mid-week, boss count changes.
+  await ensureWowTemplates(); // create any missing boss templates (e.g. the 10th boss) first
   const templates = await prisma.wowChecklistTemplate.findMany();
   if (templates.length > 0) {
     for (const t of templates) {

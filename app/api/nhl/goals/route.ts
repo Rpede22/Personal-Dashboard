@@ -15,6 +15,23 @@ export interface GoalEvent {
   strength: "EV" | "PP1" | "PP2" | "SH" | "EN" | "SO"; // from scoring team's perspective
 }
 
+export interface PenaltyEvent {
+  period: number;
+  timeInPeriod: string; // "16:52"
+  player: string;
+  isHome: boolean;
+  pim: number;          // minutes
+  offence: string;      // "Tripping"
+}
+
+/** "cross-checking" / "delaying-game" → "Cross Checking" / "Delaying Game". */
+function prettyOffence(descKey: string | undefined): string {
+  if (!descKey) return "Penalty";
+  return descKey
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 /** Parse situationCode (e.g. "1551") into a strength label from the scoring team's POV.
  *  Format: homeGoalies | homeSkaters | awaySkaters | awayGoalies
  */
@@ -66,7 +83,23 @@ export async function GET(request: Request) {
     const homeTeamId = ((data.homeTeam as Record<string, unknown>)?.id as number) ?? -1;
 
     const goals: GoalEvent[] = [];
+    const penalties: PenaltyEvent[] = [];
     for (const play of (data.plays ?? []) as Record<string, unknown>[]) {
+      // Penalties — interleaved into the hub's goal timeline (like the ESPN/Metal hubs).
+      if (play.typeDescKey === "penalty") {
+        const d = (play.details ?? {}) as Record<string, unknown>;
+        const pd = (play.periodDescriptor ?? {}) as Record<string, unknown>;
+        const playerId = (d.committedByPlayerId as number) ?? (d.servedByPlayerId as number);
+        penalties.push({
+          period: (pd.number as number) ?? 1,
+          timeInPeriod: (play.timeInPeriod as string) ?? "",
+          player: playerMap.get(playerId) ?? (d.servedByPlayerId ? "Bench" : "Unknown"),
+          isHome: (d.eventOwnerTeamId as number) === homeTeamId,
+          pim: (d.duration as number) ?? 0,
+          offence: prettyOffence(d.descKey as string | undefined),
+        });
+        continue;
+      }
       if (play.typeDescKey !== "goal") continue;
       const details = (play.details ?? {}) as Record<string, unknown>;
       const pd = (play.periodDescriptor ?? {}) as Record<string, unknown>;
@@ -105,7 +138,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const payload = { gameId, goals };
+    const payload = { gameId, goals, penalties };
     cache.set(gameId, { data: payload, ts: Date.now() });
     return NextResponse.json(payload);
   } catch (err) {

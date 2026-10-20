@@ -97,7 +97,7 @@ export default function WeeklyReview() {
     prevWorkNet: number;
     workSessionCount: number;
     faceit: { nickname: string; games: number; wins: number; losses: number; kd: number | null } | null;
-    wowChars: Array<{ name: string; realm: string; highestKey: number | null; raidKills: number | null; raidTotal: number | null }>;
+    wowChars: Array<{ name: string; realm: string; highestKey: number | null; keysCount: number | null; raidKills: number | null; raidTotal: number | null }>;
   } | null>(null);
 
   useEffect(() => {
@@ -270,7 +270,7 @@ export default function WeeklyReview() {
 
       // WoW — one or more characters' weekly (reset) progress. Which characters
       // is user-configurable (multi-select); empty = the first saved character.
-      const wowChars: Array<{ name: string; realm: string; highestKey: number | null; raidKills: number | null; raidTotal: number | null }> = [];
+      const wowChars: Array<{ name: string; realm: string; highestKey: number | null; keysCount: number | null; raidKills: number | null; raidTotal: number | null }> = [];
       if (enabledNow.has("wow")) {
         try {
           const wc = await fetch("/api/wow/character").then((r) => r.json());
@@ -288,8 +288,10 @@ export default function WeeklyReview() {
             wowChars.push({
               name: c.name, realm: c.realm,
               highestKey: typeof look?.weeklyHighestKey === "number" ? look.weeklyHighestKey : null,
+              keysCount: typeof look?.weeklyKeysCount === "number" ? look.weeklyKeysCount : null,
               raidKills: typeof look?.weeklyRaidKills === "number" ? look.weeklyRaidKills : null,
-              raidTotal: CURRENT_TIER_BOSS_COUNT,
+              // Bosses in the CURRENT raid (route), not the whole tier sum (10).
+              raidTotal: typeof look?.currentRaidBossTotal === "number" && look.currentRaidBossTotal > 0 ? look.currentRaidBossTotal : CURRENT_TIER_BOSS_COUNT,
             });
           });
         } catch { /* DB-backed — may be unavailable */ }
@@ -454,6 +456,11 @@ export default function WeeklyReview() {
                     value={w.highestKey ? `+${w.highestKey}` : "—"}
                     sub="this reset"
                     valueColor={w.highestKey ? "var(--accent-purple)" : undefined}
+                  />
+                  <StatRow
+                    label="Keys done"
+                    value={w.keysCount !== null ? String(w.keysCount) : "—"}
+                    sub={w.keysCount === 1 ? "run this reset" : "runs this reset"}
                   />
                   <StatRow
                     label="Raid bosses"

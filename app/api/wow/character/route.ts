@@ -137,7 +137,7 @@ function currentWeekStartMs(now = Date.now()): number {
  * of the latest expansion, so it's robust to a stale `wow-tier.json`.
  * Returns null when unavailable (no token / no data).
  */
-async function fetchRaidVault(name: string, realm: string, region: string): Promise<number | null> {
+async function fetchRaidVault(name: string, realm: string, region: string): Promise<{ kills: number; total: number } | null> {
   const r = region.toLowerCase();
   const token = await getCharBlizzardToken(r);
   if (!token) return null;
@@ -152,18 +152,38 @@ async function fetchRaidVault(name: string, realm: string, region: string): Prom
     const expansions = data.expansions ?? [];
     const lastExp = expansions[expansions.length - 1];
     const instances = lastExp?.instances ?? [];
-    const currentRaid = instances[instances.length - 1];
-    if (!currentRaid) return null;
+    // The current tier is SPLIT across several raids (e.g. Midnight S2 =
+    // Venomous Abyss [8] + Tidebound Grotto [1] + The Unbinding of Kith'ix [1]
+    // = 10). Match ALL of them (by name vs wow-tier.json) and sum — taking only
+    // the last instance returned 1/1, not 6/10.
+    const wantSlugs = CURRENT_TIER_INSTANCES.map(raidSlug);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const matched = (instances as any[]).filter((inst) => {
+      const nm = raidSlug(String(inst.instance?.name ?? ""));
+      return nm && wantSlugs.some((s) => nm.includes(s) || s.includes(nm));
+    });
+    const raids = matched.length > 0 ? matched : (instances.length ? [instances[instances.length - 1]] : []);
+    if (raids.length === 0) return null;
     const weekStart = currentWeekStartMs();
-    const killed = new Set<string>();
-    for (const mode of currentRaid.modes ?? []) {
-      for (const enc of mode.progress?.encounters ?? []) {
-        if ((enc.last_kill_timestamp ?? 0) >= weekStart) {
-          killed.add(String(enc.encounter?.id ?? enc.encounter?.name));
+    let kills = 0;
+    let total = 0;
+    for (const raid of raids) {
+      const killed = new Set<string>();
+      const allEncounters = new Set<string>();
+      for (const mode of raid.modes ?? []) {
+        for (const enc of mode.progress?.encounters ?? []) {
+          const id = String(enc.encounter?.id ?? enc.encounter?.name);
+          allEncounters.add(id);
+          if ((enc.last_kill_timestamp ?? 0) >= weekStart) killed.add(id);
         }
       }
+      const raidTotal = (raid.modes ?? [])
+        .map((m: { progress?: { total_count?: number } }) => m.progress?.total_count ?? 0)
+        .reduce((a: number, b: number) => Math.max(a, b), 0) || allEncounters.size;
+      total += raidTotal;
+      kills += killed.size;
     }
-    return killed.size;
+    return { kills, total };
   } catch {
     return null;
   }
@@ -181,11 +201,13 @@ async function lookupCharacter(name: string, realm: string, region: string) {
   const equipment = await fetchEquipment(name, realm, region).catch(() => ({ ilvl: null, tierSet: null }));
   let ilvl: number | null = equipment.ilvl;
   const tierSet = equipment.tierSet;
-  const weeklyRaidKills = await fetchRaidVault(name, realm, region).catch(() => null); // #68 raid vault
+  const raidVault = await fetchRaidVault(name, realm, region).catch(() => null); // #68 raid vault
+  const weeklyRaidKills = raidVault?.kills ?? null;
+  const currentRaidBossTotal = raidVault?.total ?? null; // bosses in the CURRENT raid (not the tier sum)
 
   // Raider.IO — score, raid progression, integer ilvl fallback, and this week's M+ runs
   const rioRes = await fetch(
-    `https://raider.io/api/v1/characters/profile?region=${regionLower}&realm=${encodeURIComponent(realm)}&name=${encodeURIComponent(name)}&fields=mythic_plus_scores_by_season:current,raid_progression,gear,mythic_plus_weekly_highest_level_runs`,
+    `https://raider.io/api/v1/characters/profile?region=${regionLower}&realm=${encodeURIComponent(realm)}&name=${encodeURIComponent(name)}&fields=mythic_plus_scores_by_season:current,raid_progression,gear,mythic_plus_weekly_highest_level_runs,mythic_plus_highest_level_runs`,
     { next: { revalidate: 3600 } }
   );
 
@@ -193,6 +215,8 @@ async function lookupCharacter(name: string, realm: string, region: string) {
   let rioError: string | null = null;
   let raidProgress: string | null = null;
   let weeklyHighestKey: number | null = null;
+  let seasonHighestKey: number | null = null; // highest M+ key this SEASON (not just this reset)
+  let weeklyKeysCount = 0; // number of M+ runs completed this reset
   let mplusVault: (number | null)[] | null = null; // 3 Great Vault M+ slots (reward key level, null = locked)
 
   if (rioRes.ok) {
@@ -223,11 +247,20 @@ async function lookupCharacter(name: string, realm: string, region: string) {
     const weekly: Array<{ mythic_level?: number }> = Array.isArray(rioData.mythic_plus_weekly_highest_level_runs)
       ? [...rioData.mythic_plus_weekly_highest_level_runs].sort((a, b) => (b.mythic_level ?? 0) - (a.mythic_level ?? 0))
       : [];
+    weeklyKeysCount = weekly.length;
     if (weekly.length > 0) {
       weeklyHighestKey = weekly[0].mythic_level ?? null;
       mplusVault = [1, 4, 8].map((n) => (weekly.length >= n ? weekly[n - 1].mythic_level ?? null : null));
     } else {
       mplusVault = [null, null, null];
+    }
+
+    // Highest M+ key completed this SEASON (RIO's all-time-this-season list).
+    const seasonRuns: Array<{ mythic_level?: number }> = Array.isArray(rioData.mythic_plus_highest_level_runs)
+      ? rioData.mythic_plus_highest_level_runs
+      : [];
+    if (seasonRuns.length > 0) {
+      seasonHighestKey = seasonRuns.reduce((max, r) => Math.max(max, r.mythic_level ?? 0), 0) || null;
     }
 
     // Fallback: get ilvl from Raider.IO if Blizzard didn't provide it
@@ -247,8 +280,11 @@ async function lookupCharacter(name: string, realm: string, region: string) {
     raidProgress,
     tierSet,          // #70 { collected, total, name }
     weeklyHighestKey, // #69 highest M+ key completed this reset
+    seasonHighestKey, // highest M+ key completed this season
     mplusVault,       // #68 Great Vault M+ slots (3 reward levels or nulls)
     weeklyRaidKills,  // #68 Great Vault raid — bosses killed this reset (current raid)
+    currentRaidBossTotal, // bosses in the CURRENT raid (review uses this, not the tier sum)
+    weeklyKeysCount,  // M+ runs completed this reset
     errors: [rioError].filter(Boolean),
   };
 
